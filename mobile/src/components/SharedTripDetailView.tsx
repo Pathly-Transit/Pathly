@@ -3,6 +3,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useRouteColor } from '../data/routeColors';
+import { withAlpha } from '../data/routeDirection';
 import { routes, type ServiceAlert } from '../data/transit';
 import type { TripLegNote } from '../data/tripLive';
 import { formatDurationMinutes } from '../data/tripPlanning';
@@ -131,6 +132,19 @@ type SharedTripDetailViewProps = {
   beforeSteps?: ReactNode;
   /** The star saves the destination; a page with nothing to save hides it. */
   showFavorite?: boolean;
+  /**
+   * Route View's GO: the ride's last stop is where the rider gets off, picked right in the ride's
+   * card. Tapping it lists every stop after boarding (with when the ride gets there); picking one
+   * updates the trip, its map, and the times.
+   */
+  endStopPicker?: EndStopPicker;
+};
+
+export type EndStopPicker = {
+  /** The leg whose last stop is picked. */
+  legIndex: number;
+  choices: readonly { index: number; name: string; time: string; selected: boolean }[];
+  onPick: (index: number) => void;
 };
 
 /** Walking gets a card of its own; a transfer between legs adds the wait for the next one. */
@@ -144,7 +158,7 @@ function WalkCard({ testID, waitMinutes, walk }: { testID: string; waitMinutes?:
       <View style={styles.walkIcon}><Icon color={colors.ink} name="travel" size={20} /></View>
       <View style={styles.routeCopy}>
         <Text style={styles.walkTitle}>{`Walk to ${walk.toName}`}</Text>
-        <Text style={styles.walkMeta}>{walk.distance}{wait ? ` · then wait ${wait.visible}` : ''}</Text>
+        <Text style={styles.walkMeta}>{walk.distance}{wait ? `, then wait ${wait.visible}` : ''}</Text>
       </View>
       <Text style={styles.segmentDuration}>{duration.visible}</Text>
     </View>
@@ -332,7 +346,7 @@ function shade(color: string, base: string, amount: number): string {
   return `#${channel(0)}${channel(2)}${channel(4)}`;
 }
 
-export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, interactiveMap = false, isFavorite, locationSelected, map: tripMap, model, onAction, onBack, onCenterOnLocation, onFocusStop, onSelectDeparture, onToggleFavorite, rootTestID, showFavorite = true, showServiceAlerts = true, testPrefix, tone = 'planned' }: SharedTripDetailViewProps) {
+export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endStopPicker, interactiveMap = false, isFavorite, locationSelected, map: tripMap, model, onAction, onBack, onCenterOnLocation, onFocusStop, onSelectDeparture, onToggleFavorite, rootTestID, showFavorite = true, showServiceAlerts = true, testPrefix, tone = 'planned' }: SharedTripDetailViewProps) {
   const insets = useSafeAreaInsets();
   const tint = useRouteColor();
   const styles = useThemedStyles(createStyles);
@@ -347,6 +361,7 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, inte
   const [allDeparturesLegs, setAllDeparturesLegs] = useState<ReadonlySet<number>>(new Set());
   const [openAlertLegs, setOpenAlertLegs] = useState<ReadonlySet<number>>(new Set());
   const [destinationLinesOpen, setDestinationLinesOpen] = useState(false);
+  const [pickingEndStop, setPickingEndStop] = useState(false);
   // Only a list cut off to "+N" has more to show.
   const hasDestinationLines = (model.destinationLines?.length ?? 0) > MAX_ARRIVAL_BADGES;
   const toggleLegAlerts = (index: number) => {
@@ -447,6 +462,8 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, inte
       contentTestID={`${testPrefix}-content`}
       controls={controls}
       controlsScrollWithMap={true}
+      // As long as the trip's cards, no empty screen below them.
+      fitContent={true}
       handle={{ accessibilityHint: 'Expands or collapses the trip details.', accessibilityLabel: 'Trip details handle', testID: `${testPrefix}-sheet-handle` }}
       map={map}
       mapButtons={locateButton}
@@ -540,9 +557,9 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, inte
                 <WalkCard testID={`${testPrefix}-walk-${index}`} waitMinutes={index > 0 ? leg.waitBeforeMinutes : undefined} walk={leg.walkBefore} />
               ) : index > 0 && transferWait ? (
                 // A transfer at the same stop: no walk, just the wait.
-                <View accessibilityLabel={`Transfer, wait ${transferWait.accessibility}`} accessible={true} style={styles.transferRow} testID={`${testPrefix}-transfer-${index}`}>
+                <View accessibilityLabel={`Transfer and wait ${transferWait.accessibility}`} accessible={true} style={styles.transferRow} testID={`${testPrefix}-transfer-${index}`}>
                   <Icon color={colors.primary} name="swap" size={16} />
-                  <Text style={styles.walkText}><Text style={styles.walkStrong}>Transfer</Text>{` · wait ${transferWait.visible}`}</Text>
+                  <Text style={styles.walkText}><Text style={styles.walkStrong}>Transfer</Text>{` and wait ${transferWait.visible}`}</Text>
                 </View>
               ) : null}
               <View style={[styles.stepCard, { borderColor: shade(tint(leg.color), colors.surface, 0.3), backgroundColor: shade(tint(leg.color), colors.surface, isDark ? 0.14 : 0.07) }]} testID={`${testPrefix}-${tone === 'recent' ? 'leg' : 'step'}-${index}`}>
@@ -684,10 +701,71 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, inte
                       <Text style={styles.direction}>{leg.stopCount ? `${leg.stopCount} ${leg.stopCount === 1 ? 'stop' : 'stops'}` : ''}</Text>
                     </View>
                   )}
-                  <View style={styles.timelineRow}>
-                    <Rail color={tint(leg.color)} dot="terminal" to={false} />
-                    <View style={styles.stopRow}><Text style={styles.stopName}>{leg.endName}</Text><Text style={styles.stopTime}>{leg.endTime}</Text></View>
-                  </View>
+                  {endStopPicker?.legIndex === index ? (
+                    <>
+                      <View style={styles.timelineRow}>
+                        <Rail color={tint(leg.color)} dot="terminal" to={false} />
+                        <View style={styles.stopRow}>
+                          {/* The stop's name itself is the control, outlined in the line's color with a chevron. */}
+                          <PressableScale
+                            accessibilityHint="Opens the list of stops to pick where you get off"
+                            accessibilityLabel={`Getting off at ${leg.endName}, ${leg.endTime}`}
+                            accessibilityRole="button"
+                            hitSlop={8}
+                            onPress={() => setPickingEndStop(true)}
+                            pressedScale={0.98}
+                            style={[styles.endStopButton, { borderColor: tint(leg.color), backgroundColor: withAlpha(tint(leg.color), 0.08) }]}
+                            testID={`${testPrefix}-stop-picker`}
+                          >
+                            <Text numberOfLines={2} style={styles.endStopName} testID={`${testPrefix}-stop-picked`}>{leg.endName}</Text>
+                            <Icon color={colors.ink} name="expand" size={16} />
+                          </PressableScale>
+                          <Text style={[styles.stopTime, styles.endStopTime]}>{leg.endTime}</Text>
+                        </View>
+                      </View>
+                      {/* Every stop after boarding, in a popup from the bottom; picking one closes it. */}
+                      <Modal animationType="fade" onRequestClose={() => setPickingEndStop(false)} transparent={true} visible={pickingEndStop}>
+                        <Pressable accessibilityLabel="Close stops" onPress={() => setPickingEndStop(false)} style={styles.sheetBackdrop} testID={`${testPrefix}-stops-backdrop`} />
+                        {pickingEndStop ? (
+                          <SheetPanel style={styles.linesSheet} testID={`${testPrefix}-stops`}>
+                            <View style={styles.linesSheetHeader}>
+                              <Text accessibilityRole="header" numberOfLines={2} style={styles.linesSheetTitle}>Where are you getting off?</Text>
+                              <PressableScale accessibilityLabel="Close" accessibilityRole="button" hitSlop={8} onPress={() => setPickingEndStop(false)} testID={`${testPrefix}-stops-close`}><Icon name="close" size={26} /></PressableScale>
+                            </View>
+                            <Text style={styles.endChoicesHint}>{`From ${leg.startName}, on the ${leg.startTime}. Times are estimates.`}</Text>
+                            <ScrollView style={styles.departureList}>
+                              {endStopPicker.choices.map((choice, row) => (
+                                <PressableScale
+                                  key={`${choice.name}-${choice.index}`}
+                                  accessibilityHint="Gets off here"
+                                  accessibilityLabel={`${choice.name}, arrive about ${choice.time}`}
+                                  accessibilityRole="button"
+                                  accessibilityState={{ selected: choice.selected }}
+                                  onPress={() => {
+                                    endStopPicker.onPick(choice.index);
+                                    setPickingEndStop(false);
+                                  }}
+                                  pressedScale={0.99}
+                                  style={[styles.endChoice, choice.selected && { backgroundColor: withAlpha(tint(leg.color), 0.12) }]}
+                                  testID={`${testPrefix}-stop-${choice.index}`}
+                                >
+                                  <Rail color={tint(leg.color)} dot="via" from={row > 0} to={row < endStopPicker.choices.length - 1} />
+                                  <Text numberOfLines={2} style={[styles.viaName, styles.endChoiceName, choice.selected && styles.endChoiceSelected]}>{choice.name}</Text>
+                                  {choice.selected ? <Icon color={tint(leg.color)} name="check" size={18} /> : null}
+                                  <Text style={[styles.viaTime, choice.selected && styles.endChoiceSelected]} testID={`${testPrefix}-stop-time-${choice.index}`}>{choice.time}</Text>
+                                </PressableScale>
+                              ))}
+                            </ScrollView>
+                          </SheetPanel>
+                        ) : null}
+                      </Modal>
+                    </>
+                  ) : (
+                    <View style={styles.timelineRow}>
+                      <Rail color={tint(leg.color)} dot="terminal" to={false} />
+                      <View style={styles.stopRow}><Text style={styles.stopName}>{leg.endName}</Text><Text style={styles.stopTime}>{leg.endTime}</Text></View>
+                    </View>
+                  )}
                 </View>
               </View>
             </View>
@@ -780,6 +858,15 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   departureRadio: { width: 14, height: 14, borderWidth: 2, borderColor: colors.border, borderRadius: 7 },
   departureListTime: { color: colors.ink, ...typography.body, fontSize: 14, fontVariant: ['tabular-nums'] },
   departureListArrive: { color: colors.mutedInk, ...typography.metadata, fontVariant: ['tabular-nums'] },
+  // Sized by the stop's name, then the chevron, up to what the row has left beside the time (no flex:1 on the name, which measured it at zero).
+  endStopButton: { flexGrow: 0, flexShrink: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1.5, borderRadius: radii.control },
+  // The time keeps its width; the stop's box gives way, wrapping its name.
+  endStopTime: { flexShrink: 0 },
+  endStopName: { flexShrink: 1, minWidth: 0, color: colors.ink, ...typography.bodyStrong, fontSize: 14, fontFamily: fontFamilies.extraBold },
+  endChoicesHint: { marginTop: 4, marginBottom: 6, color: colors.mutedInk, ...typography.metadata },
+  endChoice: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 8, paddingRight: 12, borderRadius: radii.control },
+  endChoiceName: { fontSize: 15 },
+  endChoiceSelected: { color: colors.ink, fontFamily: fontFamilies.extraBold },
   stopsToggle: { alignSelf: 'center', minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 10 },
   stopsToggleText: { fontFamily: fontFamilies.extraBold, fontSize: 13 },
   viaRow: { minWidth: 0, flex: 1, minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 10, marginLeft: 10 },

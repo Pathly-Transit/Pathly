@@ -43,10 +43,10 @@ export const typography = {
     fontSize: 12,
     lineHeight: 16,
   },
+  /** A small section label in sentence case ("Favorite lines"), never all caps. */
   label: {
     fontFamily: fontFamilies.extraBold,
-    fontSize: 11,
-    lineHeight: 14,
-    letterSpacing: 0.7,
+    fontSize: 13,
+    lineHeight: 17,
   },
 } as const;

@@ -125,7 +125,7 @@ export function toTripDetailModel(itinerary: Itinerary, origin: string, destinat
     leaveTime: formatTripClock(itinerary.departureTime),
     leavesAt: itinerary.departureTime,
     arriveTime: formatTripClock(itinerary.arrivalTime),
-    contextLabel: isActive ? 'ACTIVE TRIP' : 'PLANNED TRIP',
+    contextLabel: isActive ? 'Active trip' : 'Planned trip',
     statusLabel: isActive ? 'In progress' : 'Ready',
     legs,
     ...(walkAfter ? { walkAfter } : {}),

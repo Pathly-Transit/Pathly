@@ -105,7 +105,7 @@ function movementMetadata(distanceMeters: number | null, durationSeconds: number
   const distance = distanceMeters === null ? null : distanceCopy(distanceMeters);
   const minutes = durationSeconds === null ? null : tripMinutes(durationSeconds);
   const duration = minutes === null ? null : formatDurationMinutes(minutes);
-  const visible = [distance?.visible, duration?.visible].filter(Boolean).join(' · ');
+  const visible = [distance?.visible, duration?.visible].filter(Boolean).join(', ');
   if (!visible) return null;
   const action = phase === 'walking' ? 'Walking' : 'Transfer';
   const accessible = [
@@ -122,7 +122,13 @@ export function EnrouteNavigationView({ cursor, fix, followFix, isAdmin, locatio
   const now = useClock(30_000);
   const { height } = useViewportSize();
   const guidance = useMemo(() => guidanceForNavigation(plan, cursor), [cursor, plan]);
-  const mapProgress = useMemo(() => navigationMapProgress(plan, cursor), [cursor, plan]);
+  // The line goes gray right where the rider is (their last on-route fix), not at the last stop passed.
+  const riderLat = followFix?.point.lat;
+  const riderLng = followFix?.point.lng;
+  const mapProgress = useMemo(
+    () => navigationMapProgress(plan, cursor, riderLat !== undefined && riderLng !== undefined ? { lat: riderLat, lng: riderLng } : null),
+    [cursor, plan, riderLat, riderLng],
+  );
   const currentStep = session.itinerary.steps[cursor.stepIndex];
   const currentTransitStep = currentStep?.kind === 'transit' ? currentStep : null;
   // The rides' live vehicles; the one the rider's own location says they're on carries their Pathling.
@@ -161,7 +167,7 @@ export function EnrouteNavigationView({ cursor, fix, followFix, isAdmin, locatio
   const routeColor = guidance.line?.color ?? colors.primary;
   const arrivalContext = relativeTimeCopy(guidance.arrivalTime, now);
   // Keep the countdown together when a narrow footer needs a second metadata line.
-  const footerCountdown = arrivalContext.visible.replace(/^in /, '').replaceAll(' ', '\u00a0');
+  const footerCountdown = arrivalContext.visible.replaceAll(' ', '\u00a0');
   const departureContext = guidance.departureTime ? relativeTimeCopy(guidance.departureTime, now) : null;
   const stepMetadata = guidance.phase === 'walking' || guidance.phase === 'transferring'
     ? movementMetadata(guidance.distanceMeters, guidance.durationSeconds, guidance.phase)
@@ -226,7 +232,7 @@ export function EnrouteNavigationView({ cursor, fix, followFix, isAdmin, locatio
                 testID="enroute-trip-summary"
               >
                 <Text style={styles.footerDestination} testID="enroute-destination">{session.destination.label}</Text>
-                <Text style={styles.footerEta} testID="enroute-eta">{`Arrive ${formatTripClock(guidance.arrivalTime).replaceAll(' ', '\u00a0')} · ${footerCountdown}`}</Text>
+                <Text style={styles.footerEta} testID="enroute-eta">{`Arrive ${formatTripClock(guidance.arrivalTime).replaceAll(' ', '\u00a0')}, ${footerCountdown}`}</Text>
               </View>
               <PressableScale
                 accessibilityLabel="End current trip"
@@ -274,8 +280,7 @@ export function EnrouteNavigationView({ cursor, fix, followFix, isAdmin, locatio
             testID="enroute-guidance"
           >
             <View style={styles.phaseRow}>
-              <Text style={styles.phase}>{guidance.phase.replaceAll('-', ' ').toUpperCase()}</Text>
-              <Text style={styles.arrival}>{`Arrive ${formatTripClock(guidance.arrivalTime)} · ${arrivalContext.visible}`}</Text>
+              <Text style={styles.arrival}>{`Arrive ${formatTripClock(guidance.arrivalTime)}, ${arrivalContext.visible}`}</Text>
             </View>
             <View style={styles.currentRow}>
               {guidance.line ? (
@@ -294,14 +299,14 @@ export function EnrouteNavigationView({ cursor, fix, followFix, isAdmin, locatio
                 <Text style={styles.currentAction} testID="enroute-current-action">{guidance.currentAction}</Text>
                 {guidance.headsign ? <Text style={styles.headsign}>{guidance.headsign}</Text> : null}
                 {guidance.phase === 'waiting-to-board' && guidance.departureTime && departureContext ? (
-                  <Text style={styles.stepMetadata} testID="enroute-departure-time">{`Departs ${formatTripClock(guidance.departureTime)} · ${departureContext.visible}`}</Text>
+                  <Text style={styles.stepMetadata} testID="enroute-departure-time">{`Departs ${formatTripClock(guidance.departureTime)}, ${departureContext.visible}`}</Text>
                 ) : null}
                 {stepMetadata ? <Text style={styles.stepMetadata} testID="enroute-step-metadata">{stepMetadata.visible}</Text> : null}
               </View>
             </View>
             {guidance.nextAction ? (
               <View style={styles.nextCard} testID="enroute-next-card">
-                <Text style={styles.nextLabel}>NEXT</Text>
+                <Text style={styles.nextLabel}>Next</Text>
                 <Text style={styles.nextAction} testID="enroute-next-action">{guidance.nextAction}</Text>
                 {guidance.remainingStops !== null ? <Text style={styles.remaining} testID="enroute-remaining-stops">{`${guidance.remainingStops} ${guidance.remainingStops === 1 ? 'stop' : 'stops'} remaining`}</Text> : null}
               </View>
@@ -350,7 +355,7 @@ export function EnrouteNavigationView({ cursor, fix, followFix, isAdmin, locatio
           <View style={styles.demoPanel} testID="enroute-demo-controls">
             <View style={styles.demoHeadingRow}>
               <View>
-                <Text style={styles.demoLabel}>ADMIN DEMO</Text>
+                <Text style={styles.demoLabel}>Admin demo</Text>
                 <Text style={styles.demoTitle}>Trip checkpoints</Text>
               </View>
               <PressableScale accessibilityLabel="Reset trip simulation" accessibilityRole="button" onPress={() => {
@@ -417,7 +422,6 @@ export function EnrouteRecoveryView({ destination, loading = false, onBack, onEn
         <MapControlButton accessibilityLabel="Back to Home; trip recovery will stay available" icon="back" onPress={onBack} testID="enroute-recovery-back" />
         <View accessibilityLiveRegion="polite" style={styles.recoveryCard}>
           <View style={styles.recoveryIcon}><Icon color={colors.warning} name="alert" size={30} /></View>
-          <Text style={styles.recoveryEyebrow}>TRIP RECOVERY</Text>
           <Text style={styles.recoveryTitle}>We can’t restore the exact route yet</Text>
           <Text style={styles.recoveryBody}>{`Your trip to ${destination} is still saved. Retry when you’re online, or end it without switching you to a different route.`}</Text>
           <PressableScale
@@ -459,8 +463,7 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   recoverySafeArea: { width: '100%', maxWidth: 540, flex: 1, padding: 16, backgroundColor: colors.canvas },
   recoveryCard: { marginTop: 80, alignItems: 'center', padding: 24, borderWidth: 1, borderColor: colors.border, borderRadius: radii.card, backgroundColor: colors.surface },
   recoveryIcon: { width: 60, height: 60, alignItems: 'center', justifyContent: 'center', borderRadius: 30, backgroundColor: colors.amberSoft },
-  recoveryEyebrow: { marginTop: 18, color: colors.warning, ...typography.label },
-  recoveryTitle: { marginTop: 5, color: colors.ink, ...typography.sectionHeading, fontSize: 22, textAlign: 'center' },
+  recoveryTitle: { marginTop: 18, color: colors.ink, ...typography.sectionHeading, fontSize: 22, textAlign: 'center' },
   recoveryBody: { marginTop: 10, color: colors.mutedInk, ...typography.body, lineHeight: 22, textAlign: 'center' },
   recoveryPrimary: { minHeight: 50, alignSelf: 'stretch', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 22, borderRadius: radii.pill, backgroundColor: colors.primary },
   recoveryPrimaryText: { color: colors.onPrimary, ...typography.bodyStrong },
@@ -476,7 +479,6 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   endText: { color: colors.onPrimary, fontFamily: fontFamilies.extraBold, fontSize: 16 },
   guidanceCard: { padding: 18, borderWidth: 1, borderColor: colors.border, borderRadius: radii.card, backgroundColor: colors.surface },
   phaseRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: 10, rowGap: 6 },
-  phase: { color: colors.primary, ...typography.label },
   arrival: { color: colors.ink, ...typography.bodyStrong },
   currentRow: { marginTop: 15, flexDirection: 'row', alignItems: 'center', gap: 13 },
   walkIcon: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 23, backgroundColor: colors.blueSoft },

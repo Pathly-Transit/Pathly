@@ -82,7 +82,7 @@ function SavedPlacesSettings({ locations, onAdd, onEdit }: SavedPlacesSettingsPr
       </Card>
       {groups.map((group) => (
         <View key={group.name} testID={`saved-group-${group.name}`}>
-          <Text style={styles.sectionLabel}>{`${group.name.toUpperCase()} · ${group.count}`}</Text>
+          <Text style={styles.sectionLabel}>{`${group.name} (${group.count})`}</Text>
           <Card>{sorted.filter((location) => inGroup(location, group.name)).map(row)}</Card>
         </View>
       ))}

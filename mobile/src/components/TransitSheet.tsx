@@ -368,7 +368,7 @@ export function TransitSheet({
               <View onLayout={(event) => recordLayout('content', event)} style={[styles.tabContent, { minHeight: tabContentMinHeight }]} testID="favorites-route-content">
                 {savedRouteIds.length > 0 ? (
                   <View onLayout={(event) => recordSectionLayout('favorites', event)} testID="favorite-routes">
-                    {bothFavoriteKinds ? <Text style={[styles.sectionLabel, styles.sectionHeading]}>ROUTES</Text> : null}
+                    {bothFavoriteKinds ? <Text style={[styles.sectionLabel, styles.sectionHeading]}>Routes</Text> : null}
                     {savedRouteIds.map((id) => {
                       const route = findRoute(id);
                       if (!route) return null;
@@ -382,7 +382,7 @@ export function TransitSheet({
                 ) : null}
                 {savedLocations.length > 0 || onAddSavedPlace ? (
                   <View style={styles.favoriteTrips} testID="saved-locations">
-                    {bothFavoriteKinds ? <Text style={[styles.sectionLabel, styles.sectionHeading]}>PLACES</Text> : null}
+                    {bothFavoriteKinds ? <Text style={[styles.sectionLabel, styles.sectionHeading]}>Places</Text> : null}
                     {sortSavedLocations(savedLocations).map((location) => (
                       <SavedLocationCard
                         key={location.id}

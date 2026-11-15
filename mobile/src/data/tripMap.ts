@@ -38,6 +38,8 @@ export type TripMapProps = {
   onFollowModeChange?: (following: boolean) => void;
   /** The rides' live vehicles (useTripVehicles), drawn like Route View's. */
   vehicles?: readonly TripVehicle[];
+  /** A vehicle tapped, by its trip id; vehicles aren't tappable without it. */
+  onVehiclePress?: (tripId: string) => void;
   /** Each ride's line leading up to where the rider boards (useTripVehicles). */
   approachLines?: readonly TripApproachLine[];
   /**
@@ -97,10 +99,45 @@ function closestPathIndex(path: readonly LatLng[], point: LatLng): number {
   return closest;
 }
 
-/** Completed/current/upcoming route pieces and the immediate route point for follow-camera framing. */
-export function navigationMapProgress(plan: NormalizedNavigationPlan, cursor: NavigationCursor): TripMapProgress {
+/** The rider counts as on the line within this many meters of it (GPS and drawn lines don't match exactly). */
+const RIDER_ON_LINE_METERS = 120;
+
+type PathSpot = { index: number; point: LatLng; along: number; off: number };
+
+/** The spot on `path` nearest `point`: which segment (index → index + 1), how far along the path, and how far off it. */
+export function nearestSpotOnPath(path: readonly LatLng[], point: LatLng): PathSpot | null {
+  if (path.length < 2) return null;
+  const xScale = 111_320 * Math.cos(point.lat * (Math.PI / 180));
+  const x = (p: LatLng) => (p.lng - point.lng) * xScale;
+  const y = (p: LatLng) => (p.lat - point.lat) * 111_320;
+  let best: PathSpot | null = null;
+  let walked = 0;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const a = path[index]!;
+    const b = path[index + 1]!;
+    const dx = x(b) - x(a);
+    const dy = y(b) - y(a);
+    const length = Math.hypot(dx, dy);
+    const t = length === 0 ? 0 : Math.max(0, Math.min(1, -(x(a) * dx + y(a) * dy) / (length * length)));
+    const off = Math.hypot(x(a) + t * dx, y(a) + t * dy);
+    if (!best || off < best.off) {
+      best = { index, point: { lat: a.lat + t * (b.lat - a.lat), lng: a.lng + t * (b.lng - a.lng) }, along: walked + t * length, off };
+    }
+    walked += length;
+  }
+  return best;
+}
+
+/**
+ * Completed/current/upcoming route pieces and the immediate route point for follow-camera framing.
+ * With the rider's position on the current piece (`rider`), the line turns gray exactly where they
+ * are, and the stops behind them on it count as passed; without it, at the last checkpoint reached.
+ */
+export function navigationMapProgress(plan: NormalizedNavigationPlan, cursor: NavigationCursor, rider: LatLng | null = null): TripMapProgress {
   const segments: TripMapRenderSegment[] = [];
   const currentCheckpoint = plan.checkpoints[cursor.checkpointOrdinal];
+  // Where the rider is along the piece they're on, keyed by that piece's step.
+  const riderAlong = new Map<number, number>();
 
   for (const segment of plan.segments) {
     const base = { walk: segment.kind === 'walk', color: segment.color, stepIndex: segment.stepIndex };
@@ -113,9 +150,18 @@ export function navigationMapProgress(plan: NormalizedNavigationPlan, cursor: Na
       continue;
     }
 
-    const splitIndex = currentCheckpoint ? closestPathIndex(segment.path, currentCheckpoint.point) : 0;
-    const completed = segment.path.slice(0, splitIndex + 1);
-    const current = segment.path.slice(splitIndex);
+    const spot = rider ? nearestSpotOnPath(segment.path, rider) : null;
+    let completed: LatLng[];
+    let current: LatLng[];
+    if (spot && spot.off <= RIDER_ON_LINE_METERS) {
+      riderAlong.set(segment.stepIndex, spot.along);
+      completed = [...segment.path.slice(0, spot.index + 1), spot.point];
+      current = [spot.point, ...segment.path.slice(spot.index + 1)];
+    } else {
+      const splitIndex = currentCheckpoint ? closestPathIndex(segment.path, currentCheckpoint.point) : 0;
+      completed = segment.path.slice(0, splitIndex + 1);
+      current = segment.path.slice(splitIndex);
+    }
     if (completed.length >= 2) segments.push({ ...base, path: completed, state: 'completed' });
     if (current.length >= 2) segments.push({ ...base, path: current, state: 'current' });
   }
@@ -130,16 +176,22 @@ export function navigationMapProgress(plan: NormalizedNavigationPlan, cursor: Na
         : checkpoint.kind === 'transit-stop'
           ? 'via'
           : 'stop';
-    const state: TripMapProgressState = checkpoint.ordinal < cursor.checkpointOrdinal
+    let state: TripMapProgressState = checkpoint.ordinal < cursor.checkpointOrdinal
       ? 'completed'
       : checkpoint.ordinal === cursor.checkpointOrdinal
         ? 'current'
         : 'upcoming';
+    // On the piece the rider is on, a stop behind where they are is passed, and one ahead isn't yet.
+    const along = segment ? riderAlong.get(segment.stepIndex) : undefined;
+    if (segment && along !== undefined) {
+      const stopAlong = nearestSpotOnPath(segment.path, checkpoint.point)?.along;
+      if (stopAlong !== undefined) state = stopAlong <= along ? 'completed' : state === 'completed' ? 'upcoming' : state;
+    }
     return [{
       point: checkpoint.point,
       kind,
       color: segment?.color,
-      label: checkpoint.time ? `${checkpoint.label} · ${formatTripClock(checkpoint.time)}` : checkpoint.label,
+      label: checkpoint.time ? `${checkpoint.label}, ${formatTripClock(checkpoint.time)}` : checkpoint.label,
       leg: checkpoint.transitLegIndex,
       state,
       visible: true,
@@ -199,9 +251,9 @@ export function tripMapPoints(itinerary: Itinerary | null | undefined, origin?: 
       const leg = transitIndex;
       transitIndex += 1;
       stops.push(
-        { point: step.from.location, kind: 'stop', color, leg, label: `${step.from.name} · ${formatTripClock(step.from.time)}` },
-        ...(step.stops ?? []).map((stop): TripMapStop => ({ point: stop.location, kind: 'via', color, leg, label: `${stop.name} · ${formatTripClock(stop.time)}` })),
-        { point: step.to.location, kind: 'stop', color, leg, label: `${step.to.name} · ${formatTripClock(step.to.time)}` },
+        { point: step.from.location, kind: 'stop', color, leg, label: `${step.from.name}, ${formatTripClock(step.from.time)}` },
+        ...(step.stops ?? []).map((stop): TripMapStop => ({ point: stop.location, kind: 'via', color, leg, label: `${stop.name}, ${formatTripClock(stop.time)}` })),
+        { point: step.to.location, kind: 'stop', color, leg, label: `${step.to.name}, ${formatTripClock(step.to.time)}` },
       );
       if (step.mode === 'subway') {
         // A transfer's two legs can share a station, whose entrances are drawn once.

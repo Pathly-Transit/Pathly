@@ -210,8 +210,8 @@ describe('Layers popup', () => {
         <LineLayersSheet choice={{ groups: [], routes: [] }} lines={[{ agencyId: 'suffolk', routeId: '51', shortName: '51', color: '#C43D4B', agency: 'Suffolk County Transit' }]} onChange={jest.fn()} onClose={jest.fn()} visible={true} />
       </AppSettingsProvider>,
     );
-    expect(screen.getByTestId('line-layers-agency-heading')).toHaveTextContent('SHOW AGENCY LINES');
-    expect(screen.getByTestId('line-layers-nearby-heading')).toHaveTextContent('SHOW NEARBY & SAVED LINES');
+    expect(screen.getByTestId('line-layers-agency-heading')).toHaveTextContent('Show agency lines');
+    expect(screen.getByTestId('line-layers-nearby-heading')).toHaveTextContent('Show nearby and saved lines');
     expect(screen.queryByText('SHOW EVERY LINE')).toBeNull();
     expect(screen.queryByText('LINES')).toBeNull();
   });

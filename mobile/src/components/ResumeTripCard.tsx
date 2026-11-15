@@ -28,7 +28,6 @@ export function ResumeTripCard({ destination, instruction, onResume }: ResumeTri
     >
       <View style={styles.icon}><Icon color={colors.onPrimary} name="go" size={18} /></View>
       <View style={styles.copy}>
-        <Text style={styles.label}>ACTIVE TRIP</Text>
         <Text numberOfLines={1} style={styles.destination}>{destination}</Text>
         {instruction ? <Text numberOfLines={1} style={styles.instruction}>{instruction}</Text> : null}
       </View>

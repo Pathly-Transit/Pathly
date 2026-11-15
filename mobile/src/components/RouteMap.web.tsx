@@ -6,7 +6,7 @@ import { GOOGLE_MAPS_LIBRARIES, GOOGLE_MAPS_SCRIPT_ID } from '../data/googleMaps
 import { beanAvatarSvg, type BeanAvatarConfig } from '../avatars/beanAvatar';
 import { formatAge, visibleTrains } from '../data/liveTrains';
 import { googleMapStyle } from '../data/mapStyle';
-import { approachingVehicle, directionArrowAt, focusStopIndex, metersPerPixel, riderNearStop, splitPathAtStop } from '../data/routeDirection';
+import { approachingVehicle, ARROW_ZOOM_SLACK, directionArrowAt, focusStopIndex, metersPerPixel, middleDirectionArrowAt, riderNearStop, splitPathAtStop } from '../data/routeDirection';
 import { stopRevealZoom } from '../data/stopDeclutter';
 import type { RouteLiveVehicle } from '../data/transitLive';
 import type { Coordinates } from '../hooks/useCurrentLocation';
@@ -179,17 +179,26 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
     const points = path ?? stops;
     const toPath = (part: readonly { lat: number; lon: number }[]) => part.map((point) => ({ lat: point.lat, lng: point.lon }));
     const focusIndex = focusStop ? stops.indexOf(focusStop) : -1;
-    if (focusIndex < 0) return { behind: [], ahead: toPath(points), aheadPoints: [], behindPoints: [], focusIndex };
+    if (focusIndex < 0) return { behind: [], ahead: toPath(points), aheadPoints: [], behindPoints: [], wholePoints: points, focusIndex };
     const { behind, ahead } = splitPathAtStop(points, stops, focusIndex);
-    return { behind: toPath(behind), ahead: toPath(ahead), aheadPoints: ahead, behindPoints: behind, focusIndex };
+    return { behind: toPath(behind), ahead: toPath(ahead), aheadPoints: ahead, behindPoints: behind, wholePoints: null, focusIndex };
   }, [focusStop, path, stops]);
+  // The zoom the whole line was first framed at (a line looked up by name, with no rider's stop).
+  const [wholeLineZoom, setWholeLineZoom] = useState<number | null>(null);
   // Placed once, for the zoom the map opens at, so zooming never moves it. Zoomed out well past that,
   // the line's bends would reach it, so it's hidden there instead.
-  const arrowZoom = FOCUS_ZOOM;
+  const arrowZoom = line.wholePoints ? wholeLineZoom ?? 0 : FOCUS_ZOOM;
   const arrow = useMemo(() => {
+    if (arrowZoom <= 0) return null;
+    // No rider's stop: near the middle of the line, moving to the other direction's line on a switch.
+    if (line.wholePoints) {
+      const middle = line.wholePoints[Math.floor(line.wholePoints.length / 2)];
+      return middle ? middleDirectionArrowAt(line.wholePoints, metersPerPixel(arrowZoom - ARROW_ZOOM_SLACK, middle.lat)) : null;
+    }
     const start = line.aheadPoints[0];
-    return start ? directionArrowAt(line.aheadPoints, metersPerPixel(arrowZoom, start.lat)) : null;
-  }, [arrowZoom, line.aheadPoints]);
+    // The faint line behind the stop is drawn too, so the arrow keeps clear of it as well.
+    return start ? directionArrowAt(line.aheadPoints, metersPerPixel(arrowZoom - ARROW_ZOOM_SLACK, start.lat), [line.behindPoints]) : null;
+  }, [arrowZoom, line.aheadPoints, line.behindPoints, line.wholePoints]);
   const polylineOptions = useMemo(() => ({ strokeColor: color, strokeWeight: LINE_WIDTH, zIndex: 1 }), [color]);
   const behindPolylineOptions = useMemo(() => ({ strokeColor: color, strokeOpacity: BEHIND_LINE_OPACITY, strokeWeight: LINE_WIDTH, zIndex: 0 }), [color]);
 
@@ -235,6 +244,8 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
     const bounds = new google.maps.LatLngBounds();
     for (const point of path ?? stops) bounds.extend({ lat: point.lat, lng: point.lon });
     loadedMap.fitBounds(bounds, ROUTE_FIT_PADDING);
+    // The direction arrow is placed for the zoom the line settles at.
+    google.maps.event.addListenerOnce(loadedMap, 'idle', () => setWholeLineZoom(loadedMap.getZoom() ?? 0));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot camera setup on load
   }, [stops]);
 
@@ -390,11 +401,11 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
               zIndex={3}
             />
           ) : null}
-          {arrow && (zoom || FOCUS_ZOOM) >= arrowZoom - 1 ? (
+          {arrow && (zoom || FOCUS_ZOOM) >= arrowZoom - ARROW_ZOOM_SLACK ? (
             // Which way the line runs, beside it just past the rider's stop (web maps stay north-up).
             <OverlayViewF getPixelPositionOffset={arrowOffset} mapPaneName={OVERLAY_LAYER} position={{ lat: arrow.point.lat, lng: arrow.point.lon }}>
               <View pointerEvents="none" style={{ width: DIRECTION_ARROW_BOX, height: DIRECTION_ARROW_BOX, transform: [{ rotate: `${arrow.bearing}deg` }] }} testID="route-direction-arrow">
-                <DirectionArrow color={color} />
+                <DirectionArrow color={color} side={arrow.side} />
               </View>
             </OverlayViewF>
           ) : null}

@@ -1,7 +1,7 @@
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BeanAvatar } from '../avatars/BeanAvatarImage';
-import { formatAge } from '../data/liveTrains';
+import { formatAge, STALE_TRAIN_MS } from '../data/liveTrains';
 import { nearRider } from '../data/rideDetection';
 import { distanceMeters } from '../data/rideGeometry';
 import { rideReportLabel } from '../data/rideReports';
@@ -11,12 +11,13 @@ import type { LiveSource } from '../data/transit';
 import type { RouteLiveVehicle } from '../data/transitLive';
 import { useDebug } from '../debug/DebugContext';
 import { useNow } from '../hooks/useNow';
-import { useThemedStyles } from '../theme/AppSettings';
+import { useTheme, useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
 import { radii } from '../theme/shape';
 import { fontFamilies, typography } from '../theme/typography';
 import { SheetPanel } from './SheetPanel';
 import { Icon } from './Icon';
+import { LiveSignal } from './LiveSignal';
 import { PressableScale } from './PressableScale';
 import { RideReportBar } from './RideReportBar';
 import type { TransitMode } from './RouteBadge';
@@ -57,6 +58,7 @@ type VehicleSheetProps = {
 /** A tapped vehicle, from the bottom: where it's going, how we know where it is, and who's on it. */
 export function VehicleSheet({ color, destination, lineName, liveSource, mode, onClaim, onClose, onBoardTripId = null, onDismiss, reportFix = null, reportSource, riderAt, ridingTripId, sharingEnabled, stops, vehicle }: VehicleSheetProps) {
   const styles = useThemedStyles(createStyles);
+  const { colors } = useTheme();
   const now = useNow(1000);
   const riding = vehicle != null && vehicle.tripId === ridingTripId;
   const riders = vehicle?.riders;
@@ -65,6 +67,8 @@ export function VehicleSheet({ color, destination, lineName, liveSource, mode, o
     ? stops.reduce((best, stop) => (distanceMeters(stop, vehicle) < distanceMeters(best, vehicle) ? stop : best))
     : null;
   const age = vehicle?.updatedAt != null ? `${formatAge(now - vehicle.updatedAt)} ago` : null;
+  // A position still being reported: the same green signal as live times.
+  const live = vehicle?.updatedAt != null && now - vehicle.updatedAt <= STALE_TRAIN_MS;
   const canClaim = vehicle != null && sharingEnabled && !riding && riderAt != null && nearRider(feedVehicles([vehicle])[0]!, riderAt, now);
   const { isAdmin, rideAlong, setMockLocation, startRideAlong } = useDebug();
   const ridingAlong = vehicle != null && rideAlong?.tripId === vehicle.tripId;
@@ -76,7 +80,10 @@ export function VehicleSheet({ color, destination, lineName, liveSource, mode, o
           <View style={styles.header}>
             <View style={styles.modeCircle}><Icon color={color} name={mode} size={24} /></View>
             <View style={styles.headerCopy}>
-              <Text accessibilityRole="header" numberOfLines={1} style={styles.title}>{`${lineName} ${NOUNS[mode]}`}</Text>
+              <View style={styles.titleRow}>
+                <Text accessibilityRole="header" numberOfLines={1} style={styles.title}>{`${lineName} ${NOUNS[mode]}`}</Text>
+                {live ? <LiveSignal color={colors.green} style={styles.titleSignal} /> : null}
+              </View>
               <Text numberOfLines={1} style={styles.subtitle}>{`To ${destination}`}</Text>
             </View>
             <PressableScale accessibilityLabel="Close" accessibilityRole="button" hitSlop={8} onPress={onClose} testID="vehicle-sheet-close"><Icon name="close" size={26} /></PressableScale>
@@ -129,7 +136,7 @@ export function VehicleSheet({ color, destination, lineName, liveSource, mode, o
                 if (ridingAlong) setMockLocation(undefined);
                 else {
                   const { lat, lon } = feedVehicles([vehicle])[0]!;
-                  startRideAlong({ source: liveSource, tripId: vehicle.tripId, label: `Riding along · ${lineName} ${NOUNS[mode]}` }, { lat, lon });
+                  startRideAlong({ source: liveSource, tripId: vehicle.tripId, label: `Riding along on the ${lineName} ${NOUNS[mode]}` }, { lat, lon });
                 }
                 onClose();
               }}
@@ -167,7 +174,9 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   modeCircle: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: colors.surfaceMuted },
   headerCopy: { flex: 1, minWidth: 0 },
-  title: { color: colors.ink, ...typography.screenHeading, fontSize: 21 },
+  titleRow: { flexDirection: 'row', alignItems: 'flex-start' },
+  title: { flexShrink: 1, color: colors.ink, ...typography.screenHeading, fontSize: 21 },
+  titleSignal: { marginLeft: 3, marginTop: 1 },
   subtitle: { color: colors.mutedInk, ...typography.metadata },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   rowText: { flex: 1, color: colors.ink, ...typography.bodyStrong },

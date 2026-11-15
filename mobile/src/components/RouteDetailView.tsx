@@ -7,7 +7,7 @@ import { useTransitLive } from '../data/TransitLiveContext';
 import { fetchRouteGeometry, fetchRouteTransfers, type LineTransfer, type RouteGeometry } from '../data/routeGeometry';
 import { STATION_TRANSFERS, type StationTransfer, type TransferMode } from '../data/stationTransfers';
 import { departureDisplay, differentEndStop, directionDestination, preferredDirectionIndex, formatClockTime, scheduleStopsFromNow, stopsForDirection, type RouteDetail, type RoutePrediction } from '../data/transit';
-import { groupNotices, routeNotices, type RouteNotice } from '../data/routeNotices';
+import { formatPostedAt, groupNotices, routeNotices, type RouteNotice } from '../data/routeNotices';
 import type { RideGuideRequest } from '../data/rideGuide';
 import type { RideFix } from '../data/rideDetection';
 import { useRideTracking, type RideTracking } from '../data/rideTracking';
@@ -312,16 +312,22 @@ function AlertsSheet({ notices, onClose, title }: { notices: readonly RouteNotic
             <PressableScale accessibilityLabel="Close" accessibilityRole="button" hitSlop={8} onPress={onClose} testID="service-alerts-close"><Icon name="close" size={26} /></PressableScale>
           </View>
           <ScrollView contentContainerStyle={styles.alertSheetContent}>
-            {notices.map((notice, index) => (
+            {notices.map((notice, index) => {
+              const posted = formatPostedAt(notice.postedAt);
+              return (
               <View key={`${notice.kind}-${index}`} style={index > 0 ? styles.alertItemSpaced : undefined} testID={`service-alert-${index}`}>
-                <View style={[styles.alertLabel, notice.warning ? styles.alertPillWarning : styles.alertPillNeutral]}>
-                  <Icon color={notice.warning ? colors.onAlertYellow : colors.ink} name={notice.warning ? 'warning' : notice.kind === 'outlook' ? 'calendar' : 'info'} size={14} />
-                  <Text style={[styles.alertLabelText, { color: notice.warning ? colors.onAlertYellow : colors.ink }]}>{notice.label}</Text>
+                <View style={styles.alertLabelRow}>
+                  <View style={[styles.alertLabel, notice.warning ? styles.alertPillWarning : styles.alertPillNeutral]}>
+                    <Icon color={notice.warning ? colors.onAlertYellow : colors.ink} name={notice.warning ? 'warning' : notice.kind === 'outlook' ? 'calendar' : 'info'} size={14} />
+                    <Text style={[styles.alertLabelText, { color: notice.warning ? colors.onAlertYellow : colors.ink }]}>{notice.label}</Text>
+                  </View>
+                  {posted ? <Text style={styles.alertPosted} testID={`service-alert-${index}-posted`}>{posted}</Text> : null}
                 </View>
                 <Text style={styles.alertTitle}>{notice.title}</Text>
                 {notice.detail ? <Text style={styles.alertBody}>{notice.detail}</Text> : null}
               </View>
-            ))}
+              );
+            })}
           </ScrollView>
         </SheetPanel>
       ) : null}
@@ -842,7 +848,7 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
                     drops the centering spacer to fit the narrow tile. */}
                 <View style={styles.predictionRow}>{prediction.live && !isClockTime ? <View style={styles.predictionSignalSpacer} /> : null}<Text numberOfLines={1} style={[styles.predictionTime, isClockTime && styles.predictionClockTime, { color: predictionColor }]}>{timing.value}</Text>{prediction.live ? <LiveSignal color={predictionColor} style={styles.predictionSignal} /> : null}</View>
                 <Text style={[styles.predictionUnit, { color: predictionColor }]}>{timing.unit}</Text>
-                {!prediction.live ? <Text style={styles.predictionSource} testID="route-prediction-scheduled">SCHEDULED</Text> : null}
+                {!prediction.live ? <Text style={styles.predictionSource} testID="route-prediction-scheduled">Scheduled</Text> : null}
               </PressableScale>
             );
           })}
@@ -1187,7 +1193,8 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     backgroundColor: colors.mutedInk,
     color: colors.surface,
     ...typography.label,
-    fontSize: 8,
+    fontSize: 10,
+    lineHeight: 13,
   },
   // The pills' own sideways scroll, sized to them rather than to the page.
   noticeScroll: {
@@ -1265,6 +1272,17 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   },
   alertLabelText: {
     fontFamily: fontFamilies.extraBold,
+    fontSize: 12,
+  },
+  alertLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  alertPosted: {
+    color: colors.mutedInk,
+    fontFamily: fontFamilies.bold,
     fontSize: 12,
   },
   alertItemSpaced: {

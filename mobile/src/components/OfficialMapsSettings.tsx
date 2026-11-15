@@ -50,7 +50,7 @@ export function OfficialMapsSettings({ onFeedback }: { onFeedback: (message: str
       </Text>
       {GROUPS.map((group) => (
         <View key={group}>
-          <Text style={styles.sectionLabel}>{group.toUpperCase()}</Text>
+          <Text style={styles.sectionLabel}>{group}</Text>
           <View style={styles.card}>
             {OFFICIAL_MAPS.filter((map) => map.group === group).map((map) => {
               const isSaved = saved.has(map.id);
@@ -60,7 +60,7 @@ export function OfficialMapsSettings({ onFeedback }: { onFeedback: (message: str
                     <View style={styles.rowIcon}><Icon name="map" size={19} /></View>
                     <View style={styles.rowCopy}>
                       <Text style={styles.title}>{map.title}</Text>
-                      <Text style={styles.detail}>{isSaved ? `Saved · ${map.detail}` : map.detail}</Text>
+                      <Text style={styles.detail}>{isSaved ? `Saved. ${map.detail}` : map.detail}</Text>
                     </View>
                   </PressableScale>
                   {CAN_SAVE_MAPS ? <SaveButton busy={busy === map.id} onPress={() => void toggleSaved(map)} saved={isSaved} testID={`official-map-save-${map.id}`} title={map.title} /> : null}

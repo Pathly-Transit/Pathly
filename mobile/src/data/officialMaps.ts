@@ -1,4 +1,6 @@
 import { Directory, File, Paths } from 'expo-file-system';
+import { getContentUriAsync } from 'expo-file-system/legacy';
+import * as IntentLauncher from 'expo-intent-launcher';
 import * as Sharing from 'expo-sharing';
 import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
@@ -65,11 +67,24 @@ export function removeSavedMap(map: OfficialMap): void {
   if (file.exists) file.delete();
 }
 
+/** Android's FLAG_GRANT_READ_URI_PERMISSION: lets the PDF viewer read the saved file. */
+const GRANT_READ_URI_PERMISSION = 1;
+
 /**
- * Opens a map: the saved copy (in the system's PDF preview, which works offline) when there is
- * one, else the MTA's own copy in the browser.
+ * Opens a map: the saved copy when there is one (works offline), else the MTA's own copy in the
+ * browser. On Android the saved copy opens straight in the phone's PDF viewer; the share sheet
+ * only comes up when no app can open a PDF. On iOS the system preview opens it.
  */
 export async function openMap(map: OfficialMap): Promise<void> {
+  if (Platform.OS === 'android' && isMapSaved(map)) {
+    try {
+      const uri = await getContentUriAsync(entry(mapFile(map)).uri);
+      await IntentLauncher.startActivityAsync('android.intent.action.VIEW', { data: uri, type: 'application/pdf', flags: GRANT_READ_URI_PERMISSION });
+      return;
+    } catch {
+      // No PDF viewer on the phone: fall through to the share sheet, which can still open it.
+    }
+  }
   if (isMapSaved(map) && (await Sharing.isAvailableAsync())) {
     await Sharing.shareAsync(entry(mapFile(map)).uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf', dialogTitle: map.title });
     return;

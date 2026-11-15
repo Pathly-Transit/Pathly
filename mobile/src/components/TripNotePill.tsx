@@ -4,7 +4,7 @@ import type { TripLegNote } from '../data/tripLive';
 import { useTheme } from '../theme/AppSettings';
 import { fontFamilies } from '../theme/typography';
 
-/** A live note on a trip ("Live · 2 min late", "Cancelled"), tinted by how much it matters. */
+/** A live note on a trip ("Live: 2 min late", "Cancelled"), tinted by how much it matters. */
 export function TripNotePill({ note, testID }: { note: TripLegNote; testID?: string }) {
   const { colors } = useTheme();
   const [ink, fill] = note.tone === 'danger' ? [colors.red, colors.redSoft] : note.tone === 'warning' ? [colors.warning, colors.amberSoft] : [colors.success, colors.greenSoft];

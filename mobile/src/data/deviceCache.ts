@@ -29,3 +29,5 @@ export async function writeCache<T>(key: string, value: T, now = Date.now()): Pr
 
 export const NEARBY_CACHE_KEY = 'pathly.nearby.v1';
 export const LIVE_CACHE_KEY = 'pathly.live.v1';
+/** The Route View ride an active trip was started from (RideGuideRequest), to resume on its page. */
+export const RIDE_GUIDE_CACHE_KEY = 'pathly.rideGuide.v1';

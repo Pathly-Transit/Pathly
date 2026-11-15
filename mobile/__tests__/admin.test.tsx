@@ -70,7 +70,7 @@ it('moves the map, Nearby, and trip planning to a mock location, and back when t
   fireEvent.press(screen.getByTestId('admin-tools-back'));
   fireEvent.press(screen.getByTestId('profile-back'));
 
-  expect(within(screen.getByTestId('debug-banner')).getByText('Mock location · Penn Station')).toBeTruthy();
+  expect(within(screen.getByTestId('debug-banner')).getByText('Mock location: Penn Station')).toBeTruthy();
   // The map jumps to Penn Station and Nearby searches there.
   // The rebuilt home map opens on Penn Station, not where it was before.
   expect(screen.getByTestId('google-map-view').props.region).toMatchObject(PENN);
@@ -104,7 +104,7 @@ it('sets a mock location from a long press on the home map', async () => {
   fireEvent(screen.getByTestId('google-map-view'), 'longPress', { nativeEvent: { coordinate: { latitude: 40.70331, longitude: -74.00567 } } });
   expect(screen.getByText('Use as mock location?')).toBeTruthy();
   fireEvent.press(screen.getByTestId('mock-location-confirm-confirm'));
-  expect(within(screen.getByTestId('debug-banner')).getByText('Mock location · Pinned spot (40.70331, -74.00567)')).toBeTruthy();
+  expect(within(screen.getByTestId('debug-banner')).getByText('Mock location: Pinned spot (40.70331, -74.00567)')).toBeTruthy();
   expect(screen.getByTestId('mock-location-marker', { includeHiddenElements: true })).toBeTruthy();
 });
 
@@ -141,7 +141,7 @@ describe('mock time', () => {
     fireEvent.press(screen.getByTestId('admin-mock-location-stony-brook-university'));
     fireEvent.press(screen.getByTestId('admin-tools-back'));
     fireEvent.press(screen.getByTestId('profile-back'));
-    expect(within(screen.getByTestId('debug-banner')).getByText(/^Mock time · Thu, Oct 15, 2:3\d AM · live times stay real$/)).toBeTruthy();
+    expect(within(screen.getByTestId('debug-banner')).getByText(/^Mock time: Thu, Oct 15, 2:3\d AM\. Live times stay real$/)).toBeTruthy();
     fireEvent.press(screen.getByTestId('search-trigger'));
     fireEvent.changeText(screen.getByTestId('search-input'), '123 Terry Rd');
     fireEvent.press(await screen.findByTestId('search-result-terry-road-smithtown'));
@@ -175,12 +175,12 @@ describe('Admin tools screen', () => {
     const screen = render(<App />);
     await act(async () => undefined);
     await openAdminTools(screen);
-    for (const label of ['MOCK LOCATION', 'MOCK TIME', 'BACKEND STATUS', 'RECENT REQUESTS', 'CACHES', 'OVERLAYS', 'RATE LIMITS']) {
+    for (const label of ['Mock location', 'Mock time', 'Backend status', 'Recent requests', 'Caches', 'Overlays', 'Rate limits']) {
       expect(screen.getByText(label)).toBeTruthy();
     }
     const lirr = await screen.findByTestId('admin-status-lirr');
-    expect(within(lirr).getByText('Timetable abcdef12 · 6 h old')).toBeTruthy();
-    expect(within(lirr).getByText('Live feed OK · 120 ms')).toBeTruthy();
+    expect(within(lirr).getByText('Timetable abcdef12, 6 h old')).toBeTruthy();
+    expect(within(lirr).getByText('Live feed OK, 120 ms')).toBeTruthy();
     expect(within(screen.getByTestId('admin-status-nice')).getByText('Live feed not configured')).toBeTruthy();
     expect(within(screen.getByTestId('admin-rate-planTrip')).getByText('19 of 20 per minute left')).toBeTruthy();
     // The status check itself is in the request log.

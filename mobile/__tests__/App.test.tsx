@@ -776,7 +776,7 @@ describe('Pathly prototype navigation', () => {
     expect(within(screen.getByTestId('search-trip-step-0')).getByText(`Toward ${first.headsign}`)).toBeTruthy();
     expect(within(screen.getByTestId('search-trip-stops-toggle-0')).getByText(`${first.stopCount} stops`)).toBeTruthy();
     const waitMinutes = Math.round((Date.parse(second.from.time) - Date.parse(first.to.time)) / 60_000);
-    expect(screen.getByLabelText(`Transfer, wait ${waitMinutes} minutes`)).toBeTruthy();
+    expect(screen.getByLabelText(`Transfer and wait ${waitMinutes} minutes`)).toBeTruthy();
     expect(within(screen.getByTestId('search-trip-step-1')).getByText('Penn Station')).toBeTruthy();
     // No invented alert status, and no agency name: the badge and line already say which it is.
     expect(screen.queryByTestId('search-trip-service-alerts')).toBeNull();
@@ -1103,7 +1103,7 @@ describe('Pathly prototype navigation', () => {
 
     fireEvent.press(vias[0]!);
     const firstStop = legs[0]!.stops![0]!;
-    expect(within(screen.getByTestId('trip-map-stop-label', hidden)).getByText(`${firstStop.name} · ${formatTripClock(firstStop.time)}`, hidden)).toBeTruthy();
+    expect(within(screen.getByTestId('trip-map-stop-label', hidden)).getByText(`${firstStop.name}, ${formatTripClock(firstStop.time)}`, hidden)).toBeTruthy();
     fireEvent(map, 'press', { nativeEvent: { action: 'press' } });
     expect(screen.queryByTestId('trip-map-stop-label', hidden)).toBeNull();
 
@@ -1113,7 +1113,7 @@ describe('Pathly prototype navigation', () => {
     fireEvent.press(screen.getByTestId('search-trip-stop-0-1'));
     const second = legs[0]!.stops![1]!;
     expect(maps.mockAnimateCamera).toHaveBeenCalledWith(expect.objectContaining({ center: { latitude: expect.closeTo(second.location.lat, 2), longitude: second.location.lng } }), expect.anything());
-    expect(within(screen.getByTestId('trip-map-stop-label', hidden)).getByText(`${second.name} · ${formatTripClock(second.time)}`, hidden)).toBeTruthy();
+    expect(within(screen.getByTestId('trip-map-stop-label', hidden)).getByText(`${second.name}, ${formatTripClock(second.time)}`, hidden)).toBeTruthy();
     // No Fit button: the map has only Save and Locate.
     expect(screen.queryByLabelText('Show the whole trip')).toBeNull();
   });
@@ -2030,11 +2030,17 @@ describe('Pathly prototype navigation', () => {
 
     });
 
-    it('GO opens a guided ride from the rider\'s stop, picks where to get off, and starts navigation', async () => {
+    it('GO opens a guided ride from the rider\'s stop, picks where to get off, and is followed on that page', async () => {
       const screen = await openPortJefferson();
       fireEvent.press(screen.getByTestId('route-go'));
       const guide = await screen.findByTestId(`ride-guide-${PJ_CARD}`);
       expect(guide).toBeTruthy();
+      // GO already started it: END instead of a second GO, and the trip still ends at the destination card.
+      expect(await screen.findByTestId('ride-guide-end')).toBeTruthy();
+      expect(screen.queryByTestId('ride-guide-go')).toBeNull();
+      expect(screen.queryByTestId('ride-guide-now')).toBeNull();
+      expect(screen.getByTestId('ride-guide-stop-picked')).toHaveTextContent('Penn Station');
+      expect(screen.getByTestId('ride-guide-arrival')).toHaveTextContent(/Penn Station/);
       // Laid out like Trip Details: leave within, times, the one ride.
       expect(screen.getByTestId('ride-guide-leave-within')).toHaveTextContent(/Leave (within \d+ min|now)/);
       expect(screen.getByTestId('ride-guide-leave-time')).toBeTruthy();
@@ -2056,10 +2062,16 @@ describe('Pathly prototype navigation', () => {
       const pickedTime = screen.getByTestId('ride-guide-stop-time-3').props.children;
       fireEvent.press(screen.getByTestId('ride-guide-stops-close'));
       expect(screen.getByTestId('ride-guide-arrive-time')).toHaveTextContent(pickedTime);
-      expect(screen.getByLabelText(`Start ride to ${pickedName}`)).toBeTruthy();
+      // The live trip moves to the new stop without asking, and the page stays.
+      expect(pickedName).toBeTruthy();
+      await act(async () => {});
+      expect(screen.queryByTestId('replace-active-trip-confirm')).toBeNull();
+      expect(screen.getByTestId('ride-guide-end')).toBeTruthy();
+      expect(screen.queryByTestId('enroute-navigation-view')).toBeNull();
 
-      fireEvent.press(screen.getByTestId('ride-guide-go'));
-      expect(await screen.findByTestId('enroute-navigation-view')).toBeTruthy();
+      fireEvent.press(screen.getByTestId('ride-guide-end'));
+      fireEvent.press(screen.getByTestId('ride-guide-end-confirm-confirm'));
+      expect(await screen.findByTestId('route-go')).toBeTruthy();
     });
 
     it('GO\'s guided ride goes back to the route it came from', async () => {

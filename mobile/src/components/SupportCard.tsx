@@ -7,12 +7,13 @@ import { STUDENT_DISCLAIMER } from '../data/supportPrompt';
 import { Mascot } from './Mascot';
 import { PressableScale } from './PressableScale';
 import { radii } from '../theme/shape';
+import { SwipePopup } from './SwipePopup';
 
-/** The arrival screen's small, dismissable donation ask (see useSupportPrompt). */
+/** The arrival's small donation ask (see useSupportPrompt): centered over the screen, swiped away or closed from the overlay. */
 export function SupportCard({ onDismiss, onDonate }: { onDismiss: () => void; onDonate: () => void }) {
   const styles = useThemedStyles(createStyles);
   return (
-    <View accessibilityLiveRegion="polite" style={styles.card} testID="support-card">
+    <SwipePopup onDismiss={onDismiss} testID="support-card">
       <View style={styles.row}>
         <Mascot mood="happy" motion="pop" size={44} />
         <View style={styles.copy}>
@@ -24,12 +25,11 @@ export function SupportCard({ onDismiss, onDonate }: { onDismiss: () => void; on
         <PressableScale accessibilityRole="button" onPress={onDismiss} style={styles.secondary} testID="support-dismiss"><Text style={styles.secondaryText}>Not now</Text></PressableScale>
         <PressableScale accessibilityRole="link" onPress={onDonate} style={styles.primary} testID="support-donate"><Text style={styles.primaryText}>Support Pathly</Text></PressableScale>
       </View>
-    </View>
+    </SwipePopup>
   );
 }
 
 const createStyles = (colors: Palette) => StyleSheet.create({
-  card: { marginTop: 16, padding: 14, borderWidth: 1, borderColor: colors.border, borderRadius: radii.card, backgroundColor: colors.highlightSoft },
   row: { flexDirection: 'row', gap: 12 },
   copy: { minWidth: 0, flex: 1 },
   title: { color: colors.ink, ...typography.bodyStrong },

@@ -94,12 +94,14 @@ function retime(itinerary: Itinerary, choices: DepartureChoices, nowMs: number):
     let option = picked;
     if (!option) {
       const planned = plannedDeparture(step);
-      // The first leg keeps its planned time unless the rider picks another. A later leg after a
-      // moved one takes the first departure it can make (with time to change when there's no
-      // walk), earlier or later than planned; after unmoved legs, the plan's connection stands.
+      // The first leg keeps its planned time unless the rider picks another, or can no longer walk
+      // there in time: then it moves to the first departure they can still make, so the times and
+      // "Leave within" follow the clock. A later leg after a moved one takes the first departure it
+      // can make (with time to change when there's no walk), earlier or later than planned; after
+      // unmoved legs, the plan's connection stands.
       const firstMakeable = (from: number) => options.find((candidate) => ms(candidate.departs) >= from);
       option = previousArrival === null
-        ? planned
+        ? ms(planned.departs) >= canMake ? planned : firstMakeable(canMake) ?? planned
         : shifted
           ? firstMakeable(canMake + (walkMs > 0 ? 0 : TRANSFER_BUFFER_MS)) ?? firstMakeable(canMake) ?? planned
           : ms(planned.departs) >= canMake ? planned : firstMakeable(canMake) ?? planned;
@@ -127,7 +129,9 @@ function retime(itinerary: Itinerary, choices: DepartureChoices, nowMs: number):
 
 /** The trip with the rider's picked departures, later legs moved to connections they can make. */
 export function retimeItinerary(itinerary: Itinerary, choices: DepartureChoices, nowMs: number): Itinerary {
-  return choices.size === 0 ? itinerary : retime(itinerary, choices, nowMs).itinerary;
+  const retimed = retime(itinerary, choices, nowMs).itinerary;
+  // Unchanged (nothing picked, the planned departure still makeable): the same trip, so memos hold.
+  return retimed.steps.every((step, index) => step === itinerary.steps[index]) ? itinerary : retimed;
 }
 
 /**

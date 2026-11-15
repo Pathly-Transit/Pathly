@@ -1,4 +1,4 @@
-import { Modal, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { findLabeledLocation, type SavedLocation } from '../data/userData';
 import { useTheme, useThemedStyles } from '../theme/AppSettings';
@@ -8,6 +8,7 @@ import { radii } from '../theme/shape';
 import { Icon } from './Icon';
 import { Mascot } from './Mascot';
 import { PressableScale } from './PressableScale';
+import { SwipePopup } from './SwipePopup';
 
 const ROWS = [
   { label: 'Home', icon: 'home' },
@@ -21,15 +22,13 @@ type SetPlacesPromptProps = {
   onDone: () => void;
 };
 
-/** A new account's first stop: where home and work or school are, each optional. */
+/** A new account's first stop: where home and work or school are, each optional. Swiped away or closed from the overlay, like Skip. */
 export function SetPlacesPrompt({ onDone, onSet, places }: SetPlacesPromptProps) {
   const styles = useThemedStyles(createStyles);
   const { colors } = useTheme();
   const anySet = ROWS.some((row) => findLabeledLocation(places, row.label));
   return (
-    <Modal animationType="fade" onRequestClose={onDone} statusBarTranslucent={true} transparent={true} visible={true}>
-      <View style={styles.center}>
-        <View accessibilityViewIsModal={true} style={styles.card} testID="set-places-prompt">
+    <SwipePopup onDismiss={onDone} testID="set-places-prompt">
           <Mascot mood="happy" size={56} style={styles.mascot} />
           <Text style={styles.title}>Where do you usually go?</Text>
           <Text style={styles.body}>Add your places and they&apos;re one tap from a trip. You can change them anytime in Favorites.</Text>
@@ -49,15 +48,11 @@ export function SetPlacesPrompt({ onDone, onSet, places }: SetPlacesPromptProps)
           <PressableScale accessibilityRole="button" onPress={onDone} style={[styles.done, anySet && styles.doneFilled]} testID="set-places-done">
             <Text style={anySet ? styles.doneFilledText : styles.doneText}>{anySet ? 'Done' : 'Skip for now'}</Text>
           </PressableScale>
-        </View>
-      </View>
-    </Modal>
+    </SwipePopup>
   );
 }
 
 const createStyles = (colors: Palette) => StyleSheet.create({
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 32, backgroundColor: colors.scrim },
-  card: { width: '100%', maxWidth: 380, padding: 20, borderRadius: radii.card, backgroundColor: colors.surface },
   mascot: { marginBottom: 10 },
   title: { color: colors.ink, ...typography.sectionHeading, fontSize: 18 },
   body: { marginTop: 6, marginBottom: 10, color: colors.mutedInk, ...typography.metadata },
@@ -66,7 +61,7 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   rowCopy: { flex: 1 },
   rowTitle: { color: colors.ink, ...typography.bodyStrong, fontSize: 15 },
   rowDetail: { color: colors.mutedInk, ...typography.metadata, fontSize: 13 },
-  done: { minHeight: 46, alignItems: 'center', justifyContent: 'center', marginTop: 12, borderRadius: radii.pill },
+  done: { minHeight: 46, alignItems: 'center', justifyContent: 'center', marginTop: 12, marginBottom: 8, borderRadius: radii.pill },
   doneFilled: { backgroundColor: colors.primary },
   doneText: { color: colors.mutedInk, ...typography.bodyStrong, fontSize: 15 },
   doneFilledText: { color: colors.onPrimary, fontFamily: fontFamilies.extraBold, fontSize: 15 },

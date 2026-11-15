@@ -134,6 +134,8 @@ export type ServiceAlert = {
   /** Disrupts service now, so it's shown in warning yellow; otherwise neutral. */
   warning?: boolean;
   upcoming?: boolean;
+  /** When the agency posted or last updated it (ms); null or absent when the feed doesn't say. */
+  postedAt?: number | null;
 };
 
 export function minuteLabel(minutes: number): string {

@@ -18,6 +18,23 @@ describe('route direction helpers', () => {
     expect(directionArrowAt([line[0]!])).toBeNull();
   });
 
+  it('never draws the arrow where another part of the line runs through it', () => {
+    // East along 40.9°N, then back west 40 m to the south (a hairpin): at 3 m/px that's ~13 px,
+    // right where an arrow drawn on the right of the eastbound line would sit.
+    const out = Array.from({ length: 21 }, (_, index) => ({ lat: 40.9, lon: -73.2 + index * 0.0005 }));
+    const back = Array.from({ length: 21 }, (_, index) => ({ lat: 40.9 - 0.00036, lon: -73.19 - index * 0.0005 }));
+    const arrow = directionArrowAt([...out, ...back], 3)!;
+    expect(arrow).not.toBeNull();
+    // Clear on the left (north) instead, where nothing else is drawn.
+    expect(arrow.side).toBe('left');
+    expect(arrow.bearing).toBeCloseTo(90, 0);
+    // With the other side blocked too (the faint line behind the stop, 40 m north), there's no room.
+    const behind = back.map((point) => ({ lat: 40.9 + 0.00036, lon: point.lon }));
+    expect(directionArrowAt([...out, ...back], 3, [behind])).toBeNull();
+    // On a plain straight line it sits on the right.
+    expect(directionArrowAt(line)!.side).toBe('right');
+  });
+
   it('picks the vehicle with the least line left before the stop', () => {
     // The line leading up to a stop at its east end (line[10]).
     const behind = line.slice(0, 11);

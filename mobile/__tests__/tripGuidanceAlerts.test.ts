@@ -57,9 +57,9 @@ describe('trip announcements', () => {
   });
 
   it('puts the step, what comes next, and the arrival time in the notification', () => {
-    expect(tripNotificationContent(boarding)).toEqual({ title: 'Board LIRR at Penn Station', body: 'Next: Continue to Woodside · Arrive 6:42 PM' });
-    expect(tripNotificationContent(riding).body).toBe('Next: Continue to Woodside · 3 stops left · Arrive 6:42 PM');
-    expect(tripNotificationContent(stopNext).body).toBe('Your stop, Jamaica, is next. · Arrive 6:42 PM');
+    expect(tripNotificationContent(boarding)).toEqual({ title: 'Board LIRR at Penn Station', body: 'Next: Continue to Woodside. Arrive 6:42 PM' });
+    expect(tripNotificationContent(riding).body).toBe('Next: Continue to Woodside. 3 stops left. Arrive 6:42 PM');
+    expect(tripNotificationContent(stopNext).body).toBe('Your stop, Jamaica, is next. Arrive 6:42 PM');
   });
 });
 
@@ -69,7 +69,8 @@ describe('useTripGuidanceAlerts', () => {
   };
   type Props = { sessionId: string | null; guidance: NavigationGuidance | null; arrivedDestination: string | null; settings: UserPreferences['tripGuidance'] };
   const render = (initial: Props) => renderHook((props: Props) => useTripGuidanceAlerts({ ...props, notificationsEnabled: true }), { initialProps: initial });
-  const on = DEFAULT_PREFERENCES.tripGuidance;
+  // Every kind of guidance switched on (spoken directions are off by default).
+  const on = { ...DEFAULT_PREFERENCES.tripGuidance, voice: true };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -127,7 +128,8 @@ describe('trip guidance lifecycle regressions', () => {
   const dismiss = Notifications.dismissNotificationAsync as jest.Mock;
   const permissions = Notifications.getPermissionsAsync as jest.Mock;
   const allowed = { granted: true, canAskAgain: true };
-  const on = DEFAULT_PREFERENCES.tripGuidance;
+  // Every kind of guidance switched on (spoken directions are off by default).
+  const on = { ...DEFAULT_PREFERENCES.tripGuidance, voice: true };
   type Props = { sessionId: string | null; guidance: NavigationGuidance | null; arrivedDestination: string | null; notificationsEnabled?: boolean };
   const render = (initial: Props) => renderHook((props: Props) => useTripGuidanceAlerts({
     ...props, settings: on, notificationsEnabled: props.notificationsEnabled ?? true,

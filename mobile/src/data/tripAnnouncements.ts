@@ -46,5 +46,5 @@ export function tripNotificationContent(guidance: NavigationGuidance): { title: 
   else if (guidance.nextAction) parts.push(`Next: ${guidance.nextAction}`);
   if (guidance.phase === 'riding' && guidance.remainingStops !== null && !stopIsNext(guidance)) parts.push(`${stopsLabel(guidance.remainingStops)} left`);
   parts.push(`Arrive ${formatTripClock(guidance.arrivalTime)}`);
-  return { title: guidance.currentAction, body: parts.join(' · ') };
+  return { title: guidance.currentAction, body: parts.map((part) => part.replace(/\.$/, '')).join('. ') };
 }

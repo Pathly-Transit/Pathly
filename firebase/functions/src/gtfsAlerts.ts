@@ -26,6 +26,11 @@ export type RouteAlert = {
   warning: boolean;
   /** Starts later (within UPCOMING_DAYS), rather than in effect now. */
   upcoming: boolean;
+  /**
+   * When the agency posted (or last updated) it, in ms; null when the feed doesn't say. The MTA's
+   * feed has the time itself; other feeds only say when the alert took effect, which stands in.
+   */
+  postedAt: number | null;
 };
 
 /**
@@ -42,7 +47,7 @@ const ALERTS_CACHE_TTL_MS = 300_000;
 const ALERTS_FAILURE_CACHE_TTL_MS = 60_000;
 
 type Period = { start: number; end: number };
-type ParsedAlert = { id: string; header: string; description: string | null; periods: Period[]; routes: { agencyId: string | null; routeId: string | null; stopId: string | null }[]; mtaType: string | null; effect: number | null };
+type ParsedAlert = { id: string; header: string; description: string | null; periods: Period[]; routes: { agencyId: string | null; routeId: string | null; stopId: string | null }[]; mtaType: string | null; effect: number | null; postedSeconds: number | null };
 
 /** Now, upcoming (starts within UPCOMING_DAYS), or neither. */
 function timing(periods: readonly Period[], nowSeconds: number): 'now' | 'upcoming' | null {
@@ -125,9 +130,21 @@ type JsonAlertEntity = {
     informed_entity?: { agency_id?: string; route_id?: string; stop_id?: string }[];
     header_text?: JsonText;
     description_text?: JsonText;
-    'transit_realtime.mercury_alert'?: { alert_type?: string };
+    'transit_realtime.mercury_alert'?: { alert_type?: string; created_at?: number; updated_at?: number };
   };
 };
+
+/** A feed's seconds-since-1970 value, or null when it's missing or zero. */
+function positiveSeconds(value: unknown): number | null {
+  const seconds = Number(value ?? 0);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+/** When the period in effect at `nowSeconds` began (the latest such start), or null. */
+function effectiveSince(periods: readonly Period[], nowSeconds: number): number | null {
+  const starts = periods.filter((period) => period.start > 0 && period.start <= nowSeconds && (period.end === 0 || nowSeconds <= period.end)).map((period) => period.start);
+  return starts.length > 0 ? Math.max(...starts) : null;
+}
 
 /** Plain English text of a translated string (the feeds also carry an HTML copy). */
 function englishText(text: { translation?: { text?: string | null; language?: string | null }[] | null } | null | undefined): string | null {
@@ -181,6 +198,7 @@ function loadMtaAlerts(): Promise<ParsedAlert[]> {
         routes: (alert.informed_entity ?? []).map((informed) => ({ agencyId: informed.agency_id ?? null, routeId: informed.route_id ?? null, stopId: informed.stop_id ?? null })),
         mtaType: alert['transit_realtime.mercury_alert']?.alert_type ?? null,
         effect: null,
+        postedSeconds: positiveSeconds(alert['transit_realtime.mercury_alert']?.updated_at ?? alert['transit_realtime.mercury_alert']?.created_at),
       }];
     });
   });
@@ -208,6 +226,7 @@ function loadAgencyAlerts(agencyId: AgencyId): Promise<ParsedAlert[]> {
             routes: (alert.informedEntity ?? []).map((informed) => ({ agencyId: informed.agencyId || null, routeId: informed.routeId || null, stopId: informed.stopId || null })),
             mtaType: null,
             effect: alert.effect ?? null,
+            postedSeconds: null,
           }];
         });
       } catch (error) {
@@ -260,7 +279,8 @@ export async function getLineAlerts(agencyId: AgencyId, routeId: string, nowMs =
     const upcoming = when === 'upcoming';
     const kind = alertKind(alert.mtaType, alert.effect, alert.header);
     const stopIds = alert.routes.flatMap((informed) => (informed.stopId && (mtaAgencies.length === 0 || mtaAgencies.includes(informed.agencyId ?? '')) ? [informed.stopId] : []));
-    alerts.push({ id: alert.id, header: alert.header, description: alert.description, kind, upcoming, ...alertLabel(kind, upcoming, alert.mtaType), periods: alert.periods, stopIds, mtaType: alert.mtaType });
+    const postedSeconds = alert.postedSeconds ?? (upcoming ? null : effectiveSince(alert.periods, nowSeconds));
+    alerts.push({ id: alert.id, header: alert.header, description: alert.description, kind, upcoming, ...alertLabel(kind, upcoming, alert.mtaType), postedAt: postedSeconds != null ? postedSeconds * 1000 : null, periods: alert.periods, stopIds, mtaType: alert.mtaType });
   }
   const rank = (alert: RouteAlert) => (alert.warning ? 0 : alert.upcoming ? 2 : 1);
   return alerts.map((alert, index) => ({ alert, index })).sort((a, b) => rank(a.alert) - rank(b.alert) || a.index - b.index).map(({ alert }) => alert);

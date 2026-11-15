@@ -7,28 +7,28 @@ const labels = (iso: string) => upcomingHolidays(new Date(iso)).map((notice) => 
 
 describe('upcomingHolidays', () => {
   it('finds Thanksgiving a week ahead, but not eight days ahead', () => {
-    expect(labels('2026-11-19T17:00:00Z')).toEqual(['Thanksgiving · Nov 26']);
+    expect(labels('2026-11-19T17:00:00Z')).toEqual(['Thanksgiving, Nov 26']);
     expect(labels('2026-11-18T17:00:00Z')).toEqual([]);
   });
 
   it('says today on the day itself, in New York time', () => {
-    expect(labels('2026-11-26T17:00:00Z')).toEqual(['Thanksgiving · Today']);
+    expect(labels('2026-11-26T17:00:00Z')).toEqual(['Thanksgiving, Today']);
     // 11 PM on the 26th in New York is already the 27th in UTC.
-    expect(labels('2026-11-27T04:00:00Z')).toEqual(['Thanksgiving · Today']);
+    expect(labels('2026-11-27T04:00:00Z')).toEqual(['Thanksgiving, Today']);
   });
 
   it('moves a weekend holiday to the weekday it is observed', () => {
     // July 4, 2026 is a Saturday.
-    expect(labels('2026-07-01T17:00:00Z')).toEqual(['Independence Day · Jul 3']);
+    expect(labels('2026-07-01T17:00:00Z')).toEqual(['Independence Day, Jul 3']);
   });
 
   it('looks across the new year', () => {
-    expect(labels('2026-12-28T17:00:00Z')).toEqual(["New Year's Day · Jan 1"]);
+    expect(labels('2026-12-28T17:00:00Z')).toEqual(["New Year's Day, Jan 1"]);
   });
 
   it('computes floating Monday holidays', () => {
-    expect(labels('2027-05-30T17:00:00Z')).toEqual(['Memorial Day · May 31']);
-    expect(labels('2026-09-07T17:00:00Z')).toEqual(['Labor Day · Today']);
+    expect(labels('2027-05-30T17:00:00Z')).toEqual(['Memorial Day, May 31']);
+    expect(labels('2026-09-07T17:00:00Z')).toEqual(['Labor Day, Today']);
   });
 });
 
@@ -70,10 +70,10 @@ describe('useServiceOutlook', () => {
     }));
     const now = new Date('2026-11-05T17:00:00Z');
     const { result } = renderHook(() => useServiceOutlook(now, { agencyId: 'si', routeId: 'S76' }));
-    expect(result.current.map((notice) => notice.label)).toEqual(['Veterans Day · Nov 11']);
+    expect(result.current.map((notice) => notice.label)).toEqual(['Veterans Day, Nov 11']);
     await act(async () => {});
     expect(call).toHaveBeenCalledWith({ agencyId: 'si', routeId: 'S76', holidayDates: ['20261111'] });
-    expect(result.current.map((notice) => notice.label)).toEqual(['Veterans Day · Nov 11']);
+    expect(result.current.map((notice) => notice.label)).toEqual(['Veterans Day, Nov 11']);
     expect(result.current[0]!.detail).toMatch(/usual service/);
   });
 });

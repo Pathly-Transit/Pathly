@@ -44,14 +44,14 @@ async function copyText(text: string): Promise<string> {
 
 function snapshotLine(agency: AgencyStatus): string {
   const { snapshot } = agency;
-  if (snapshot.state === 'published') return `Timetable ${snapshot.version.slice(0, 8)} · ${agency.ageHours ?? '?'} h old`;
+  if (snapshot.state === 'published') return `Timetable ${snapshot.version.slice(0, 8)}, ${agency.ageHours ?? '?'} h old`;
   if (snapshot.state === 'missing') return 'No published timetable';
   return `Timetable problem: ${snapshot.message}`;
 }
 
 function liveLine(live: AgencyStatus['live']): string {
   if (!live.configured) return 'Live feed not configured';
-  return live.ok ? `Live feed OK · ${live.ms} ms` : `Live feed failing${live.status ? ` (${live.status})` : ''}`;
+  return live.ok ? `Live feed OK, ${live.ms} ms` : `Live feed failing${live.status ? ` (${live.status})` : ''}`;
 }
 
 function RequestRow({ entry }: { entry: RequestLogEntry }) {
@@ -78,10 +78,13 @@ function RequestRow({ entry }: { entry: RequestLogEntry }) {
   );
 }
 
-type AdminToolsViewProps = { onBack: () => void; onPickMockLocation: () => void };
+/** The app's small popups, shown on demand to check how they look. */
+export type PopupPreview = 'support' | 'holiday' | 'arrival' | 'places';
+
+type AdminToolsViewProps = { onBack: () => void; onPickMockLocation: () => void; onPreviewPopup: (popup: PopupPreview) => void };
 
 /** The admin's testing and diagnostics screen (Profile → Admin tools). */
-export function AdminToolsView({ onBack, onPickMockLocation }: AdminToolsViewProps) {
+export function AdminToolsView({ onBack, onPickMockLocation, onPreviewPopup }: AdminToolsViewProps) {
   const profile = useThemedStyles(createProfileStyles);
   const styles = useThemedStyles(createStyles);
   const { colors } = useTheme();
@@ -131,7 +134,7 @@ export function AdminToolsView({ onBack, onPickMockLocation }: AdminToolsViewPro
         <ScrollView contentContainerStyle={profile.pageContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
           <Text style={profile.intro}>Testing tools for this admin account only. Overrides stay on this device until turned off.</Text>
 
-          <Text style={profile.sectionLabel}>MOCK LOCATION</Text>
+          <Text style={profile.sectionLabel}>Mock location</Text>
           <Card>
             <SettingRow detail={debug.mockLocation ? `${debug.mockLocation.latitude.toFixed(5)}, ${debug.mockLocation.longitude.toFixed(5)}` : 'Using the real location. Long-press the home map to pick a spot.'} label={debug.mockLocation ? debug.mockLocation.label : 'Off'} testID="admin-mock-location-current" />
             {MOCK_LOCATION_PRESETS.map((preset) => (
@@ -150,7 +153,7 @@ export function AdminToolsView({ onBack, onPickMockLocation }: AdminToolsViewPro
             {debug.mockLocation ? <SettingRow label="Turn off mock location" onPress={() => debug.setMockLocation(undefined)} testID="admin-mock-location-off" /> : null}
           </Card>
 
-          <Text style={profile.sectionLabel}>MOCK TIME</Text>
+          <Text style={profile.sectionLabel}>Mock time</Text>
           <Card>
             <SettingRow detail={debug.mockTime ? 'Trip planning and times follow this clock. Live predictions stay real-time.' : 'Using the real time.'} label={debug.mockTime ? clock.format(appNow()) : 'Off'} testID="admin-mock-time-current" />
             {mockTimePresets(openedAt).map((preset) => (
@@ -173,7 +176,7 @@ export function AdminToolsView({ onBack, onPickMockLocation }: AdminToolsViewPro
             {debug.mockTime ? <SettingRow label="Turn off mock time" onPress={() => debug.setMockTime(undefined)} testID="admin-mock-time-off" /> : null}
           </Card>
 
-          <Text style={profile.sectionLabel}>BACKEND STATUS</Text>
+          <Text style={profile.sectionLabel}>Backend status</Text>
           <Card>
             {status.state === 'loading' ? <SettingRow label="Checking the backend…" /> : null}
             {status.state === 'error' ? <SettingRow detail={status.message} label="Couldn't load backend status" onPress={loadStatus} testID="admin-status-retry" /> : null}
@@ -182,7 +185,7 @@ export function AdminToolsView({ onBack, onPickMockLocation }: AdminToolsViewPro
                 <View style={profile.rowCopy}>
                   <Text style={profile.settingText}>{agency.displayName}</Text>
                   <Text style={profile.settingDetail}>{snapshotLine(agency)}</Text>
-                  <Text style={profile.settingDetail}>{agency.lastRefresh ? `Last refresh ${agency.lastRefresh.ok ? agency.lastRefresh.result ?? 'OK' : `failed: ${agency.lastRefresh.message ?? ''}`} · ${clock.format(Date.parse(agency.lastRefresh.at))}` : 'No refresh recorded'}</Text>
+                  <Text style={profile.settingDetail}>{agency.lastRefresh ? `Last refresh ${agency.lastRefresh.ok ? agency.lastRefresh.result ?? 'OK' : `failed: ${agency.lastRefresh.message ?? ''}`}, ${clock.format(Date.parse(agency.lastRefresh.at))}` : 'No refresh recorded'}</Text>
                   <Text style={[profile.settingDetail, agency.live.configured && agency.live.ok === false ? styles.bad : null]}>{liveLine(agency.live)}</Text>
                 </View>
               </View>
@@ -190,25 +193,33 @@ export function AdminToolsView({ onBack, onPickMockLocation }: AdminToolsViewPro
             {status.state === 'loaded' ? <SettingRow detail={`Checked ${clock.format(Date.parse(status.data.checkedAt))}`} label="Check again" onPress={loadStatus} testID="admin-status-refresh" /> : null}
           </Card>
 
-          <Text style={profile.sectionLabel}>RECENT REQUESTS</Text>
+          <Text style={profile.sectionLabel}>Recent requests</Text>
           <Card>
             {requests.length === 0 ? <SettingRow detail="Backend calls made by this app appear here." label="No requests yet" /> : requests.map((entry) => <RequestRow entry={entry} key={entry.id} />)}
           </Card>
 
-          <Text style={profile.sectionLabel}>CACHES</Text>
+          <Text style={profile.sectionLabel}>Caches</Text>
           <Card>
             <SettingRow detail="Saved nearby list and live times" label="Clear device cache" onPress={() => { void clearDeviceCache(); }} testID="admin-clear-device-cache" />
             <SettingRow detail="Plans remembered for two minutes" label="Clear trip-plan cache" onPress={() => { clearTripPlanCache(); setFeedback('Trip-plan cache cleared'); }} testID="admin-clear-trip-cache" />
             <SettingRow detail="Asks for every route on screen again" label="Refresh live data now" onPress={() => { refreshLiveDataNow(); setFeedback('Live data refresh requested'); }} testID="admin-refresh-live" />
           </Card>
 
-          <Text style={profile.sectionLabel}>OVERLAYS</Text>
+          <Text style={profile.sectionLabel}>Popups</Text>
+          <Card>
+            <SettingRow detail="Tip and quick survey, as Home asks now and then" label="Feedback and tips" onPress={() => onPreviewPopup('support')} testID="admin-popup-support" />
+            <SettingRow detail="The reminder before a holiday schedule" label="Holiday service" onPress={() => onPreviewPopup('holiday')} testID="admin-popup-holiday" />
+            <SettingRow detail="The tip ask after a trip ends" label="Glad you made it" onPress={() => onPreviewPopup('arrival')} testID="admin-popup-arrival" />
+            <SettingRow detail="A new account's first prompt" label="Your places" onPress={() => onPreviewPopup('places')} testID="admin-popup-places" />
+          </Card>
+
+          <Text style={profile.sectionLabel}>Overlays</Text>
           <Card>
             <ToggleRow detail="On route and trip details" label="Show route, stop, and trip IDs" onChange={(value) => debug.setOverlay('ids', value)} testID="admin-overlay-ids" value={debug.overlays.ids} />
             <ToggleRow detail="Tap the home map to see coordinates" label="Show map tap coordinates" onChange={(value) => debug.setOverlay('tapCoords', value)} testID="admin-overlay-tap-coords" value={debug.overlays.tapCoords} />
           </Card>
 
-          <Text style={profile.sectionLabel}>RATE LIMITS</Text>
+          <Text style={profile.sectionLabel}>Rate limits</Text>
           <Card>
             {status.state === 'loaded'
               ? Object.entries(status.data.myRateLimits).map(([name, limit]) => <SettingRow detail={`${limit.remaining} of ${limit.perMinute} per minute left`} key={name} label={name} testID={`admin-rate-${name}`} />)

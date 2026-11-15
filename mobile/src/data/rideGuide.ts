@@ -99,6 +99,12 @@ export function rideAlerts(notices: readonly RouteNotice[]): ServiceAlert[] {
     }));
 }
 
+/** True when a trip's itinerary id is this ride (same line, direction and boarding stop), whatever stop it gets off at. */
+export function isRideGuideTrip(request: RideGuideRequest, itineraryId: string): boolean {
+  const board = request.stops[0];
+  return Boolean(board) && itineraryId.startsWith(`ride:${request.routeId}:${request.directionIndex}:${board!.stopId ?? board!.name}:`);
+}
+
 /**
  * The ride as a one-leg trip to `stops[alightIndex]`, leaving on the picked departure (any other
  * departure is offered in the leg's departure box), after the walk to the stop when known.

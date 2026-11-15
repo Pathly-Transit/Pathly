@@ -4,9 +4,9 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useAuth } from '../auth/AuthContext';
 import { applyRouteLive } from '../data/applyRouteLive';
-import { NEARBY_CACHE_KEY, readCache, writeCache } from '../data/deviceCache';
+import { NEARBY_CACHE_KEY, RIDE_GUIDE_CACHE_KEY, readCache, writeCache } from '../data/deviceCache';
 import { guidanceForNavigation, type TripEndpointReference } from '../data/enrouteNavigation';
-import type { RideGuideRequest } from '../data/rideGuide';
+import { isRideGuideTrip, type RideGuideRequest } from '../data/rideGuide';
 import { describeTransitLine, discoveredRouteToRouteDetail, fetchNearbyTransit, fetchRouteAtStop, filterOutPinnedDuplicates, type DiscoveredRoute } from '../data/nearbyTransit';
 import type { IndexedLine } from '../data/lineIndex';
 import { distanceMeters } from '../data/routeDirection';
@@ -36,7 +36,7 @@ import {
   type RouteDetail,
   type TripTimeChoice,
 } from '../data/transit';
-import { AdminToolsView } from '../debug/AdminToolsView';
+import { AdminToolsView, type PopupPreview } from '../debug/AdminToolsView';
 import { DebugBanner } from '../debug/DebugBanner';
 import { useDebug } from '../debug/DebugContext';
 import { pinnedSpotLabel } from '../debug/presets';
@@ -61,7 +61,7 @@ import { RideGuideView } from './RideGuideView';
 import { GoogleMapView, type HomeMapCamera } from './GoogleMapView';
 import { LineLayersSheet } from './LineLayersSheet';
 import { LoadingScreen } from './LoadingScreen';
-import { MapControlButton } from './MapControlButton';
+import { MAP_CONTROL_SIZE, MapControlButton } from './MapControlButton';
 import { PressableScale } from './PressableScale';
 import { ProfileView } from './ProfileView';
 import type { RideFix } from '../data/rideDetection';
@@ -78,6 +78,7 @@ import { CURRENT_LOCATION_LABEL, initialResultsCriteria, RouteResultsView, type 
 import type { TripMapCamera } from '../data/tripMap';
 import { useSupportPopup } from '../data/nudgePrompt';
 import { useSystemNotice } from '../data/systemNotices';
+import { SupportCard } from './SupportCard';
 import { SupportPopup } from './SupportPopup';
 import { SystemNoticeBanner } from './SystemNoticeBanner';
 import { SearchHeader } from './SearchHeader';
@@ -96,6 +97,10 @@ const NEARBY_SEARCH_DEBOUNCE_MS = 600;
 // the point has moved this far: searching on every fix ran into the per-rider rate limit.
 const NEARBY_RESEARCH_METERS = 150;
 const LOCATION_UNAVAILABLE_NOTICE_MS = 1000;
+/** How long a saved Route View ride stays resumable on its page (a ride never runs a day). */
+const RIDE_GUIDE_CACHE_MS = 24 * 60 * 60 * 1000;
+/** Admin tools' sample holiday reminder. */
+const PREVIEW_NOTICE = { id: 'preview', text: 'Thanksgiving Thursday: holiday schedules on most lines', accessibilityLabel: 'Thanksgiving Thursday. Most lines run a holiday or Sunday schedule, with fewer trips.' };
 // A cached nearby list older than a day is more misleading than helpful.
 const NEARBY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -204,6 +209,11 @@ export function HomeScreen() {
   const [tripTime, setTripTime] = useState<TripTimeChoice>({ mode: 'now' });
   const [arrivedDestination, setArrivedDestination] = useState<string | null>(null);
   const [tripStartFailed, setTripStartFailed] = useState(false);
+  // Admin tools: one of the popups, shown on Home on demand.
+  const [popupPreview, setPopupPreview] = useState<PopupPreview | null>(null);
+  // Route View's GO while another trip is under way: asked first, then that ride replaces it without asking again.
+  const [goOverTrip, setGoOverTrip] = useState<Extract<ActiveView, { name: 'rideGuide' }> | null>(null);
+  const [approvedRide, setApprovedRide] = useState<RideGuideRequest | null>(null);
   // A trip's star saves its destination to the account (Firestore), listed under Favorites -> Places.
   const { user } = useAuth();
   // A guest has a session but no account: nothing is saved, as if signed out.
@@ -240,9 +250,26 @@ export function HomeScreen() {
     retry: retryTrip,
     start: startActiveTrip,
   } = trip;
+  // The ride page a Route View GO trip is followed on, kept on the device so Resume (or reopening
+  // the app) goes back to that page instead of the separate navigation screen.
+  const [rideRequest, setRideRequest] = useState<RideGuideRequest | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void readCache<RideGuideRequest>(RIDE_GUIDE_CACHE_KEY, RIDE_GUIDE_CACHE_MS).then((cached) => {
+      if (!cancelled && cached) setRideRequest((current) => current ?? cached);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const activeRideRequest = rideRequest && trip.active && isRideGuideTrip(rideRequest, trip.active.itinerary.id) ? rideRequest : null;
+  const tripView = useMemo<ActiveView>(
+    () => (activeRideRequest ? { name: 'rideGuide', request: activeRideRequest, previous: { name: 'home' } } : { name: 'enroute' }),
+    [activeRideRequest],
+  );
   const activeView = useMemo<ActiveView>(() => requestedView ?? (
-    trip.status === 'active' || trip.status === 'recovery' ? { name: 'enroute' } : { name: 'home' }
-  ), [requestedView, trip.status]);
+    trip.status === 'active' || trip.status === 'recovery' ? tripView : { name: 'home' }
+  ), [requestedView, trip.status, tripView]);
   const [savedLocations, setSavedLocations] = useState<readonly SavedLocation[]>([]);
   const { height } = useViewportSize();
   const { location, mocked: locationMocked, navigationFix, navigationStale, provisional: locationProvisional, refresh: refreshLocation, status: locationStatus } = useCurrentLocation(trip.active != null);
@@ -555,17 +582,11 @@ export function HomeScreen() {
   const mapHeight = mapPageMapHeight(height);
   // The transit menu scrolls over the map in one page scroll; the location button rides up with it.
   const [homeScrollY] = useState(() => new Animated.Value(0));
-  const layersButtonOpacity = homeScrollY.interpolate({
-    inputRange: [0, 48],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
-  // Fades as the sheet comes up, then off the screen, so it can't take a tap while hidden.
-  const layersButtonTranslateX = homeScrollY.interpolate({
-    inputRange: [47, 48],
-    outputRange: [0, thumb.towardEdge(200)],
-    extrapolate: 'clamp',
-  });
+  // The line layers button stays put on the map, under the search bar, and the transit menu slides
+  // over it as it scrolls up (it's drawn with the map, beneath the menu). Its spot is measured from
+  // the row it lines up with under the search bar (which moves down with a resume-trip card).
+  const [layersRow, setLayersRow] = useState<{ y: number; height: number } | null>(null);
+  const layersButtonTop = statusBarInset + (layersRow ? layersRow.y + (layersRow.height - MAP_CONTROL_SIZE) / 2 : 74);
 
   const showHome = useCallback(() => setActiveView({ name: 'home' }), []);
   const showSearch = useCallback(() => {
@@ -685,9 +706,11 @@ export function HomeScreen() {
       setTripStartFailed(true);
     }
   }, [activeView, selectedTrip, startActiveTrip]);
-  // GO from Route View's guided ride: the same en-route navigation as a planned trip, from the
-  // walk's start (or the boarding stop) to the stop the rider picked.
-  const startRide = useCallback(async (itinerary: Itinerary) => {
+  // GO from Route View's guided ride: the same trip engine as a planned trip, from the walk's start
+  // (or the boarding stop) to the stop the rider picked, followed on the ride's own page. A new stop
+  // or departure for the ride already under way swaps it without asking.
+  const activeItineraryId = trip.active?.itinerary.id;
+  const startRide = useCallback(async (itinerary: Itinerary, request: RideGuideRequest) => {
     const ride = itinerary.steps.find((step) => step.kind === 'transit');
     if (!ride || ride.kind !== 'transit') {
       setTripStartFailed(true);
@@ -699,10 +722,14 @@ export function HomeScreen() {
     const destination: TripEndpointReference = { kind: 'coordinate', label: ride.to.name, point: ride.to.location, savedAt };
     const modes: TripMode[] = ride.mode === 'subway' || ride.mode === 'bus' || ride.mode === 'rail' ? [ride.mode] : ['subway', 'bus', 'rail'];
     const resumeRequest: ResumePlanRequest = { origin, destination, time: { mode: 'depart', at: itinerary.departureTime }, preference: 'fastest', modes };
+    setRideRequest(request);
+    void writeCache(RIDE_GUIDE_CACHE_KEY, request);
     const result = await startActiveTrip({ itinerary, origin, destination, resumeRequest, resumeSource: 'ride-guide' });
-    if (result === 'started') setActiveView({ name: 'enroute' });
-    else if (result !== 'replacement-required') setTripStartFailed(true);
-  }, [startActiveTrip]);
+    if (result === 'replacement-required' && (approvedRide === request || (activeItineraryId && isRideGuideTrip(request, activeItineraryId)))) {
+      if (!await confirmReplacement()) setTripStartFailed(true);
+    } else if (result !== 'started' && result !== 'replacement-required') setTripStartFailed(true);
+    if (approvedRide === request) setApprovedRide(null);
+  }, [activeItineraryId, approvedRide, confirmReplacement, startActiveTrip]);
 
   // Real GPS and admin checkpoints share this one evidence path. The engine itself rejects stale,
   // inaccurate, ambiguous, and backward movement and completes the session idempotently.
@@ -824,6 +851,9 @@ export function HomeScreen() {
   );
 
   // Starting a trip (a planned one, or Route View's GO) over an active one asks first; a failed start says so.
+  // The ride already under way, moved to another stop or departure, is swapped without asking.
+  const swappingRide = activeView.name === 'rideGuide' && trip.pendingReplacement !== null && isRideGuideTrip(activeView.request, trip.pendingReplacement.itinerary.id)
+    && (approvedRide === activeView.request || (activeItineraryId !== undefined && isRideGuideTrip(activeView.request, activeItineraryId)));
   const tripStartDialogs = (
     <>
       <ConfirmDialog
@@ -838,12 +868,13 @@ export function HomeScreen() {
               return;
             }
             setSelectedTrip(null);
-            setActiveView({ name: 'enroute' });
+            // Route View's ride is followed on its own page.
+            if (activeView.name !== 'rideGuide') setActiveView({ name: 'enroute' });
           });
         }}
         testID="replace-active-trip-confirm"
         title="Replace your active trip?"
-        visible={trip.pendingReplacement !== null}
+        visible={trip.pendingReplacement !== null && !swappingRide}
       />
       <ConfirmDialog
         body="Your active trip could not be saved on this device. Nothing was replaced. Please try again."
@@ -1016,6 +1047,7 @@ export function HomeScreen() {
     // of the nearby list (the rider moved), so the page stays open.
     const route = findRoute(routeId) ?? activeView.route;
     return screen(
+      <>
       <RouteDetailScreen
         exploreFrom={searchCenter ?? undefined}
         initialDirectionIndex={activeView.directionIndex}
@@ -1024,7 +1056,13 @@ export function HomeScreen() {
         onOpenDepartures={(directionIndex) => setActiveView({ name: 'departures', routeId, route, directionIndex, previous, wholeRoute })}
         onOpenStop={(stop) => openStop(routeView, stop)}
         onOpenTransfer={(transfer, stop) => openTransfer(routeView, transfer, stop)}
-        onGo={(request) => setActiveView({ name: 'rideGuide', request, previous: { ...routeView, directionIndex: request.directionIndex } })}
+        onGo={(request) => {
+          const view = { name: 'rideGuide' as const, request, previous: { ...routeView, directionIndex: request.directionIndex } };
+          // The same ride just reopens its page; any other trip under way is ended only once the rider says so.
+          const otherTrip = trip.status === 'recovery' || (trip.status === 'active' && trip.active != null && !isRideGuideTrip(request, trip.active.itinerary.id));
+          if (otherTrip) setGoOverTrip(view);
+          else setActiveView(view);
+        }}
         wholeRoute={wholeRoute}
         onRefreshLocation={() => void refreshLocation()}
         location={location}
@@ -1036,16 +1074,42 @@ export function HomeScreen() {
         alerts={routeAlertsFor(route)}
         route={route}
       />
+      <ConfirmDialog
+        body={`Your trip to ${trip.active?.destination.label ?? trip.recovery?.destination.label ?? 'your destination'} will end, and this ride will start.`}
+        confirmLabel="Start new trip"
+        destructive={true}
+        onCancel={() => setGoOverTrip(null)}
+        onConfirm={() => {
+          if (!goOverTrip) return;
+          setApprovedRide(goOverTrip.request);
+          setActiveView(goOverTrip);
+          setGoOverTrip(null);
+        }}
+        testID="go-new-trip-confirm"
+        title="Start a new trip?"
+        visible={goOverTrip !== null}
+      />
+      </>
     );
   }
 
   if (activeView.name === 'rideGuide') {
+    const { request } = activeView;
+    const rideTrip = trip.status === 'active' && trip.active && resumeGuidance && isRideGuideTrip(request, trip.active.itinerary.id)
+      ? { itinerary: trip.active.itinerary, guidance: resumeGuidance }
+      : null;
     return screen(
       <>
         <RideGuideView
+          live={rideTrip}
           onBack={closeCurrentView}
-          onStart={(itinerary) => void startRide(itinerary)}
-          request={activeView.request}
+          onEnd={() => {
+            void endTrip().then((ended) => {
+              if (ended) closeCurrentView();
+            });
+          }}
+          onStart={(itinerary) => void startRide(itinerary, request)}
+          request={request}
           riderLocation={riderLocation(location, locationStatus)}
         />
         {tripStartDialogs}
@@ -1098,7 +1162,16 @@ export function HomeScreen() {
   }
 
   if (activeView.name === 'admin') {
-    return screen(<AdminToolsView onBack={() => setActiveView({ name: 'profile' })} onPickMockLocation={() => setActiveView({ name: 'search', pickMockLocation: true })} />);
+    return screen(
+      <AdminToolsView
+        onBack={() => setActiveView({ name: 'profile' })}
+        onPickMockLocation={() => setActiveView({ name: 'search', pickMockLocation: true })}
+        onPreviewPopup={(popup) => {
+          setPopupPreview(popup);
+          showHome();
+        }}
+      />,
+    );
   }
 
   // Inside the sheet's scroller, so the browser moves them with the sheet, as on Route View.
@@ -1160,6 +1233,14 @@ export function HomeScreen() {
           simulatedLocation={locationMocked}
         />
         </View>
+        <MapControlButton
+          accessibilityLabel="Map routes"
+          icon="modes"
+          onPress={() => setLayersOpen(true)}
+          selected={lineChoice.groups.length > 0 || lineChoice.routes.length > 0}
+          style={[styles.layersButton, { top: layersButtonTop }, thumb.anchor(20)]}
+          testID="line-layers-button"
+        />
         {searchCenter ? (
           // Fixed at the center of the visible map (below the header, above the resting sheet):
           // the point Nearby is currently searching around.
@@ -1218,26 +1299,30 @@ export function HomeScreen() {
                 <ResumeTripCard
                   destination={trip.active?.destination.label ?? trip.recovery?.destination.label ?? 'destination'}
                   instruction={resumeGuidance?.currentAction ?? (trip.status === 'recovery' ? 'Exact route needs recovery' : undefined)}
-                  onResume={() => setActiveView({ name: 'enroute' })}
+                  onResume={() => setActiveView(tripView)}
                 />
               </View>
             ) : null}
             {/* A holiday reminder beside the line layers button, under the profile button. */}
-            <View pointerEvents="box-none" style={[styles.underSearch, { flexDirection: thumb.row }]}>
-              {systemNotice.notice ? <SystemNoticeBanner notice={systemNotice.notice} onDismiss={systemNotice.dismiss} style={styles.nudge} /> : <View pointerEvents="none" style={styles.nudge} />}
-              <Animated.View style={{ opacity: layersButtonOpacity, transform: [{ translateX: layersButtonTranslateX }] }} testID="line-layers-wrap">
-                <MapControlButton
-                  accessibilityLabel="Map routes"
-                  icon="modes"
-                  onPress={() => setLayersOpen(true)}
-                  selected={lineChoice.groups.length > 0 || lineChoice.routes.length > 0}
-                  style={thumb.edgeMargin(4)}
-                  testID="line-layers-button"
-                />
-              </Animated.View>
+            <View
+              onLayout={(event) => setLayersRow({ y: event.nativeEvent.layout.y, height: event.nativeEvent.layout.height })}
+              pointerEvents="box-none"
+              style={[styles.underSearch, { flexDirection: thumb.row }]}
+            >
+              <View pointerEvents="none" style={styles.nudge} />
+              {/* Room for the line layers button, which is drawn with the map (see homeMap). */}
+              <View pointerEvents="none" style={[styles.layersSlot, thumb.edgeMargin(4)]} />
             </View>
+            {/* One popup at a time: places first for a new account, then a holiday reminder, then the occasional ask. */}
+            {systemNotice.notice && !placesPrompt.show && !popupPreview ? <SystemNoticeBanner notice={systemNotice.notice} onDismiss={systemNotice.dismiss} /> : null}
+            {popupPreview === 'holiday' ? <SystemNoticeBanner notice={PREVIEW_NOTICE} onDismiss={() => setPopupPreview(null)} /> : null}
+            {popupPreview === 'arrival' ? <SupportCard onDismiss={() => setPopupPreview(null)} onDonate={() => setPopupPreview(null)} /> : null}
+            {popupPreview === 'places' ? <SetPlacesPrompt onDone={() => setPopupPreview(null)} onSet={() => setPopupPreview(null)} places={savedLocations} /> : null}
+            {popupPreview === 'support' ? (
+              <SupportPopup onDismiss={() => setPopupPreview(null)} onFeedback={() => setPopupPreview(null)} onNeverAsk={() => setPopupPreview(null)} onSupport={() => setPopupPreview(null)} />
+            ) : null}
             {/* The occasional ask to support Pathly or share feedback, once the rider has used it a while. */}
-            {supportPopup.visible ? (
+            {supportPopup.visible && !systemNotice.notice && !placesPrompt.show && !popupPreview ? (
               <SupportPopup
                 onDismiss={supportPopup.dismiss}
                 onFeedback={supportPopup.feedback}
@@ -1247,7 +1332,6 @@ export function HomeScreen() {
                   updatePreferences({ supportPrompts: false });
                 }}
                 onSupport={supportPopup.support}
-                style={styles.supportPopup}
               />
             ) : null}
           </View>
@@ -1317,7 +1401,8 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   // Centered under the 54 px profile button.
   underSearch: { alignItems: 'center', gap: 10, marginTop: 10 },
   nudge: { flex: 1 },
-  supportPopup: { marginTop: 10 },
+  layersSlot: { width: MAP_CONTROL_SIZE, height: MAP_CONTROL_SIZE },
+  layersButton: { position: 'absolute' },
   locationButton: {
     position: 'absolute',
     zIndex: 4,

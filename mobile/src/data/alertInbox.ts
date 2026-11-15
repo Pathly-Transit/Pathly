@@ -20,8 +20,16 @@ export function subscribeToAlertInbox(uid: string, onChange: (entries: AlertInbo
   return onSnapshot(
     query(collection(db, 'users', uid, 'alertInbox'), orderBy('sentAt', 'desc'), limit(MAX_INBOX_ENTRIES)),
     (snapshot) => onChange(snapshot.docs.map((entry) => {
-      const data = entry.data() as { title?: string; body?: string; sentAt?: Timestamp | null };
-      return { id: entry.id, title: data.title ?? 'Service alert', body: data.body ?? '', sentAt: data.sentAt?.toDate() ?? null };
+      const data = entry.data() as { title?: string; body?: string; sentAt?: Timestamp | null; agencyId?: string; routeId?: string };
+      return {
+        id: entry.id,
+        title: data.title ?? 'Service alert',
+        body: data.body ?? '',
+        sentAt: data.sentAt?.toDate() ?? null,
+        // The line it's about, so its badge takes the line's color. Left out, every badge went gray.
+        ...(data.agencyId ? { agencyId: data.agencyId } : {}),
+        ...(data.routeId ? { routeId: data.routeId } : {}),
+      };
     })),
     onError,
   );

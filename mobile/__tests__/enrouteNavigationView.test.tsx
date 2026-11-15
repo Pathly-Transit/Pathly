@@ -176,33 +176,28 @@ describe('EnrouteNavigationView guidance', () => {
 
   it('renders walking, waiting, riding, transferring, and arrived states from the normalized cursor', () => {
     const walking = renderNavigation(initialNavigationCursor(plan, baseTime)).screen;
-    expect(walking.getByText('WALKING')).toBeTruthy();
     expect(walking.getByTestId('enroute-current-action').props.children).toBe('Walk to 10 origin');
     walking.unmount();
 
     const waitingCursor = cursorAt(plan, (kind, label) => kind === 'board' && label === '10 origin');
     const waiting = renderNavigation(waitingCursor).screen;
-    expect(waiting.getByText('WAITING TO BOARD')).toBeTruthy();
     expect(waiting.getByTestId('enroute-current-action').props.children).toBe('Board 10 at 10 origin');
     expect(waiting.getByTestId('enroute-remaining-stops').props.children).toBe('2 stops remaining');
     waiting.unmount();
 
     const ridingCursor = cursorAt(plan, (_kind, label) => label === 'First Street');
     const riding = renderNavigation(ridingCursor).screen;
-    expect(riding.getByText('RIDING')).toBeTruthy();
     expect(riding.getByTestId('enroute-current-action').props.children).toBe('Ride 10 toward Downtown via 10');
     expect(riding.getByTestId('enroute-remaining-stops').props.children).toBe('1 stop remaining');
     riding.unmount();
 
     const transferCursor = cursorAt(plan, (kind, label) => kind === 'alight' && label === '10 terminal');
     const transferring = renderNavigation(transferCursor).screen;
-    expect(transferring.getByText('TRANSFERRING')).toBeTruthy();
     expect(transferring.getByTestId('enroute-current-action').props.children).toBe('Transfer toward 20 origin');
     transferring.unmount();
 
     const arrivedCursor = cursorAt(plan, (kind) => kind === 'destination');
     const arrived = renderNavigation(arrivedCursor).screen;
-    expect(arrived.getByText('ARRIVED')).toBeTruthy();
     expect(arrived.getByTestId('enroute-current-action').props.children).toBe('You’ve arrived at Demo destination');
     expect(arrived.queryByTestId('enroute-next-card')).toBeNull();
     expect(arrived.queryByTestId('enroute-next-action')).toBeNull();
@@ -232,26 +227,26 @@ describe('EnrouteNavigationView guidance', () => {
     const waitingCursor = cursorAt(plan, (kind, label) => kind === 'board' && label === '10 origin');
     const screen = renderNavigation(waitingCursor).screen;
 
-    expect(screen.getByTestId('enroute-departure-time').props.children).toBe(`Departs ${formatTripClock(at(5))} · in 5 min`);
-    expect(screen.getByTestId('enroute-eta').props.children.replaceAll('\u00a0', ' ')).toBe(`Arrive ${formatTripClock(at(45))} · 45 min`);
+    expect(screen.getByTestId('enroute-departure-time').props.children).toBe(`Departs ${formatTripClock(at(5))}, in 5 min`);
+    expect(screen.getByTestId('enroute-eta').props.children.replaceAll('\u00a0', ' ')).toBe(`Arrive ${formatTripClock(at(45))}, in 45 min`);
     expect(screen.getByTestId('enroute-guidance').props.accessibilityLabel)
       .toContain(`Selected departure ${formatTripClock(at(5))}, in 5 minutes.`);
 
     act(() => jest.advanceTimersByTime(60_000));
-    expect(screen.getByTestId('enroute-departure-time').props.children).toBe(`Departs ${formatTripClock(at(5))} · in 4 min`);
-    expect(screen.getByTestId('enroute-eta').props.children.replaceAll('\u00a0', ' ')).toBe(`Arrive ${formatTripClock(at(45))} · 44 min`);
+    expect(screen.getByTestId('enroute-departure-time').props.children).toBe(`Departs ${formatTripClock(at(5))}, in 4 min`);
+    expect(screen.getByTestId('enroute-eta').props.children.replaceAll('\u00a0', ' ')).toBe(`Arrive ${formatTripClock(at(45))}, in 44 min`);
   });
 
   it('shows meaningful distance and duration metadata while walking and transferring', () => {
     const walking = renderNavigation(initialNavigationCursor(plan, baseTime)).screen;
-    expect(walking.getByTestId('enroute-step-metadata').props.children).toBe('0.2 mi · 5 min');
+    expect(walking.getByTestId('enroute-step-metadata').props.children).toBe('0.2 mi, 5 min');
     expect(walking.getByTestId('enroute-guidance').props.accessibilityLabel)
       .toContain('Walking distance 0.2 miles. estimated walking time 5 minutes.');
     walking.unmount();
 
     const transferCursor = cursorAt(plan, (kind, label) => kind === 'alight' && label === '10 terminal');
     const transferring = renderNavigation(transferCursor).screen;
-    expect(transferring.getByTestId('enroute-step-metadata').props.children).toBe('0.2 mi · 4 min');
+    expect(transferring.getByTestId('enroute-step-metadata').props.children).toBe('0.2 mi, 4 min');
     expect(transferring.getByTestId('enroute-guidance').props.accessibilityLabel)
       .toContain('Transfer distance 0.2 miles. estimated transfer time 4 minutes.');
   });
@@ -272,17 +267,17 @@ describe('EnrouteNavigationView guidance', () => {
     const checkpointPlan = normalizeItinerary(trip);
     const cursor = cursorAt(checkpointPlan, (kind, label) => kind === 'board' && label === '10 origin');
     const future = renderNavigation(cursor, { checkpointPlan, trip }).screen;
-    expect(future.getByTestId('enroute-departure-time').props.children).toBe(`Departs ${formatTripClock(at(125))} · in 2hr 5m`);
+    expect(future.getByTestId('enroute-departure-time').props.children).toBe(`Departs ${formatTripClock(at(125))}, in 2hr 5m`);
     expect(future.getByTestId('enroute-guidance').props.accessibilityLabel).toContain('in 2 hours 5 minutes.');
     expect(future.getByTestId('enroute-guidance').props.accessibilityLabel).toContain('in 2 hours 45 minutes.');
-    expect(future.getByTestId('enroute-eta').props.children.replaceAll('\u00a0', ' ')).toBe(`Arrive ${formatTripClock(at(165))} · 2hr 45m`);
+    expect(future.getByTestId('enroute-eta').props.children.replaceAll('\u00a0', ' ')).toBe(`Arrive ${formatTripClock(at(165))}, in 2hr 45m`);
     future.unmount();
 
     jest.setSystemTime(baseTime + 250 * 60_000);
     const past = renderNavigation(cursor, { checkpointPlan, trip }).screen;
-    expect(past.getByTestId('enroute-departure-time').props.children).toBe(`Departs ${formatTripClock(at(125))} · 2hr 5m ago`);
+    expect(past.getByTestId('enroute-departure-time').props.children).toBe(`Departs ${formatTripClock(at(125))}, 2hr 5m ago`);
     expect(past.getByTestId('enroute-guidance').props.accessibilityLabel).toContain('2 hours 5 minutes ago.');
-    expect(past.getByTestId('enroute-eta').props.children.replaceAll('\u00a0', ' ')).toBe(`Arrive ${formatTripClock(at(165))} · 1hr 25m ago`);
+    expect(past.getByTestId('enroute-eta').props.children.replaceAll('\u00a0', ' ')).toBe(`Arrive ${formatTripClock(at(165))}, 1hr 25m ago`);
   });
 
   it('combines current, next, remaining-stop, and arrival guidance in one screen-reader label', () => {

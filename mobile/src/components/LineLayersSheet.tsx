@@ -54,7 +54,7 @@ export function LineLayersSheet({ choice, lines, onChange, onClose, visible }: L
           </View>
           <ScrollView bounces={false} style={styles.list}>
             {/* Every line an agency runs, switched on all at once. */}
-            <Text accessibilityRole="header" style={styles.sectionLabel} testID="line-layers-agency-heading">SHOW AGENCY LINES</Text>
+            <Text accessibilityRole="header" style={styles.sectionLabel} testID="line-layers-agency-heading">Show agency lines</Text>
             {LINE_LAYER_GROUPS.map((group) => {
               const on = choice.groups.includes(group.id);
               return (
@@ -66,7 +66,7 @@ export function LineLayersSheet({ choice, lines, onChange, onClose, visible }: L
               );
             })}
             {/* One line at a time: the rider's saved lines and the ones near them. */}
-            {offered.length > 0 ? <Text accessibilityRole="header" style={styles.sectionLabel} testID="line-layers-nearby-heading">SHOW NEARBY & SAVED LINES</Text> : null}
+            {offered.length > 0 ? <Text accessibilityRole="header" style={styles.sectionLabel} testID="line-layers-nearby-heading">Show nearby and saved lines</Text> : null}
             {offered.map((line) => {
               const key = lineLayerRouteKey(line);
               return (

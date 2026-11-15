@@ -44,16 +44,16 @@ describe('Favorites tab', () => {
 
   it('labels the sections when both kinds are saved', () => {
     const screen = renderFavorites(['s1'], [gym]);
-    expect(screen.getByText('ROUTES')).toBeTruthy();
-    expect(screen.getByText('PLACES')).toBeTruthy();
+    expect(screen.getByText('Routes')).toBeTruthy();
+    expect(screen.getByText('Places')).toBeTruthy();
   });
 
   it('drops the labels when only one kind is saved', () => {
     const routesOnly = renderFavorites(['s1'], []);
-    expect(routesOnly.queryByText('ROUTES')).toBeNull();
-    expect(routesOnly.queryByText('PLACES')).toBeNull();
+    expect(routesOnly.queryByText('Routes')).toBeNull();
+    expect(routesOnly.queryByText('Places')).toBeNull();
     const placesOnly = renderFavorites([], [gym]);
-    expect(placesOnly.queryByText('ROUTES')).toBeNull();
-    expect(placesOnly.queryByText('PLACES')).toBeNull();
+    expect(placesOnly.queryByText('Routes')).toBeNull();
+    expect(placesOnly.queryByText('Places')).toBeNull();
   });
 });

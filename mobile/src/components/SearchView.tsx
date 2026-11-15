@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useEffectEvent, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -301,6 +301,8 @@ export function SearchView({ initialQuery = '', near, onAddSavedPlace, onCancel,
   const [selectionFailed, setSelectionFailed] = useState(false);
   // The line being opened (its stops are looked up first), as `agencyId:routeId`.
   const [openingLine, setOpeningLine] = useState<string | null>(null);
+  // The query Enter was pressed on while its results were still loading.
+  const submittedQuery = useRef<string | null>(null);
   const { user } = useAuth();
   const uid = user?.isAnonymous ? undefined : user?.uid;
   // The account's search history (Firestore), newest first; it shows new picks right away, even offline.
@@ -365,6 +367,7 @@ export function SearchView({ initialQuery = '', near, onAddSavedPlace, onCancel,
   const changeQuery = (value: string) => {
     setQuery(value);
     setSelectionFailed(false);
+    submittedQuery.current = null;
   };
 
   const selectRecent = (place: SearchPlace) => {
@@ -385,6 +388,48 @@ export function SearchView({ initialQuery = '', near, onAddSavedPlace, onCancel,
     setResolvingId(suggestion.id);
     setSelectionFailed(false);
   };
+
+  const openLine = (line: IndexedLine) => {
+    const key = `${line.agencyId}:${line.routeId}`;
+    if (openingLine) return;
+    setOpeningLine(key);
+    endSession();
+    // Its stops nearest the rider are looked up as it opens; a failure leaves search as it was.
+    void onSelectLine?.(line).catch(() => undefined).finally(() => setOpeningLine(null));
+  };
+
+  // Enter picks the top result, as in Google Maps: whatever is listed first (a line, a saved or
+  // recent place, then suggestions). Null when nothing is listed yet.
+  const pickTop = (): (() => void) | null => {
+    const line = lines[0];
+    if (line) return () => openLine(line);
+    const saved = matchingSaved[0];
+    if (saved) return () => selectRecent(locationToPlace(saved.address));
+    const recent = matchingRecents[0];
+    if (recent) return () => selectRecent(recent);
+    const suggestion = status === 'success' ? results[0] : undefined;
+    if (suggestion) return () => selectSuggestion(suggestion);
+    return null;
+  };
+
+  const submit = () => {
+    if (!query.trim() || resolvingId || openingLine) return;
+    const pick = pickTop();
+    if (pick) pick();
+    // Still searching: pick the top result as soon as it comes.
+    else if (status === 'loading') submittedQuery.current = query;
+  };
+
+  const pickWhenReady = useEffectEvent(() => {
+    if (submittedQuery.current === null || submittedQuery.current !== query) return;
+    const pick = pickTop();
+    if (!pick && status === 'loading') return;
+    submittedQuery.current = null;
+    pick?.();
+  });
+  useEffect(() => {
+    pickWhenReady();
+  }, [lines, status, suggestions]);
 
   const renderSearchState = () => {
     if (status === 'unconfigured') {
@@ -456,6 +501,7 @@ export function SearchView({ initialQuery = '', near, onAddSavedPlace, onCancel,
                 autoCorrect={false}
                 autoFocus={true}
                 onChangeText={changeQuery}
+                onSubmitEditing={submit}
                 placeholder={placeholder}
                 placeholderTextColor={colors.mutedInk}
                 returnKeyType="search"
@@ -544,13 +590,7 @@ export function SearchView({ initialQuery = '', near, onAddSavedPlace, onCancel,
                   {(linesExpanded ? lines : lines.slice(0, VISIBLE_LINES)).map((line) => {
                     const key = `${line.agencyId}:${line.routeId}`;
                     return (
-                      <LineResultRow key={key} line={line} loading={openingLine === key} onPress={() => {
-                        if (openingLine) return;
-                        setOpeningLine(key);
-                        endSession();
-                        // Its stops nearest the rider are looked up as it opens; a failure leaves search as it was.
-                        void onSelectLine?.(line).catch(() => undefined).finally(() => setOpeningLine(null));
-                      }} />
+                      <LineResultRow key={key} line={line} loading={openingLine === key} onPress={() => openLine(line)} />
                     );
                   })}
                   {lines.length > VISIBLE_LINES ? (

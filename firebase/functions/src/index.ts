@@ -40,6 +40,7 @@ import { agencyIdsForStep } from './tripAgencies';
 import { createFareEstimator } from './tripFares';
 import {
   buildRoutesRequest,
+  MAX_WALK_ONLY_MINUTES,
   normalizeRoutesResponse,
   ROUTES_API_URL,
   ROUTES_FIELD_MASK,
@@ -49,7 +50,10 @@ import {
   type TripEndpoint,
   type TravelModeOption,
   type TripPreference,
+  walkOnlyItinerary,
+  walkOnlyLimitMeters,
 } from './tripPlanning';
+import { walkingPath } from './walkingGraph';
 import { addLiveStatus } from './tripLive';
 import { addTripStops, matchTripStops } from './tripStops';
 
@@ -757,6 +761,8 @@ export function requiredPlanTripRequest(data: unknown, nowMs = Date.now()): Plan
   if (typeof preference !== 'string' || !TRIP_PREFERENCES.includes(preference as TripPreference)) throw badTripRequest('preference is invalid');
   if (!Array.isArray(modes) || modes.length === 0 || modes.some((mode) => !TRIP_MODES.includes(mode as TravelModeOption))) throw badTripRequest('modes are invalid');
   if (request.lessWalking !== undefined && typeof request.lessWalking !== 'boolean') throw badTripRequest('lessWalking is invalid');
+  const walkOnly = request.walkOnlyMaxMinutes;
+  if (walkOnly !== undefined && (typeof walkOnly !== 'number' || !Number.isInteger(walkOnly) || walkOnly < 1 || walkOnly > MAX_WALK_ONLY_MINUTES)) throw badTripRequest('walkOnlyMaxMinutes is invalid');
   return {
     origin,
     destination,
@@ -764,6 +770,7 @@ export function requiredPlanTripRequest(data: unknown, nowMs = Date.now()): Plan
     preference: preference as TripPreference,
     modes: [...new Set(modes as TravelModeOption[])],
     ...(request.lessWalking === true ? { lessWalking: true } : {}),
+    ...(walkOnly !== undefined ? { walkOnlyMaxMinutes: walkOnly } : {}),
   };
 }
 
@@ -812,6 +819,8 @@ export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary
     await prepareAgencyStaticData('lirr');
     const estimateFare = createFareEstimator(loadAgencyStaticData('lirr').stopsById.values());
     const itineraries = normalizeRoutesResponse(body, requestTime, trip.destination.label, estimateFare);
+    const walkOnly = walkOnlyOption(trip, ends, nowMs, itineraries);
+    if (walkOnly) itineraries.push(walkOnly);
     // Stops in between come from Pathly's own timetables (Google gives only a count); any leg not
     // matched within the budget simply goes without.
     const agencies = new Set(itineraries.flatMap((itinerary) => itinerary.steps.flatMap((step) => (step.kind === 'transit' ? agencyIdsForStep(step) : []))));
@@ -821,6 +830,25 @@ export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary
     return { itineraries: await addLiveStatus(withStops, TRIP_LIVE_BUDGET_MS, nowMs, tripLiveLookup, undefined, tripAlertsLookup) };
   },
 );
+
+/**
+ * Walking the whole way, when the rider asked for it (walkOnlyMaxMinutes) and it's short enough,
+ * from Pathly's street graph rather than another billed Google call. The search stops at the
+ * farthest the cap allows, so a long trip costs no more than a short one. Ends come from the
+ * request's coordinates, else from where Google's route starts and ends.
+ */
+function walkOnlyOption(trip: PlanTripRequest, ends: ({ latitude?: number; longitude?: number } | undefined)[], nowMs: number, itineraries: Itinerary[]): Itinerary | null {
+  if (!trip.walkOnlyMaxMinutes || itineraries.some((itinerary) => itinerary.steps.every((step) => step.kind === 'walk'))) return null;
+  const point = (endpoint: TripEndpoint, end: { latitude?: number; longitude?: number } | undefined) =>
+    endpoint.lat !== undefined && endpoint.lng !== undefined ? { lat: endpoint.lat, lng: endpoint.lng }
+      : end?.latitude !== undefined && end.longitude !== undefined ? { lat: end.latitude, lng: end.longitude } : null;
+  const from = point(trip.origin, ends[0]);
+  const to = point(trip.destination, ends[1]);
+  if (!from || !to) return null;
+  const walk = walkingPath(from.lat, from.lng, to.lat, to.lng, walkOnlyLimitMeters(trip.walkOnlyMaxMinutes));
+  if (!walk) return null;
+  return walkOnlyItinerary({ meters: walk.meters, path: walk.path.map((spot) => ({ lat: spot.lat, lng: spot.lon })) }, trip.time, nowMs, trip.destination.label, trip.walkOnlyMaxMinutes);
+}
 
 type GeocodeRequest = { address: string };
 type GeocodeResult = { lat: number; lng: number; formattedAddress: string };

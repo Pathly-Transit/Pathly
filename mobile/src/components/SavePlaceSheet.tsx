@@ -118,7 +118,7 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
           </PressableScale>
         ) : null}
 
-        <Text style={styles.fieldLabel}>NAME</Text>
+        <Text style={styles.fieldLabel}>Name</Text>
         <View style={styles.quickNames}>
           {QUICK_NAMES.map((quick) => {
             const selected = label.toLowerCase() === quick.toLowerCase();
@@ -150,7 +150,7 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
           value={name}
         />
 
-        <Text style={styles.fieldLabel}>LIST <Text style={styles.optional}>(optional)</Text></Text>
+        <Text style={styles.fieldLabel}>List <Text style={styles.optional}>(optional)</Text></Text>
         <ScrollView contentContainerStyle={styles.groups} horizontal={true} keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false}>
           {[null, ...groups].map((entry) => {
             const selected = newGroup == null && (entry ? group != null && entry.name.toLowerCase() === group.toLowerCase() : group == null);
@@ -200,7 +200,7 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
           </Text>
         ) : null}
 
-        <Text style={styles.fieldLabel}>ICON</Text>
+        <Text style={styles.fieldLabel}>Icon</Text>
         <View accessibilityRole="radiogroup" style={styles.icons}>
           {SAVED_PLACE_ICONS.map((icon) => {
             const selected = icon === shownIcon;
@@ -220,7 +220,7 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
           })}
         </View>
 
-        <Text style={styles.fieldLabel}>COLOR</Text>
+        <Text style={styles.fieldLabel}>Color</Text>
         <View accessibilityRole="radiogroup" style={styles.icons}>
           {SAVED_PLACE_COLORS.map((color) => {
             const selected = color === shownColor;

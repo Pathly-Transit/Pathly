@@ -84,6 +84,8 @@ type PlanTripRequest = {
   modes: TripMode[];
   /** Settings -> Travel preferences with walking off: ask Google for less walking. */
   lessWalking?: boolean;
+  /** Also plan walking the whole way, when it takes at most this many minutes. */
+  walkOnlyMaxMinutes?: number;
 };
 
 export const CURRENT_LOCATION_LABEL = 'Current location';
@@ -322,6 +324,8 @@ export type PlanTripOptions = {
   modes: readonly TripMode[];
   /** Ask for trips with less walking (Settings -> Travel preferences, walking off). */
   lessWalking?: boolean;
+  /** Also offer walking the whole way up to this many minutes (Settings -> Travel preferences); null is off. */
+  walkOnlyMaxMinutes?: number | null;
   /** Skip the short-lived cache (the refresh control). */
   refresh?: boolean;
   now?: Date;
@@ -367,7 +371,7 @@ function asksLessWalking(preference: RoutePreference, lessWalking: boolean): boo
  * for two minutes in memory only, so moving between results and a trip doesn't plan (and bill)
  * again; they're never stored, since itineraries go stale and Google limits caching them.
  */
-export async function planTrip({ endpoints, location, time, preference, modes, lessWalking = false, refresh = false, now = new Date(appNow()) }: PlanTripOptions): Promise<TripPlanResult> {
+export async function planTrip({ endpoints, location, time, preference, modes, lessWalking = false, walkOnlyMaxMinutes = null, refresh = false, now = new Date(appNow()) }: PlanTripOptions): Promise<TripPlanResult> {
   const origin = endpointFor(endpoints.origin, endpoints.originPlace, location);
   if ('problem' in origin) return { ok: false, problem: origin.problem, field: 'origin' };
   const destination = endpointFor(endpoints.destination, endpoints.destinationPlace, location);
@@ -383,6 +387,8 @@ export async function planTrip({ endpoints, location, time, preference, modes, l
     preference: preference === 'transfers' ? 'transfers' : 'fastest',
     modes: [...modes],
     ...(asksLessWalking(preference, lessWalking) ? { lessWalking: true } : {}),
+    // Walking turned off in Settings means no walk-only trip either.
+    ...(walkOnlyMaxMinutes !== null && !lessWalking ? { walkOnlyMaxMinutes } : {}),
   };
   // Coordinate retention is based on when the device actually saved it, not the admin's mock
   // planning clock (which can deliberately be months in the past or future).
@@ -449,6 +455,8 @@ export async function planTripForResume(request: ResumePlanRequest, selection: T
       preference: request.preference,
       modes: [...request.modes],
       ...(request.lessWalking ? { lessWalking: true } : {}),
+      // A walk-only trip resumes too: it's planned again only to be matched exactly.
+      ...(request.lessWalking ? {} : { walkOnlyMaxMinutes: MAX_WALK_ONLY_MINUTES }),
     });
     const itinerary = exactResumeCandidate(data.itineraries, selection);
     return itinerary
@@ -496,6 +504,22 @@ export function requestModes(enabled: readonly TransitMode[]): TripMode[] {
   return known.length > 0 ? known : ['subway', 'bus', 'rail'];
 }
 
+/** The longest walk-only trip the backend plans. */
+export const MAX_WALK_ONLY_MINUTES = 90;
+
+/** A trip that walks the whole way, with no ride. */
+export function isWalkOnly(itinerary: Itinerary): boolean {
+  return itinerary.steps.every((step) => step.kind === 'walk');
+}
+
+/**
+ * Drops walking the whole way when it's over the rider's cap (or the cap is off); Google sometimes
+ * offers one of its own. Every trip with a ride is kept.
+ */
+export function filterWalkOnlyItineraries(itineraries: readonly Itinerary[], walkOnlyMaxMinutes: number | null): Itinerary[] {
+  return itineraries.filter((itinerary) => !isWalkOnly(itinerary) || (walkOnlyMaxMinutes !== null && itinerary.durationSeconds <= walkOnlyMaxMinutes * 60));
+}
+
 /** Total walking in a trip, in seconds. */
 export function walkingSeconds(itinerary: Itinerary): number {
   return itinerary.steps.reduce((total, step) => total + (step.kind === 'walk' ? step.durationSeconds : 0), 0);
@@ -507,8 +531,10 @@ export function walkingSeconds(itinerary: Itinerary): number {
  */
 export function filterItinerariesByWalk(itineraries: readonly Itinerary[], maxWalkMinutes: number | null): Itinerary[] | null {
   if (maxWalkMinutes === null) return null;
-  const within = itineraries.filter((itinerary) => walkingSeconds(itinerary) <= maxWalkMinutes * 60);
-  return within.length > 0 ? within : null;
+  // Walking the whole way has its own cap (filterWalkOnlyItineraries), so this limit is for trips with a ride.
+  const withRide = itineraries.filter((itinerary) => !isWalkOnly(itinerary));
+  const within = withRide.filter((itinerary) => walkingSeconds(itinerary) <= maxWalkMinutes * 60);
+  return within.length > 0 ? [...within, ...itineraries.filter(isWalkOnly)] : null;
 }
 
 /** Itineraries that use only enabled modes; Google treats excluded modes as a preference only. */

@@ -43,6 +43,18 @@ describe('picking a departure for a planned trip', () => {
     expect(retimeItinerary(trip, new Map(), now)).toBe(trip);
   });
 
+  it('moves to the next departure the rider can still make once the planned one is out of reach', () => {
+    // At 6 the 5-minute walk reaches the stop at 11: the 10 is gone, so the trip takes the 20.
+    const late = retimeItinerary(trip, new Map(), Date.parse(at(6)));
+    const [first, second] = transit(late);
+    expect(first!.from.time).toBe(at(20));
+    expect(late.departureTime).toBe(at(15));
+    // The connection moves with it.
+    expect(second!.from.time).toBe(at(35));
+    // A picked departure that's now out of reach moves on too.
+    expect(transit(retimeItinerary(trip, new Map([[0, at(20)]]), Date.parse(at(16))))[0]!.from.time).toBe(at(30));
+  });
+
   it('re-times the picked leg and moves a now-missed connection to the next one it can make', () => {
     const retimed = retimeItinerary(trip, new Map([[0, at(20)]]), now);
     const [first, second] = transit(retimed);

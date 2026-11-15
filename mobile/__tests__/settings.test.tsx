@@ -10,7 +10,7 @@ import mockSafeAreaContext from 'react-native-safe-area-context/jest/mock';
 import { AuthProvider } from '../src/auth/AuthContext';
 import { ProfileView } from '../src/components/ProfileView';
 import type { Itinerary } from '../src/data/tripPlanning';
-import { filterItinerariesByWalk } from '../src/data/tripPlanning';
+import { filterItinerariesByWalk, filterWalkOnlyItineraries } from '../src/data/tripPlanning';
 import { resetLineIndexForTests } from '../src/data/lineIndex';
 import { recordSearch, saveLocation } from '../src/data/userData';
 import { DEFAULT_PREFERENCES, parsePreferences, preferencesKey, UserPreferencesProvider } from '../src/data/userPreferences';
@@ -154,7 +154,7 @@ describe('Settings', () => {
       });
       const screen = renderSettings();
       await openPage(screen, 'notifications');
-      expect(screen.getByText('FAVORITE LINES')).toBeTruthy();
+      expect(screen.getByText('Favorite lines')).toBeTruthy();
       expect(screen.queryByText('SAVED LINES')).toBeNull();
       const row = await screen.findByTestId('favorite-line-suffolk:51');
       expect(row).toHaveTextContent(/Patchogue RR to Port Jefferson/);
@@ -245,11 +245,18 @@ describe('Settings', () => {
     });
 
     it('hides trips over the walking limit unless none fit', () => {
-      const trip = (id: string, walkSeconds: number) => ({ id, steps: [{ kind: 'walk', durationSeconds: walkSeconds, distanceMeters: 0, toName: '', path: [] }] }) as unknown as Itinerary;
+      const walk = (walkSeconds: number) => ({ kind: 'walk', durationSeconds: walkSeconds, distanceMeters: 0, toName: '', path: [] });
+      const trip = (id: string, walkSeconds: number) => ({ id, steps: [walk(walkSeconds), { kind: 'transit', mode: 'bus' }] }) as unknown as Itinerary;
       const trips = [trip('short', 300), trip('long', 1500)];
       expect(filterItinerariesByWalk(trips, null)).toBeNull();
       expect(filterItinerariesByWalk(trips, 10)?.map((item) => item.id)).toEqual(['short']);
       expect(filterItinerariesByWalk(trips, 2)).toBeNull();
+      // Walking the whole way has its own cap, so this limit keeps it.
+      const walkOnly = { id: 'walk', durationSeconds: 1500, steps: [walk(1500)] } as unknown as Itinerary;
+      expect(filterItinerariesByWalk([...trips, walkOnly], 10)?.map((item) => item.id)).toEqual(['short', 'walk']);
+      expect(filterWalkOnlyItineraries([...trips, walkOnly], 40).map((item) => item.id)).toEqual(['short', 'long', 'walk']);
+      expect(filterWalkOnlyItineraries([...trips, walkOnly], 20).map((item) => item.id)).toEqual(['short', 'long']);
+      expect(filterWalkOnlyItineraries([...trips, walkOnly], null).map((item) => item.id)).toEqual(['short', 'long']);
     });
 
     it('reads only well-formed saved preferences', () => {

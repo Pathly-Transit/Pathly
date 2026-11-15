@@ -65,7 +65,7 @@ export function upcomingHolidays(now: Date): OutlookNotice[] {
       return {
         kind: 'outlook',
         icon: 'calendar',
-        label: `${name} · ${when}`,
+        label: `${name}, ${when}`,
         // Beside other pills: the name alone says what it is; the date is in its sheet.
         shortLabel: name,
         dateKey: new Date(day).toISOString().slice(0, 10).replaceAll('-', ''),

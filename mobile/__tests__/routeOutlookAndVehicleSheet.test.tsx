@@ -16,7 +16,7 @@ const mockOutlook = jest.fn();
 jest.mock('../src/data/serviceOutlook', () => ({ useServiceOutlook: () => mockOutlook() }));
 
 const liveRoute: RouteDetail = { ...routeById.s1, alert: 'No delays reported on this route.' };
-const thanksgiving = { kind: 'outlook', icon: 'calendar', label: 'Thanksgiving · Nov 26', shortLabel: 'Thanksgiving', warning: false, title: 'Thanksgiving is Thursday, Nov 26', detail: 'Many lines run a holiday schedule.' };
+const thanksgiving = { kind: 'outlook', icon: 'calendar', label: 'Thanksgiving, Nov 26', shortLabel: 'Thanksgiving', warning: false, title: 'Thanksgiving is Thursday, Nov 26', detail: 'Many lines run a holiday schedule.' };
 
 describe('Route View outlook pill', () => {
   const renderRoute = (route: RouteDetail) => render(
@@ -36,7 +36,7 @@ describe('Route View outlook pill', () => {
     mockOutlook.mockReturnValue([thanksgiving]);
     const screen = renderRoute(liveRoute);
     const pill = screen.getByTestId('service-outlook');
-    expect(within(pill).getByText('Thanksgiving · Nov 26')).toBeTruthy();
+    expect(within(pill).getByText('Thanksgiving, Nov 26')).toBeTruthy();
     fireEvent.press(pill);
     const sheet = within(screen.getByTestId('service-alerts-list'));
     expect(sheet.getByText('Coming up')).toBeTruthy();
@@ -45,7 +45,7 @@ describe('Route View outlook pill', () => {
   });
 
   it('sits beside a delay in one swipeable row by its name, each pill opening its own details', async () => {
-    mockOutlook.mockReturnValue([thanksgiving, { ...thanksgiving, icon: 'snow', label: 'Snow · Nov 27', shortLabel: 'Snow', title: 'Snow is expected Friday' }]);
+    mockOutlook.mockReturnValue([thanksgiving, { ...thanksgiving, icon: 'snow', label: 'Snow, Nov 27', shortLabel: 'Snow', title: 'Snow is expected Friday' }]);
     const screen = renderRoute({ ...liveRoute, predictions: [{ minutes: 4, live: true, delayMinutes: 6 }] });
     const row = screen.getByTestId('route-notices');
     expect(row.props.horizontal).toBe(true);
@@ -53,7 +53,7 @@ describe('Route View outlook pill', () => {
     expect(within(row).getByTestId('service-outlook')).toHaveTextContent(/Thanksgiving$/);
     expect(within(row).getByTestId('service-outlook-1')).toHaveTextContent(/Snow$/);
     expect(within(row).queryByText(/Nov 26/)).toBeNull();
-    expect(screen.getByTestId('service-outlook').props.accessibilityLabel).toBe('Thanksgiving · Nov 26');
+    expect(screen.getByTestId('service-outlook').props.accessibilityLabel).toBe('Thanksgiving, Nov 26');
     fireEvent.press(screen.getByTestId('service-outlook-1'));
     let sheet = within(screen.getByTestId('service-alerts-list'));
     expect(sheet.getByText('Snow is expected Friday')).toBeTruthy();

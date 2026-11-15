@@ -113,6 +113,12 @@ test('validates the request shape and the plannable time window', () => {
   bad({ lessWalking: 'yes' });
   assert.equal(requiredPlanTripRequest({ ...validData, lessWalking: true }, now).lessWalking, true);
   assert.equal('lessWalking' in requiredPlanTripRequest({ ...validData, lessWalking: false }, now), false);
+  bad({ walkOnlyMaxMinutes: 0 });
+  bad({ walkOnlyMaxMinutes: 91 });
+  bad({ walkOnlyMaxMinutes: 12.5 });
+  bad({ walkOnlyMaxMinutes: '40' });
+  assert.equal(requiredPlanTripRequest({ ...validData, walkOnlyMaxMinutes: 40 }, now).walkOnlyMaxMinutes, 40);
+  assert.equal('walkOnlyMaxMinutes' in requiredPlanTripRequest(validData, now), false);
 });
 
 test('the backend service area matches the app\'s', () => {

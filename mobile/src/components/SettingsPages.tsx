@@ -21,7 +21,7 @@ import { subscribeToAlertInbox, type AlertInboxEntry } from '../data/alertInbox'
 import { describeRouteAlerts, removeSavedRoute, ROUTE_ALERT_OPTIONS, saveRoute, savedRouteFromLine, setRouteAlerts, setRouteAlertsPaused, subscribeToSavedRoutes, type SavedRoute } from '../data/savedRoutes';
 import type { FareType } from '../data/tripPlanning';
 import { clearSearchHistory } from '../data/userData';
-import { ALL_TRANSIT_MODES, useUserPreferences, WALK_LIMIT_OPTIONS } from '../data/userPreferences';
+import { ALL_TRANSIT_MODES, useUserPreferences, WALK_LIMIT_OPTIONS, WALK_ONLY_OPTIONS } from '../data/userPreferences';
 import { registerForRouteAlerts } from '../lib/notifications';
 import { useAppSettings, useTheme, useThemedStyles, type TextSize } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
@@ -129,7 +129,7 @@ export function AccountSettings({ onEditAvatar, onFeedback }: PageProps & { onEd
         )}
         <SettingRow detail={user?.email ?? 'Not signed in'} label="Email" testID="account-email" />
       </Card>
-      <Text style={profile.sectionLabel}>SECURITY</Text>
+      <Text style={profile.sectionLabel}>Security</Text>
       <Card>
         <SettingRow detail={resetSentTo ? `Reset link sent to ${resetSentTo}` : undefined} label="Reset password" onPress={() => void resetPassword()} testID="account-password" />
       </Card>
@@ -154,11 +154,17 @@ const INBOX_AGENCY_NAMES: Record<string, string> = {
 
 /**
  * The line an inbox alert is about, as a route card badges it: from the rider's saved line when
- * it's still saved (its own color), else named from the alert's title ("S93 service alert").
+ * it's still saved (its own color), else from the line list on the device (its color there), else
+ * named from the alert's title ("S93 service alert") in `fallbackColor`.
  */
-export function inboxLineBadge(entry: AlertInboxEntry, savedRoutes: readonly SavedRoute[], fallbackColor: string): { agency: string; color: string; shortName: string } | null {
-  const saved = entry.agencyId && entry.routeId ? savedRoutes.find((route) => route.agencyId === entry.agencyId && route.routeId === entry.routeId) : undefined;
-  if (saved) return { agency: saved.agencyName, color: saved.color, shortName: badgeLabel({ agency: saved.agencyName, shortName: saved.shortName || saved.routeName }) };
+export function inboxLineBadge(entry: AlertInboxEntry, savedRoutes: readonly SavedRoute[], fallbackColor: string, lineIndex: readonly IndexedLine[] | null = null): { agency: string; color: string; shortName: string } | null {
+  const sameLine = (route: { agencyId: string; routeId: string }) => route.agencyId === entry.agencyId && route.routeId === entry.routeId;
+  const saved = entry.agencyId && entry.routeId ? savedRoutes.find(sameLine) : undefined;
+  const savedName = saved ? saved.shortName || saved.routeName : '';
+  if (saved && savedName) return { agency: saved.agencyName, color: saved.color, shortName: badgeLabel({ agency: saved.agencyName, shortName: savedName }) };
+  const indexed = entry.agencyId && entry.routeId ? lineIndex?.find(sameLine) : undefined;
+  const indexedName = indexed ? indexed.shortName || indexed.routeName : '';
+  if (indexed?.color && indexedName) return { agency: indexed.agencyDisplayName, color: indexed.color, shortName: badgeLabel({ agency: indexed.agencyDisplayName, shortName: indexedName }) };
   const named = entry.title.replace(/\s+service alert$/i, '').trim();
   if (!named || named === entry.title) return null;
   const agency = (entry.agencyId ? INBOX_AGENCY_NAMES[entry.agencyId] : undefined) ?? 'MTA Bus';
@@ -174,6 +180,8 @@ export function InboxSettings() {
   const [entries, setEntries] = useState<readonly AlertInboxEntry[] | null>(null);
   const [savedRoutes, setSavedRoutes] = useState<readonly SavedRoute[]>([]);
   const [failed, setFailed] = useState(false);
+  // Colors the badges of lines the rider has since unsaved.
+  const lineIndex = useLineIndex(entries != null && entries.length > 0);
   useEffect(() => {
     if (!uid) return undefined;
     return subscribeToAlertInbox(uid, setEntries, () => setFailed(true));
@@ -188,7 +196,7 @@ export function InboxSettings() {
   return (
     <Card>
       {entries.map((entry) => {
-        const line = inboxLineBadge(entry, savedRoutes, colors.mutedInk);
+        const line = inboxLineBadge(entry, savedRoutes, colors.mutedInk, lineIndex);
         return (
           <View accessible={true} key={entry.id} style={profile.settingRow} testID={`inbox-${entry.id}`}>
             {line ? <RouteBadge agency={line.agency} color={line.color} mode={transitModeForAgency(line.agency)} shortName={line.shortName} size="small" testID={`inbox-${entry.id}-badge`} /> : null}
@@ -274,7 +282,7 @@ export function NotificationSettings({ onFeedback }: PageProps) {
         {/* The home screen's occasional ask (nudgePrompt.ts); its "Don't ask again" turns this off. */}
         <ToggleRow label="Feedback & support popups" onChange={(value) => { updatePreferences({ supportPrompts: value }); onFeedback(value ? 'Feedback & support popups on' : 'Feedback & support popups off'); }} testID="toggle-support-prompts" value={preferences.supportPrompts} />
       </Card>
-      <Text style={profile.sectionLabel}>DURING A TRIP</Text>
+      <Text style={profile.sectionLabel}>During a trip</Text>
       <Card>
         {/* A notification needs notifications allowed; voice and vibration don't. */}
         {notifications.enabled ? (
@@ -283,7 +291,7 @@ export function NotificationSettings({ onFeedback }: PageProps) {
         <ToggleRow label="Spoken directions" onChange={(value) => { updatePreferences({ tripGuidance: { voice: value } }); onFeedback(value ? 'Spoken directions on' : 'Spoken directions off'); }} testID="toggle-trip-voice" value={preferences.tripGuidance.voice} />
         <ToggleRow label="Vibrate at each step" onChange={(value) => { updatePreferences({ tripGuidance: { haptics: value } }); onFeedback(value ? 'Trip vibrations on' : 'Trip vibrations off'); }} testID="toggle-trip-haptics" value={preferences.tripGuidance.haptics} />
       </Card>
-      <Text style={profile.sectionLabel}>FAVORITE LINES</Text>
+      <Text style={profile.sectionLabel}>Favorite lines</Text>
       <Card>
         {savedRoutes.length === 0 ? (
           <SettingRow detail="Tap the star on a line, or add one below, to get its service alerts." label="No Favorite Lines yet" testID="notifications-no-saved-lines" />
@@ -342,7 +350,7 @@ function FavoriteLineRow({ onRemove, onSelect, route }: { onRemove: () => void; 
         <RouteBadge agency={route.agencyName} color={route.color} mode={transitModeForAgency(route.agencyName)} shortName={label} size="small" />
         <View style={page.lineCopy}>
           <Text numberOfLines={1} style={page.lineTitle}>{route.routeName || label}</Text>
-          <Text numberOfLines={1} style={page.lineSubtitle}>{route.favorite ? route.agencyName : `${route.agencyName} · alerts only, not starred`}</Text>
+          <Text numberOfLines={1} style={page.lineSubtitle}>{route.favorite ? route.agencyName : `${route.agencyName}, alerts only (not starred)`}</Text>
         </View>
         <PressableScale
           accessibilityLabel={`Remove ${label} from Favorite Lines`}
@@ -356,7 +364,7 @@ function FavoriteLineRow({ onRemove, onSelect, route }: { onRemove: () => void; 
           <Text style={page.removeText}>Remove</Text>
         </PressableScale>
       </View>
-      <Text style={page.alertsLabel}>ALERTS</Text>
+      <Text style={page.alertsLabel}>Alerts</Text>
       <View style={profile.choices}>
         {ROUTE_ALERT_OPTIONS.map(({ label: option }) => (
           <Pressable
@@ -519,11 +527,16 @@ export function walkLimitLabel(minutes: number | null) {
   return minutes === null ? 'No limit' : `${minutes} min`;
 }
 
+export function walkOnlyLabel(minutes: number | null) {
+  return minutes === null ? 'Off' : `Up to ${minutes} min`;
+}
+
 export function TravelSettings({ onFeedback }: PageProps) {
   const { page, profile } = useStyles();
   const { preferences, updatePreferences } = useUserPreferences();
   const { travel } = preferences;
   const [pickingLimit, setPickingLimit] = useState(false);
+  const [pickingWalkOnly, setPickingWalkOnly] = useState(false);
   const toggleMode = (mode: TransitMode) => {
     const enabled = travel.modes.includes(mode);
     if (enabled && travel.modes.length === 1) {
@@ -577,9 +590,34 @@ export function TravelSettings({ onFeedback }: PageProps) {
             })}
           </View>
         ) : null}
+        <SettingRow detail={travel.allowWalking ? walkOnlyLabel(travel.walkOnlyMaxMinutes) : 'Off while walking is off'} label="Walk the whole way" onPress={travel.allowWalking ? () => setPickingWalkOnly((open) => !open) : undefined} testID="walk-only-limit" />
+        {pickingWalkOnly && travel.allowWalking ? (
+          <View style={[profile.choices, page.limitChoices]} testID="walk-only-picker">
+            {WALK_ONLY_OPTIONS.map((minutes) => {
+              const selected = travel.walkOnlyMaxMinutes === minutes;
+              const label = minutes === null ? 'Off' : `${minutes} min`;
+              return (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  key={label}
+                  onPress={() => {
+                    updatePreferences({ travel: { walkOnlyMaxMinutes: minutes } });
+                    setPickingWalkOnly(false);
+                    onFeedback(minutes === null ? 'Walking the whole way turned off' : `Walking the whole way shown up to ${label}`);
+                  }}
+                  style={[profile.choice, selected && profile.choiceSelected]}
+                  testID={`walk-only-${minutes ?? 'off'}`}
+                >
+                  <Text style={[profile.choiceText, selected && profile.choiceTextSelected]}>{label}</Text>
+                </PressableScale>
+              );
+            })}
+          </View>
+        ) : null}
       </Card>
-      <Text style={profile.note}>Trips that walk longer than your limit are hidden when another trip fits.</Text>
-      <Text style={profile.sectionLabel}>FARES</Text>
+      <Text style={profile.note}>Trips that walk longer than your limit are hidden when another trip fits.{" Walking the whole way shows with your trips when it's within its own limit."}</Text>
+      <Text style={profile.sectionLabel}>Fares</Text>
       <Card>
         <ChoiceRow
           label="Fare type"
@@ -618,9 +656,9 @@ function useLocationPermission() {
 }
 
 const permissionDetail: Record<PermissionState['status'], string> = {
-  granted: 'Allowed · centers maps and plans trips from where you are',
-  denied: 'Not allowed · tap to change it in settings',
-  undetermined: 'Not asked yet · tap to allow',
+  granted: 'Allowed. Maps and trips start from where you are',
+  denied: 'Not allowed. Tap to change it in settings',
+  undetermined: 'Not asked yet. Tap to allow',
   unknown: 'Unavailable on this device',
 };
 

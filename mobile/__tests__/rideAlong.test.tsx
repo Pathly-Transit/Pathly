@@ -16,7 +16,7 @@ jest.mock('../src/data/transitLive', () => ({
 
 const mockAuthUser = (globalThis as unknown as { __mockAuthUser: { email: string } }).__mockAuthUser;
 const SOURCE = { agencyId: 'nice', routeId: 'n6' } as LiveSource;
-const RIDE = { source: SOURCE, tripId: 'bus-1', label: 'Riding along · n6 bus' };
+const RIDE = { source: SOURCE, tripId: 'bus-1', label: 'Riding along on the n6 bus' };
 const vehicle = (lat: number) => ({ tripId: 'bus-1', directionId: 0, lat, lon: -73.6, updatedAt: 1 });
 
 let debug: ReturnType<typeof useDebug>;

@@ -352,6 +352,7 @@ jest.mock('react-native-maps', () => {
   const MockPolygon = (props) => <View {...props} />;
   const MockMarker = (props) => <View {...props} />;
   const MockPolyline = (props) => <View {...props} />;
+  const MockCallout = (props) => <View {...props} />;
   return {
     __esModule: true,
     default: MockMapView,
@@ -363,6 +364,7 @@ jest.mock('react-native-maps', () => {
     Polygon: MockPolygon,
     Marker: MockMarker,
     Polyline: MockPolyline,
+    Callout: MockCallout,
   };
 });
 

@@ -107,12 +107,30 @@ export function splitPathAtStop(path: readonly LatLon[], stops: readonly LatLon[
 // out would let a bend in the line curl into it.
 /** How far either side of the arrow's spot (px) the line must run straight: the arrow's length plus room. */
 const ARROW_HALF_SPAN_PX = 24;
+/** The arrow's drawing (DirectionArrow.tsx): its shaft runs this far (px) beside the line... */
+export const ARROW_SIDE_OFFSET_PX = 22;
+/** ...this long either side of its middle (px)... */
+export const ARROW_HALF_LENGTH_PX = 15;
+/** ...with a head this wide either side of the shaft (px). */
+export const ARROW_HEAD_PX = 6;
+/**
+ * How close (px) any part of the drawn line may come to the arrow's shaft: the head, half the
+ * 8 px line, and a little air. Checked against the whole line, so a curve, a loop, or the line
+ * coming back the other way never runs through the arrow.
+ */
+const ARROW_CLEARANCE_PX = ARROW_HEAD_PX + 4 + 4;
 /** The most the line may stray (px) toward the arrow across that span and still clear it. */
 const ARROW_MAX_STRAY_PX = 6;
 /** Where to look along the line ahead (px from the rider's stop), and how far apart to try. */
 const ARROW_FROM_PX = 30;
 const ARROW_TO_PX = 160;
 const ARROW_STEP_PX = 6;
+
+/**
+ * How far (zoom levels) the map may zoom out from where the arrow was placed before it's hidden.
+ * The arrow is placed for that most zoomed-out view, where the line's bends come closest to it.
+ */
+export const ARROW_ZOOM_SLACK = 0.5;
 
 /** Meters per screen pixel at a web-map zoom level and latitude. */
 export function metersPerPixel(zoom: number, lat: number): number {
@@ -125,46 +143,139 @@ export function metersPerPixel(zoom: number, lat: number): number {
  * spots near it. Drawn beside a bend, the line would curl into the arrow, so null when no stretch is
  * straight enough at this zoom (and when there's no line ahead to point along).
  */
-export function directionArrowAt(ahead: readonly LatLon[], metersPerPx = 3): { point: LatLon; bearing: number } | null {
-  if (ahead.length < 2) return null;
+export function directionArrowAt(ahead: readonly LatLon[], metersPerPx = 3, alsoDrawn: readonly (readonly LatLon[])[] = []): DirectionArrowSpot | null {
+  const line = measureLine(ahead);
   const halfSpan = ARROW_HALF_SPAN_PX * metersPerPx;
-  const fromMeters = ARROW_FROM_PX * metersPerPx;
-  let total = 0;
-  for (let index = 1; index < ahead.length; index += 1) total += distanceMeters(ahead[index - 1]!, ahead[index]!);
+  // A line too short on screen for the arrow beside it: nothing to point along.
+  if (!line || line.total < 2 * halfSpan) return null;
+  const first = Math.min(ARROW_FROM_PX * metersPerPx, line.total / 2);
+  const last = Math.min(ARROW_TO_PX * metersPerPx, line.total - halfSpan);
+  return straightestSpot(line, metersPerPx, Math.max(first, halfSpan), last, first, [ahead, ...alsoDrawn]);
+}
+
+/** Where the arrow goes: its spot on the line, the line's bearing there, and which side of the line it's drawn on. */
+export type DirectionArrowSpot = { point: LatLon; bearing: number; side: 'right' | 'left' };
+
+/**
+ * Where to draw the direction arrow on a whole line, with no rider's stop to start from (a line
+ * looked up by name): the straightest stretch near the middle of the line, so it shows which way
+ * this direction runs wherever the rider is. Null when the line is too short or bendy at this zoom.
+ */
+export function middleDirectionArrowAt(points: readonly LatLon[], metersPerPx = 3): DirectionArrowSpot | null {
+  const line = measureLine(points);
+  const halfSpan = ARROW_HALF_SPAN_PX * metersPerPx;
+  if (!line || line.total < 2 * halfSpan) return null;
+  return straightestSpot(line, metersPerPx, halfSpan, line.total - halfSpan, line.total / 2, [points]);
+}
+
+type MeasuredLine = { total: number; along: (meters: number) => LatLon };
+
+/** A line with the distance along it to each point, for finding the spot any distance along it. */
+function measureLine(points: readonly LatLon[]): MeasuredLine | null {
+  if (points.length < 2) return null;
+  const at: number[] = [0];
+  for (let index = 1; index < points.length; index += 1) at.push(at[index - 1]! + distanceMeters(points[index - 1]!, points[index]!));
+  const total = at[at.length - 1]!;
   if (total < 1) return null;
   const along = (meters: number): LatLon => {
-    let left = Math.max(0, Math.min(meters, total));
-    for (let index = 0; index < ahead.length - 1; index += 1) {
-      const a = ahead[index]!;
-      const b = ahead[index + 1]!;
-      const length = distanceMeters(a, b);
-      if (length >= left && length > 0) {
-        const t = left / length;
-        return { lat: a.lat + t * (b.lat - a.lat), lon: a.lon + t * (b.lon - a.lon) };
-      }
-      left -= length;
+    const target = Math.max(0, Math.min(meters, total));
+    // The last point at or before `target` (lines can have thousands of points).
+    let low = 0;
+    let high = at.length - 1;
+    while (high - low > 1) {
+      const mid = (low + high) >> 1;
+      if (at[mid]! <= target) low = mid;
+      else high = mid;
     }
-    return ahead[ahead.length - 1]!;
+    const a = points[low]!;
+    const b = points[high]!;
+    const length = at[high]! - at[low]!;
+    const t = length > 0 ? (target - at[low]!) / length : 0;
+    return { lat: a.lat + t * (b.lat - a.lat), lon: a.lon + t * (b.lon - a.lon) };
   };
-  // A line too short on screen for the arrow beside it: nothing to point along.
-  if (total < 2 * halfSpan) return null;
-  const first = Math.min(fromMeters, total / 2);
-  const last = Math.min(ARROW_TO_PX * metersPerPx, total - halfSpan);
-  let best: { point: LatLon; bearing: number; cost: number } | null = null;
-  for (let at = Math.max(first, halfSpan); at <= last; at += ARROW_STEP_PX * metersPerPx) {
-    const start = along(at - halfSpan);
-    const end = along(at + halfSpan);
+  return { total, along };
+}
+
+/**
+ * The straightest spot for the arrow between `from` and `to` meters along, preferring ones near
+ * `prefer`, where every line in `drawn` stays clear of it (on the right of the line, else the left).
+ */
+function straightestSpot(line: MeasuredLine, metersPerPx: number, from: number, to: number, prefer: number, drawn: readonly (readonly LatLon[])[]): DirectionArrowSpot | null {
+  const halfSpan = ARROW_HALF_SPAN_PX * metersPerPx;
+  const candidates: { point: LatLon; bearing: number; cost: number }[] = [];
+  for (let at = from; at <= to; at += ARROW_STEP_PX * metersPerPx) {
+    const start = line.along(at - halfSpan);
+    const end = line.along(at + halfSpan);
     // How far the line strays from the straight chord across the arrow's span.
     let stray = 0;
     for (let step = -4; step <= 4; step += 1) {
-      stray = Math.max(stray, distanceToChordMeters(along(at + (step / 4) * halfSpan), start, end));
+      stray = Math.max(stray, distanceToChordMeters(line.along(at + (step / 4) * halfSpan), start, end));
     }
     if (stray > ARROW_MAX_STRAY_PX * metersPerPx) continue;
-    // A little stray is worth a spot nearer the stop.
-    const cost = stray / metersPerPx + (at - first) / metersPerPx * 0.02;
-    if (!best || cost < best.cost) best = { point: along(at), bearing: bearingDegrees(start, end), cost };
+    // A little stray is worth a spot nearer the preferred one.
+    const cost = stray / metersPerPx + (Math.abs(at - prefer) / metersPerPx) * 0.02;
+    candidates.push({ point: line.along(at), bearing: bearingDegrees(start, end), cost });
   }
-  return best ? { point: best.point, bearing: best.bearing } : null;
+  // Best first; the (costlier) clearance check runs only until one passes.
+  candidates.sort((a, b) => a.cost - b.cost);
+  for (const candidate of candidates) {
+    for (const side of ['right', 'left'] as const) {
+      if (arrowIsClear(candidate.point, candidate.bearing, side, metersPerPx, drawn)) return { point: candidate.point, bearing: candidate.bearing, side };
+    }
+  }
+  return null;
+}
+
+/** Whether the arrow drawn at `point` (turned to `bearing`, on `side`) is at least ARROW_CLEARANCE_PX from every drawn line. */
+function arrowIsClear(point: LatLon, bearing: number, side: 'right' | 'left', metersPerPx: number, drawn: readonly (readonly LatLon[])[]): boolean {
+  // Flat meters around the arrow's spot: x east, y north.
+  const xScale = METERS_PER_DEGREE * Math.cos(point.lat * (Math.PI / 180));
+  const toXY = (p: LatLon): [number, number] => [(p.lon - point.lon) * xScale, (p.lat - point.lat) * METERS_PER_DEGREE];
+  const radians = (bearing * Math.PI) / 180;
+  const along: [number, number] = [Math.sin(radians), Math.cos(radians)];
+  // Facing the way the line runs, right is clockwise.
+  const sign = side === 'right' ? 1 : -1;
+  const across: [number, number] = [along[1] * sign, -along[0] * sign];
+  const offset = ARROW_SIDE_OFFSET_PX * metersPerPx;
+  const half = ARROW_HALF_LENGTH_PX * metersPerPx;
+  const tail: [number, number] = [across[0] * offset - along[0] * half, across[1] * offset - along[1] * half];
+  const tip: [number, number] = [across[0] * offset + along[0] * half, across[1] * offset + along[1] * half];
+  const clearance = ARROW_CLEARANCE_PX * metersPerPx;
+  // Only segments that come anywhere near need the exact check.
+  const reach = offset + half + clearance;
+  for (const path of drawn) {
+    let previous: [number, number] | null = null;
+    for (const spot of path) {
+      const current = toXY(spot);
+      if (previous) {
+        const near = Math.min(Math.hypot(...previous), Math.hypot(...current)) <= reach + Math.hypot(current[0] - previous[0], current[1] - previous[1]);
+        if (near && segmentDistance(previous, current, tail, tip) < clearance) return false;
+      }
+      previous = current;
+    }
+  }
+  return true;
+}
+
+type XY = [number, number];
+
+function pointToSegment(p: XY, a: XY, b: XY): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lengthSquared = dx * dx + dy * dy;
+  const t = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lengthSquared));
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+
+/** The shortest distance between segments ab and cd (0 when they cross). */
+function segmentDistance(a: XY, b: XY, c: XY, d: XY): number {
+  const cross = (o: XY, p: XY, q: XY) => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+  const d1 = cross(c, d, a);
+  const d2 = cross(c, d, b);
+  const d3 = cross(a, b, c);
+  const d4 = cross(a, b, d);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0;
+  return Math.min(pointToSegment(a, c, d), pointToSegment(b, c, d), pointToSegment(c, a, b), pointToSegment(d, a, b));
 }
 
 /** A point's distance from the straight line through `a` and `b`, in meters (flat-earth, fine at this scale). */

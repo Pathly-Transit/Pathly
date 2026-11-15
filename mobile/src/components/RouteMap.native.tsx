@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent } from 'react-native';
-import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
+import MapView, { Callout, Marker, Polyline, type Region } from 'react-native-maps';
 
 import { BeanAvatar } from '../avatars/BeanAvatarImage';
 import { formatAge, visibleTrains } from '../data/liveTrains';
 import { googleMapStyle } from '../data/mapStyle';
-import { approachingVehicle, directionArrowAt, focusStopIndex, metersPerPixel, riderNearStop, splitPathAtStop, withAlpha } from '../data/routeDirection';
+import { approachingVehicle, ARROW_ZOOM_SLACK, directionArrowAt, focusStopIndex, metersPerPixel, middleDirectionArrowAt, riderNearStop, splitPathAtStop, withAlpha } from '../data/routeDirection';
 import { stopRevealZoom, zoomForRegion } from '../data/stopDeclutter';
 import type { RouteLiveVehicle } from '../data/transitLive';
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useMarkerTracking } from '../hooks/useMarkerTracking';
 import { useNow } from '../hooks/useNow';
 import { useTheme } from '../theme/AppSettings';
+import { fontFamilies } from '../theme/typography';
 import { Icon } from './Icon';
 import { NATIVE_MAP_PROVIDER } from './mapProvider';
 import type { TransitMode } from './RouteBadge';
@@ -234,17 +235,25 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
     const points = path ?? stops;
     const toCoordinates = (part: readonly { lat: number; lon: number }[]) => part.map((point) => ({ latitude: point.lat, longitude: point.lon }));
     const focusIndex = focusStop ? stops.indexOf(focusStop) : -1;
-    if (focusIndex < 0) return { behind: [], ahead: toCoordinates(points), aheadPoints: [], behindPoints: [] };
+    if (focusIndex < 0) return { behind: [], ahead: toCoordinates(points), aheadPoints: [], behindPoints: [], wholePoints: points };
     const { behind, ahead } = splitPathAtStop(points, stops, focusIndex);
-    return { behind: toCoordinates(behind), ahead: toCoordinates(ahead), aheadPoints: ahead, behindPoints: behind };
+    return { behind: toCoordinates(behind), ahead: toCoordinates(ahead), aheadPoints: ahead, behindPoints: behind, wholePoints: null };
   }, [focusStop, path, stops]);
   // Placed once, for the zoom the map opens at, so zooming never moves it. Zoomed out well past that,
   // the line's bends would reach it, so it's hidden there instead.
-  const [arrowZoom] = useState(() => Math.round(zoom));
+  const [arrowZoom] = useState(() => zoom);
   const arrow = useMemo(() => {
+    if (arrowZoom <= 0) return null;
+    // A line looked up by name has no rider's stop: the arrow goes near the middle of the line, and
+    // moves to the other direction's line when the rider switches.
+    if (line.wholePoints) {
+      const middle = line.wholePoints[Math.floor(line.wholePoints.length / 2)];
+      return middle ? middleDirectionArrowAt(line.wholePoints, metersPerPixel(arrowZoom - ARROW_ZOOM_SLACK, middle.lat)) : null;
+    }
     const start = line.aheadPoints[0];
-    return start && arrowZoom > 0 ? directionArrowAt(line.aheadPoints, metersPerPixel(arrowZoom, start.lat)) : null;
-  }, [arrowZoom, line.aheadPoints]);
+    // The faint line behind the stop is drawn too, so the arrow keeps clear of it as well.
+    return start ? directionArrowAt(line.aheadPoints, metersPerPixel(arrowZoom - ARROW_ZOOM_SLACK, start.lat), [line.behindPoints]) : null;
+  }, [arrowZoom, line.aheadPoints, line.behindPoints, line.wholePoints]);
 
   // The rider, when they're near their stop: framed with it so they see the walk there.
   // The purple dot is always framed: its walk and stop are the point of the page.
@@ -351,16 +360,23 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
             anchor={CENTER_ANCHOR}
             coordinate={{ latitude: stop.lat, longitude: stop.lon }}
             testID={`route-stop-${stop.name}`}
-            onCalloutPress={onOpenStop ? () => onOpenStop(stop) : undefined}
+            // Names the marker for screen readers; the bubble shown is the Callout below.
             title={stop.name}
             tracksViewChanges={tracksStopViews}
             zIndex={focused ? 1 : 0}
           >
             <View style={[styles.stopDot, { borderColor: passed ? withAlpha(color, BEHIND_LINE_ALPHA) : color }, focused && [styles.focusedStopDot, { borderColor: color }]]} testID={`route-dot-${stop.name}`} />
+            {/* The stop's name in the app's own font and card style; Google's plain bubble used its own sharp system font. */}
+            <Callout onPress={onOpenStop ? () => onOpenStop(stop) : undefined} tooltip={true}>
+              <View style={[styles.stopCallout, { backgroundColor: colors.surface, borderColor: colors.border }]} testID={`route-callout-${stop.name}`}>
+                <Text numberOfLines={2} style={[styles.stopCalloutText, { color: colors.ink }]}>{stop.name}</Text>
+                {onOpenStop ? <Icon color={colors.mutedInk} name="forward" size={14} /> : null}
+              </View>
+            </Callout>
           </Marker>
         );
       })}
-      {arrow && zoom >= arrowZoom - 1 ? (
+      {arrow && zoom >= arrowZoom - ARROW_ZOOM_SLACK ? (
         // Which way the line runs, beside it just past the rider's stop. Flat, so it turns with the map.
         <Marker
           anchor={{ x: 0.5, y: 0.5 }}
@@ -372,7 +388,7 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
           tracksViewChanges={tracksArrowView}
           zIndex={1}
         >
-          <DirectionArrow color={color} />
+          <DirectionArrow color={color} side={arrow.side} />
         </Marker>
       ) : null}
       {shownVehicles.map((vehicle) => <LiveVehicleMarker key={vehicle.tripId} color={color} mode={mode} onPress={onVehiclePress} vehicle={vehicle} zIndex={2} />)}
@@ -407,6 +423,22 @@ const styles = StyleSheet.create({
     borderRadius: LINE_WIDTH / 2,
     // Stop dots stay white in dark mode too.
     backgroundColor: '#FFFFFF',
+  },
+  stopCallout: {
+    maxWidth: 240,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderWidth: 1,
+    borderRadius: 16,
+  },
+  stopCalloutText: {
+    flexShrink: 1,
+    fontFamily: fontFamilies.extraBold,
+    fontSize: 15,
   },
   // The rider's nearest stop: larger, white, with a thick ring in the route color.
   focusedStopDot: {

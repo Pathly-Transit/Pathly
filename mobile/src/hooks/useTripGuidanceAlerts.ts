@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 
 import type { NavigationGuidance } from '../data/enrouteNavigation';
+import { narratorVoice, prepareNarratorVoice } from '../data/narratorVoice';
 import { announcementFor, tripNotificationContent, type AnnouncementStrength } from '../data/tripAnnouncements';
 import type { UserPreferences } from '../data/userPreferences';
 import { clearTripNotification, showTripNotification } from '../lib/notifications';
@@ -36,7 +37,8 @@ function say(text: string) {
   try {
     // A newer instruction replaces one still being read out.
     stopSpeaking();
-    Speech.speak(text, { language: 'en-US' });
+    const voice = narratorVoice();
+    Speech.speak(text, { language: 'en-US', ...(voice ? { voice } : {}) });
   } catch {
     // No speech engine on this device.
   }
@@ -118,9 +120,12 @@ export function useTripGuidanceAlerts({ sessionId, guidance, arrivedDestination,
     if (haptics) buzz('arrived');
   }, [arrivedDestination, haptics, voice]);
 
-  // Turning the voice off mid-sentence stops it.
+  // Turning the voice off mid-sentence stops it; turning it on finds the phone's best voice.
   useEffect(() => {
-    if (voice) return;
+    if (voice) {
+      prepareNarratorVoice();
+      return;
+    }
     stopSpeaking();
   }, [voice]);
 }

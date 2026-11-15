@@ -60,6 +60,10 @@ describe('SupportPopup', () => {
     expect(handlers.onFeedback).toHaveBeenCalledTimes(1);
     expect(handlers.onDismiss).toHaveBeenCalledTimes(1);
     expect(handlers.onNeverAsk).toHaveBeenCalledTimes(1);
+    // Centered over a dimmed overlay; tapping the overlay closes it too.
+    // (The card is the modal for screen readers, so the overlay is hidden from them; Close is their way out.)
+    fireEvent.press(screen.getByTestId('support-popup-overlay', { includeHiddenElements: true }));
+    expect(handlers.onDismiss).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -130,15 +134,15 @@ const trip = (steps: TransitStep[]): Itinerary => ({ id: 't', departureTime: at(
 
 describe('live trip notes', () => {
   it('reads live times as on time, late, or early', () => {
-    expect(legNotes(leg({ live: { status: 'tracked', departs: at(0), delaySeconds: 20 } }))).toEqual([{ kind: 'live', text: 'Live · on time', tone: 'live' }]);
+    expect(legNotes(leg({ live: { status: 'tracked', departs: at(0), delaySeconds: 20 } }))).toEqual([{ kind: 'live', text: 'Live: on time', tone: 'live' }]);
     expect(legNotes(leg({ live: { status: 'tracked', departs: at(4), delaySeconds: 240 } }))[0]).toMatchObject({ kind: 'late', tone: 'warning' });
-    expect(legNotes(leg({ live: { status: 'tracked', departs: at(4), delaySeconds: 240 } }))[0]!.text).toMatch(/^Live · 4 min late · leaves /);
-    expect(legNotes(leg({ live: { status: 'tracked', delaySeconds: -120 } }))[0]).toMatchObject({ kind: 'live', text: 'Live · 2 min early' });
+    expect(legNotes(leg({ live: { status: 'tracked', departs: at(4), delaySeconds: 240 } }))[0]!.text).toMatch(/^Live: 4 min late, leaves /);
+    expect(legNotes(leg({ live: { status: 'tracked', delaySeconds: -120 } }))[0]).toMatchObject({ kind: 'live', text: 'Live: 2 min early' });
   });
 
   it('flags a cancelled trip and a tight or missed connection', () => {
     expect(legNotes(leg({ live: { status: 'cancelled' } }))).toEqual([{ kind: 'cancelled', text: 'Cancelled', tone: 'danger' }]);
-    expect(legNotes(leg({ connection: { status: 'tight', spareSeconds: 70 } }))).toEqual([{ kind: 'tight', text: 'Tight connection · 1 min to spare', tone: 'warning' }]);
+    expect(legNotes(leg({ connection: { status: 'tight', spareSeconds: 70 } }))).toEqual([{ kind: 'tight', text: 'Tight connection, 1 min to spare', tone: 'warning' }]);
     expect(legNotes(leg({ connection: { status: 'missed', spareSeconds: -60 } }))[0]).toMatchObject({ kind: 'missed', tone: 'danger' });
   });
 

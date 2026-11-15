@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const { buildRoutesRequest, decodePolyline, modeForVehicle, normalizeRoutesResponse } = require('../lib/tripPlanning');
+const { buildRoutesRequest, decodePolyline, modeForVehicle, normalizeRoutesResponse, walkOnlyItinerary, walkOnlyLimitMeters } = require('../lib/tripPlanning');
 const { displayStepColor } = require('../lib/routeColors');
 const { agencyIdsForStep } = require('../lib/tripAgencies');
 
@@ -150,4 +150,25 @@ test("recases the feed's stop names and headsigns that Google passes along as-is
   assert.equal(step.from.name, 'Staten Island Expwy/Wooley Av');
   assert.equal(step.to.name, 'Hylan Blvd/Richmond Av');
   assert.equal(step.headsign, 'Midtown via 57 St');
+});
+
+test('walking the whole way is one walk step, timed from the request, and only within the cap', () => {
+  const path = [{ lat: 40.75, lng: -73.99 }, { lat: 40.76, lng: -73.98 }];
+  const now = Date.parse('2026-10-14T12:00:00Z');
+  // 1,560 m at 1.3 m/s is 20 minutes.
+  const walk = walkOnlyItinerary({ meters: 1560, path }, { mode: 'now' }, now, 'Bryant Park', 40);
+  assert.equal(walk.durationSeconds, 1200);
+  assert.equal(walk.departureTime, '2026-10-14T12:00:00.000Z');
+  assert.equal(walk.arrivalTime, '2026-10-14T12:20:00.000Z');
+  assert.equal(walk.transfers, 0);
+  assert.equal(walk.fare, undefined);
+  assert.deepEqual(walk.steps.map((step) => [step.kind, step.distanceMeters, step.toName]), [['walk', 1560, 'Bryant Park']]);
+  // Arrive by: it leaves early enough to get there on time.
+  const arriving = walkOnlyItinerary({ meters: 1560, path }, { mode: 'arrive', at: '2026-10-14T15:00:00.000Z' }, now, 'Bryant Park', 40);
+  assert.equal(arriving.departureTime, '2026-10-14T14:40:00.000Z');
+  assert.equal(arriving.arrivalTime, '2026-10-14T15:00:00.000Z');
+  // Over the rider's cap: not offered.
+  assert.equal(walkOnlyItinerary({ meters: 1560, path }, { mode: 'now' }, now, 'Bryant Park', 15), null);
+  // The street search never looks past what the cap allows.
+  assert.equal(walkOnlyLimitMeters(40), 3120);
 });

@@ -24,8 +24,8 @@ const TYPE_LABELS: Record<string, string> = {
 
 function entranceLabel(type: string, access: EntranceRow[4]): string {
   const name = TYPE_LABELS[type] ?? type.replaceAll('/', ' or ');
-  if (access === 'exit') return `${name} · Exit only`;
-  if (access === 'entry') return `${name} · Entrance only`;
+  if (access === 'exit') return `${name} (exit only)`;
+  if (access === 'entry') return `${name} (entrance only)`;
   return name;
 }
 

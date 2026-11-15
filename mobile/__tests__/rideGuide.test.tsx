@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, within } from '@testing-library/react-native';
 import mockSafeAreaContext from 'react-native-safe-area-context/jest/mock';
 
-import { RideGuideView } from '../src/components/RideGuideView';
+import { RideGuideView, type RideGuideLiveTrip } from '../src/components/RideGuideView';
+import { retimeItinerary } from '../src/data/tripDepartures';
 import { rideAlerts, rideGuideItinerary, ridePath, rideStopTimes, type RideGuideRequest } from '../src/data/rideGuide';
 import { formatTripClock, type TransitStep } from '../src/data/tripPlanning';
 import { UserPreferencesProvider } from '../src/data/userPreferences';
@@ -35,7 +36,7 @@ const request = (overrides: Partial<RideGuideRequest> = {}): RideGuideRequest =>
   notices: [
     { kind: 'delay', label: 'Running late', warning: true, title: 'Bus in 6 min is running 4 min late', detail: null },
     { kind: 'alert', label: 'Detour in effect', warning: true, title: 'Detour on Main St', detail: 'Buses use Elm Ave.' },
-    { kind: 'outlook', label: 'Thanksgiving · Nov 26', warning: false, title: 'Thanksgiving is Thursday', detail: null },
+    { kind: 'outlook', label: 'Thanksgiving, Nov 26', warning: false, title: 'Thanksgiving is Thursday', detail: null },
   ],
   capturedAt: NOW,
   ...overrides,
@@ -75,7 +76,7 @@ describe('rideGuideItinerary', () => {
 
   it('leaves the delays to the departure, and keeps the alerts and what\'s coming up', () => {
     const alerts = rideAlerts(request().notices);
-    expect(alerts.map((alert) => alert.label)).toEqual(['Detour in effect', 'Thanksgiving · Nov 26']);
+    expect(alerts.map((alert) => alert.label)).toEqual(['Detour in effect', 'Thanksgiving, Nov 26']);
     expect(alerts[1]).toMatchObject({ warning: false, upcoming: true });
     expect(ride(rideGuideItinerary(request(), 1)).alerts).toEqual(alerts);
   });
@@ -111,21 +112,46 @@ describe('RideGuideView', () => {
   });
   afterEach(() => jest.useRealTimers());
 
-  const renderGuide = (onStart = jest.fn()) => render(
+  const renderGuide = (onStart = jest.fn(), live: RideGuideLiveTrip | null = null) => render(
     <AppSettingsProvider>
       <UserPreferencesProvider>
-        <RideGuideView onBack={jest.fn()} onStart={onStart} request={request()} riderLocation={null} />
+        <RideGuideView live={live} onBack={jest.fn()} onEnd={jest.fn()} onStart={onStart} request={request()} riderLocation={null} />
       </UserPreferencesProvider>
     </AppSettingsProvider>,
   );
 
+  it('starts the ride as it opens', () => {
+    const onStart = jest.fn();
+    renderGuide(onStart);
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ arrivalTime: new Date(NOW + 26 * 60_000).toISOString() }), 'Harbor');
+  });
+
+  it('shows the live trip with END, and moves it to a newly picked stop', () => {
+    const onStart = jest.fn();
+    const live: RideGuideLiveTrip = {
+      itinerary: retimeItinerary(rideGuideItinerary(request(), 3)!, new Map(), NOW),
+      guidance: { phase: 'walking', currentAction: 'Walk to Main St', nextAction: 'Board Q1 toward Harbor', remainingStops: null } as RideGuideLiveTrip['guidance'],
+    };
+    renderGuide(onStart, live);
+    expect(onStart).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('ride-guide-go')).toBeNull();
+    expect(screen.getByTestId('ride-guide-end')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('ride-guide-stop-picker'));
+    fireEvent.press(screen.getByTestId('ride-guide-stop-2'));
+    expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ arrivalTime: new Date(NOW + 15 * 60_000).toISOString() }), 'Oak Rd');
+  });
+
   it('reads like Trip Details for the one ride, and starts it to the stop picked', () => {
     const onStart = jest.fn();
     renderGuide(onStart);
+    onStart.mockClear();
     expect(screen.getByTestId('ride-guide-leave-within')).toHaveTextContent(/Leave within 3 min to catch the /);
     expect(screen.getByTestId('ride-guide-leave-time')).toHaveTextContent(formatTripClock(new Date(NOW + 3 * 60_000).toISOString()));
     expect(screen.getByTestId('ride-guide-alerts-0')).toHaveTextContent(/Detour in effect/);
-    // The end of the line until the rider picks; the stops wait in a popup.
+    // The end of the line until the rider picks, already in the picker; the stops wait in a popup.
+    expect(screen.getByTestId('ride-guide-stop-picked')).toHaveTextContent('Harbor');
+    expect(screen.getByTestId('ride-guide-arrival')).toBeTruthy();
     expect(screen.queryByTestId('ride-guide-stops')).toBeNull();
     fireEvent.press(screen.getByTestId('ride-guide-stop-picker'));
     expect(screen.getByTestId('ride-guide-stop-3').props.accessibilityState).toEqual({ selected: true });

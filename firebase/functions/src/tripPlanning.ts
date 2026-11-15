@@ -24,6 +24,8 @@ export type PlanTripRequest = {
   modes: TravelModeOption[];
   /** The rider turned walking off (Settings -> Travel preferences): ask for less walking. */
   lessWalking?: boolean;
+  /** Also offer walking the whole way when it takes at most this many minutes (walkOnlyItinerary). */
+  walkOnlyMaxMinutes?: number;
 };
 
 export type TripStop = { name: string; location: LatLng; time: string };
@@ -351,6 +353,42 @@ function normalizeRoute(route: GoogleRoute, requestTime: string, destinationLabe
 }
 
 /** Google's routes as app itineraries, in Google's order, with repeated trips dropped. */
+/** Walking pace for a walk-only trip: about 3 mph, as the app's other walking estimates. */
+export const WALK_ONLY_METERS_PER_SECOND = 1.3;
+/** The longest walk-only trip a rider can ask for. */
+export const MAX_WALK_ONLY_MINUTES = 90;
+
+/** The farthest a walk-only trip of `maxMinutes` can go, which bounds the street search. */
+export function walkOnlyLimitMeters(maxMinutes: number): number {
+  return maxMinutes * 60 * WALK_ONLY_METERS_PER_SECOND;
+}
+
+/**
+ * Walking the whole way, as an itinerary: one walk step along `path` (from Pathly's own street
+ * graph, walkingGraph.ts), timed from the trip's requested time. Null when it's over `maxMinutes`.
+ */
+export function walkOnlyItinerary(
+  walk: { meters: number; path: LatLng[] },
+  time: PlanTripRequest['time'],
+  nowMs: number,
+  destinationLabel: string,
+  maxMinutes: number,
+): Itinerary | null {
+  const durationSeconds = Math.round(walk.meters / WALK_ONLY_METERS_PER_SECOND);
+  if (durationSeconds > maxMinutes * 60) return null;
+  const departs = time.mode === 'now' ? nowMs : time.mode === 'depart' ? Date.parse(time.at) : Date.parse(time.at) - durationSeconds * 1000;
+  const departureTime = new Date(departs).toISOString();
+  return {
+    // The same id as a walk-only route from Google, so the two never both show.
+    id: createHash('sha256').update('walk').digest('hex').slice(0, 12),
+    departureTime,
+    arrivalTime: addSeconds(departureTime, durationSeconds),
+    durationSeconds,
+    transfers: 0,
+    steps: [{ kind: 'walk', durationSeconds, distanceMeters: Math.round(walk.meters), toName: destinationLabel, path: simplified(walk.path) }],
+  };
+}
+
 export function normalizeRoutesResponse(
   response: RoutesResponse,
   requestTime: string,

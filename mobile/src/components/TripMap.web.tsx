@@ -53,7 +53,7 @@ const locationOffset = () => ({ x: -19, y: -19 });
  * A planned trip on a real map: each leg in its line's color, walking dotted, a marker at every
  * stop. Interactive maps pan and zoom, label a clicked stop, and offer to re-frame the whole trip.
  */
-export function TripMap({ centerOnUserRequest = 0, destination, focusStop, followLocation, followUser, holdCamera, interactive = false, itinerary, navigationProgress, onFollowModeChange, onUserCameraChange, onUserPan, origin, padding = FIT_PADDING, testID = 'trip-map', userLocation, userLocationStale = false, vehicles = [], approachLines = [] }: TripMapProps) {
+export function TripMap({ centerOnUserRequest = 0, destination, focusStop, followLocation, followUser, holdCamera, interactive = false, itinerary, navigationProgress, onFollowModeChange, onUserCameraChange, onUserPan, onVehiclePress, origin, padding = FIT_PADDING, testID = 'trip-map', userLocation, userLocationStale = false, vehicles = [], approachLines = [] }: TripMapProps) {
   // A held camera is where the rider had left this map; it opens there instead of on the trip.
   const holding = holdCamera != null;
   const [initialCenter] = useState(() => (holdCamera ? { lat: holdCamera.latitude, lng: holdCamera.longitude } : FALLBACK_CENTER));
@@ -277,7 +277,8 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
               scale: stop.kind === 'via' ? 3.5 : 6,
               fillColor: '#FFFFFF',
               fillOpacity: 'state' in stop && stop.state === 'completed' ? 0.48 : 1,
-              strokeColor: stop.kind === 'stop' || stop.kind === 'via' ? themedRouteColor(stop.color ?? colors.primary, isDark) : '#FFFFFF',
+              // A stop already passed is ringed in the gray of the line behind the rider.
+              strokeColor: stop.kind === 'stop' || stop.kind === 'via' ? ('state' in stop && stop.state === 'completed' ? colors.mutedInk : themedRouteColor(stop.color ?? colors.primary, isDark)) : '#FFFFFF',
               strokeOpacity: 'state' in stop && stop.state === 'completed' ? 0.48 : 1,
               strokeWeight: stop.kind === 'via' ? 2 : 3,
             }}
@@ -290,7 +291,7 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
         {/* The rides' live vehicles, like Route View's, gliding to each refreshed spot. */}
         {vehicles.map((vehicle) => (
           <Glide key={`${vehicle.mode}-${vehicle.tripId}`} lat={vehicle.lat} lon={vehicle.lon}>
-            {(point) => <Marker icon={vehicleMarkerIcon(themedRouteColor(vehicle.color, isDark), vehicleAge(vehicle), vehicle.riders?.avatars)} label={vehicleMarkerLabel(vehicleAge(vehicle))} position={{ lat: point.lat, lng: point.lon }} title={vehicle.mode === 'bus' ? 'Bus' : 'Train'} zIndex={3} />}
+            {(point) => <Marker icon={vehicleMarkerIcon(themedRouteColor(vehicle.color, isDark), vehicleAge(vehicle), vehicle.riders?.avatars)} label={vehicleMarkerLabel(vehicleAge(vehicle))} onClick={onVehiclePress ? () => onVehiclePress(vehicle.tripId) : undefined} position={{ lat: point.lat, lng: point.lon }} title={vehicle.mode === 'bus' ? 'Bus' : 'Train'} zIndex={3} />}
           </Glide>
         ))}
         {/* The rider's pin (Settings, Appearance) stands on the destination's gray dot, so it reads apart from the start. */}

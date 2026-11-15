@@ -21,6 +21,8 @@ export type UserPreferences = {
     fewerTransfers: boolean;
     /** Trips walking longer than this in total are hidden when others fit; null is no limit. */
     maxWalkMinutes: number | null;
+    /** Route Results also offers walking the whole way when it takes at most this long; null is off. */
+    walkOnlyMaxMinutes: number | null;
     /** Which fare trip cards show. A fare category, never an age, and never sent anywhere. */
     fareType: FareType;
   };
@@ -38,14 +40,17 @@ export type UserPreferences = {
 
 export const ALL_TRANSIT_MODES: readonly TransitMode[] = ['subway', 'bus', 'rail', 'ferry'];
 export const WALK_LIMIT_OPTIONS: readonly (number | null)[] = [5, 10, 15, 20, 30, null];
+/** Choices for walking the whole way; 90 minutes is the most the backend plans. */
+export const WALK_ONLY_OPTIONS: readonly (number | null)[] = [15, 20, 30, 40, 60, 90, null];
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
   notifications: { enabled: true, serviceAlerts: true, tripReminders: true, disruptions: true },
-  travel: { modes: [...ALL_TRANSIT_MODES], allowWalking: true, fewerTransfers: false, maxWalkMinutes: null, fareType: 'full' },
+  travel: { modes: [...ALL_TRANSIT_MODES], allowWalking: true, fewerTransfers: false, maxWalkMinutes: null, walkOnlyMaxMinutes: 40, fareType: 'full' },
   stepFree: false,
   shareRides: false,
   supportPrompts: true,
-  tripGuidance: { notification: true, voice: true, haptics: true },
+  // Spoken directions are opt-in: the phone's built-in voice can sound robotic.
+  tripGuidance: { notification: true, voice: false, haptics: true },
 };
 
 export function preferencesKey(uid: string) {
@@ -74,6 +79,7 @@ export function parsePreferences(text: string | null): UserPreferences {
   if (isBoolean(saved.travel?.allowWalking)) travel.allowWalking = saved.travel.allowWalking;
   if (isBoolean(saved.travel?.fewerTransfers)) travel.fewerTransfers = saved.travel.fewerTransfers;
   if (saved.travel?.maxWalkMinutes === null || WALK_LIMIT_OPTIONS.includes(saved.travel?.maxWalkMinutes)) travel.maxWalkMinutes = saved.travel?.maxWalkMinutes ?? null;
+  if (saved.travel?.walkOnlyMaxMinutes === null || WALK_ONLY_OPTIONS.includes(saved.travel?.walkOnlyMaxMinutes)) travel.walkOnlyMaxMinutes = saved.travel?.walkOnlyMaxMinutes ?? null;
   if (['full', 'reduced', 'student', 'college', 'fairFares'].includes(saved.travel?.fareType as string)) travel.fareType = saved.travel!.fareType!;
   const tripGuidance = { ...base.tripGuidance };
   for (const key of Object.keys(tripGuidance) as (keyof UserPreferences['tripGuidance'])[]) {

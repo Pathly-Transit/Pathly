@@ -232,12 +232,13 @@ describe('motion', () => {
 describe('RouteMap', () => {
   const stops = [0, 1, 2].map((index) => ({ stopId: String(index), name: `Stop ${index}`, lat: 40.9, lon: -73.2 + index * 0.01 }));
 
-  it('draws one full-strength line and no arrow when the rider has no nearest stop', () => {
+  it('draws one full-strength line, with the direction arrow near its middle, when the rider has no nearest stop', () => {
     const screen = render(<RouteMap color="#A626AA" stops={stops} vehicles={[]} />);
     const hidden = { includeHiddenElements: true };
     expect(screen.getByTestId('route-line', hidden).props.coordinates).toHaveLength(3);
     expect(screen.queryByTestId('route-line-behind', hidden)).toBeNull();
-    expect(screen.queryByTestId('route-direction-arrow', hidden)).toBeNull();
+    // A line looked up by name still shows which way it runs.
+    expect(screen.getByTestId('route-direction-arrow', hidden)).toBeTruthy();
     expect(screen.queryByTestId('route-walk', hidden)).toBeNull();
   });
 

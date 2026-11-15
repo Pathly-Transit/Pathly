@@ -18,7 +18,7 @@ export function DebugBanner({ top }: { top: number }) {
     <View pointerEvents="box-none" style={[styles.wrap, { top }]} testID="debug-banner">
       {mockLocation ? (
         <View style={styles.pill}>
-          <Text numberOfLines={1} style={styles.text}>{`Mock location · ${mockLocation.label}`}</Text>
+          <Text numberOfLines={1} style={styles.text}>{`Mock location: ${mockLocation.label}`}</Text>
           <PressableScale accessibilityLabel="Turn off mock location" accessibilityRole="button" hitSlop={8} onPress={() => setMockLocation(undefined)} testID="debug-banner-location-off">
             <Text style={styles.action}>Turn off</Text>
           </PressableScale>
@@ -26,7 +26,7 @@ export function DebugBanner({ top }: { top: number }) {
       ) : null}
       {mockTime ? (
         <View style={styles.pill}>
-          <Text numberOfLines={1} style={styles.text}>{`Mock time · ${timeFormat.format(appNow())} · live times stay real`}</Text>
+          <Text numberOfLines={1} style={styles.text}>{`Mock time: ${timeFormat.format(appNow())}. Live times stay real`}</Text>
           <PressableScale accessibilityLabel="Turn off mock time" accessibilityRole="button" hitSlop={8} onPress={() => setMockTime(undefined)} testID="debug-banner-time-off">
             <Text style={styles.action}>Turn off</Text>
           </PressableScale>

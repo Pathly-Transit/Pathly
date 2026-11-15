@@ -117,7 +117,7 @@ export function DeparturesView({ directionIndex, onBack, route }: DeparturesView
                 >
                   <Text style={styles.time}>{time}</Text>
                   <View style={styles.rowEnd}>
-                    {departure.live ? <LiveSignal color={colors.success} /> : <Text style={styles.scheduledPill}>SCHEDULED</Text>}
+                    {departure.live ? <LiveSignal color={colors.success} /> : <Text style={styles.scheduledPill}>Scheduled</Text>}
                     <Text style={[styles.wait, !departure.live && styles.scheduledWait]}>{wait}</Text>
                   </View>
                 </View>
@@ -174,6 +174,7 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     backgroundColor: colors.mutedInk,
     color: colors.surface,
     ...typography.label,
-    fontSize: 8,
+    fontSize: 10,
+    lineHeight: 13,
   },
 });

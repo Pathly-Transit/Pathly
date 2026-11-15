@@ -49,7 +49,7 @@ function centerInView(point: LatLng, shiftX: number, shiftY: number): LatLng {
   };
 }
 
-export function TripMap({ centerOnUserRequest = 0, destination, focusStop, followLocation, followUser, holdCamera, interactive = false, itinerary, navigationProgress, onFollowModeChange, onUserCameraChange, onUserPan, origin, padding = FIT_PADDING, testID = 'trip-map', userLocation, userLocationStale = false, vehicles = [], approachLines = [] }: TripMapProps) {
+export function TripMap({ centerOnUserRequest = 0, destination, focusStop, followLocation, followUser, holdCamera, interactive = false, itinerary, navigationProgress, onFollowModeChange, onUserCameraChange, onUserPan, onVehiclePress, origin, padding = FIT_PADDING, testID = 'trip-map', userLocation, userLocationStale = false, vehicles = [], approachLines = [] }: TripMapProps) {
   const mapRef = useRef<MapView>(null);
   // A held camera is where the rider had left this map; it opens there instead of on the trip.
   const holding = holdCamera != null;
@@ -262,7 +262,9 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
         })}
         {stops.map((stop, index) => (((stop.kind === 'via' && !viaShown(stop)) || (stop.kind === 'entrance' && !entrancesShown)) && index !== selected ? null : (
           <Marker
-            key={`stop-${index}`}
+            // Remounted when the rider passes it: Android markers that don't track view changes keep
+            // their first drawing otherwise.
+            key={`stop-${index}-${'state' in stop ? stop.state : ''}`}
             anchor={{ x: 0.5, y: 0.5 }}
             coordinate={{ latitude: stop.point.lat, longitude: stop.point.lng }}
             onPress={interactive ? () => setSelected(index) : undefined}
@@ -278,6 +280,8 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
                 (stop.kind === 'start' || stop.kind === 'end') && styles.endpointDot,
                 stop.kind === 'entrance' && { backgroundColor: themedRouteColor(stop.color ?? colors.primary, isDark) },
                 (stop.kind === 'stop' || stop.kind === 'via') && { backgroundColor: colors.white, borderColor: themedRouteColor(stop.color ?? colors.primary, isDark) },
+                // A stop already passed is ringed in the gray of the line behind the rider.
+                (stop.kind === 'stop' || stop.kind === 'via') && 'state' in stop && stop.state === 'completed' && { borderColor: colors.mutedInk },
               ]}
             >
               {stop.kind === 'entrance' ? <Icon color="#FFFFFF" name="arrowRight" size={11} /> : null}
@@ -285,7 +289,7 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
           </Marker>
         )))}
         {/* The rides' live vehicles, like Route View's. */}
-        {vehicles.map((vehicle) => <LiveVehicleMarker key={`${vehicle.mode}-${vehicle.tripId}`} color={themedRouteColor(vehicle.color, isDark)} mode={vehicle.mode} vehicle={vehicle} zIndex={3} />)}
+        {vehicles.map((vehicle) => <LiveVehicleMarker key={`${vehicle.mode}-${vehicle.tripId}`} color={themedRouteColor(vehicle.color, isDark)} mode={vehicle.mode} onPress={onVehiclePress} vehicle={vehicle} zIndex={3} />)}
         {/* The rider's pin (Settings, Appearance) stands on the destination's gray dot, so it reads apart from the start. */}
         {destinationStop ? (
           <Marker

@@ -24,15 +24,15 @@ export function legNotes(step: TransitStep): TripLegNote[] {
     notes.push({ kind: 'skips-stop', text: 'Skipping your stop', tone: 'danger' });
   } else if (live?.status === 'tracked') {
     const delay = live.delaySeconds ?? 0;
-    const leaves = live.departs ? ` · leaves ${formatTripClock(live.departs)}` : '';
-    if (Math.abs(delay) < ON_TIME_SECONDS) notes.push({ kind: 'live', text: 'Live · on time', tone: 'live' });
-    else notes.push({ kind: delay > 0 ? 'late' : 'live', text: `Live · ${minutesText(delay)} ${delay > 0 ? 'late' : 'early'}${leaves}`, tone: delay >= LATE_WARNING_SECONDS ? 'warning' : 'live' });
+    const leaves = live.departs ? `, leaves ${formatTripClock(live.departs)}` : '';
+    if (Math.abs(delay) < ON_TIME_SECONDS) notes.push({ kind: 'live', text: 'Live: on time', tone: 'live' });
+    else notes.push({ kind: delay > 0 ? 'late' : 'live', text: `Live: ${minutesText(delay)} ${delay > 0 ? 'late' : 'early'}${leaves}`, tone: delay >= LATE_WARNING_SECONDS ? 'warning' : 'live' });
   }
   if (step.connection?.status === 'missed') {
     notes.push({ kind: 'missed', text: 'Likely to miss this connection', tone: 'danger' });
   } else if (step.connection?.status === 'tight') {
     const spare = Math.round(step.connection.spareSeconds / 60);
-    notes.push({ kind: 'tight', text: spare >= 1 ? `Tight connection · ${spare} min to spare` : 'Tight connection', tone: 'warning' });
+    notes.push({ kind: 'tight', text: spare >= 1 ? `Tight connection, ${spare} min to spare` : 'Tight connection', tone: 'warning' });
   }
   return notes;
 }

@@ -68,7 +68,7 @@ function AlertsForm({ onClose, onDone, request }: RouteAlertsPromptProps & { req
         </View>
         <PressableScale accessibilityLabel="Close" accessibilityRole="button" hitSlop={8} onPress={onClose} testID="route-alerts-prompt-close"><Icon name="close" size={26} /></PressableScale>
       </View>
-      <Text style={styles.label}>NOTIFY ME</Text>
+      <Text style={styles.label}>Notify me</Text>
       <View accessibilityRole="radiogroup" style={styles.options}>
         {ROUTE_ALERT_OPTIONS.map((option) => {
           const selected = option.value === setting;

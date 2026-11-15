@@ -4,7 +4,7 @@ import type { RouteDetail, RoutePrediction } from './transit';
 export const LATE_THRESHOLD_MINUTES = 2;
 
 /** `label` names it on the route's alert pill; a `warning` notice turns the pill yellow. */
-export type RouteNotice = { kind: 'delay' | 'alert' | 'outlook'; label: string; warning: boolean; title: string; detail: string | null };
+export type RouteNotice = { kind: 'delay' | 'alert' | 'outlook'; label: string; warning: boolean; title: string; detail: string | null; postedAt?: number | null };
 
 const VEHICLE_NOUNS = { subway: 'Train', rail: 'Train', bus: 'Bus', ferry: 'Boat' } as const;
 
@@ -31,6 +31,7 @@ export function routeNotices(route: RouteDetail, predictions: readonly RoutePred
     warning: alert.warning ?? true,
     title: alert.header,
     detail: alert.description,
+    ...(alert.postedAt != null ? { postedAt: alert.postedAt } : {}),
   }));
   // A live route's own `alert` is always "No delays reported..."; only demo routes carry a written one.
   const advisory: RouteNotice[] = route.alert.startsWith('No delays') ? [] : [{ kind: 'alert', label: 'Service advisory', warning: true, title: route.alert, detail: null }];
@@ -38,6 +39,21 @@ export function routeNotices(route: RouteDetail, predictions: readonly RoutePred
   return [...delays, ...alerts, ...advisory].map((notice, index) => ({ notice, index }))
     .sort((a, b) => Number(b.notice.warning) - Number(a.notice.warning) || a.index - b.index)
     .map(({ notice }) => notice);
+}
+
+/**
+ * When an alert was posted, for its sheet: "Posted 2:15 PM" today, "Posted yesterday, 9:40 AM",
+ * else "Posted Nov 12, 2:15 PM". Null without a time.
+ */
+export function formatPostedAt(postedAt: number | null | undefined, now = Date.now()): string | null {
+  if (postedAt == null || !Number.isFinite(postedAt) || postedAt <= 0) return null;
+  const posted = new Date(postedAt);
+  const clock = posted.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  const day = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const daysAgo = Math.round((day(new Date(now)) - day(posted)) / 86_400_000);
+  if (daysAgo <= 0) return `Posted ${clock}`;
+  if (daysAgo === 1) return `Posted yesterday, ${clock}`;
+  return `Posted ${posted.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${clock}`;
 }
 
 /** One pill on Route View: notices that read alike, opened together in one sheet. */

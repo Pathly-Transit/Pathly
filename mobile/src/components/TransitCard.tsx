@@ -309,7 +309,6 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     ...typography.label,
     fontSize: 9,
     lineHeight: 11,
-    textTransform: 'uppercase',
   },
   pageDots: {
     position: 'absolute',

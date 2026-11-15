@@ -11,6 +11,7 @@ import {
   type TripFare,
   filterItinerariesByMode,
   filterItinerariesByWalk,
+  filterWalkOnlyItineraries,
   formatDurationMinutes,
   requestModes,
   formatTripClock,
@@ -213,21 +214,23 @@ export function RouteResultsView({
     preference,
     modes: requestModes(enabledModes),
     lessWalking: !travelPreferences.allowWalking,
+    walkOnlyMaxMinutes: travelPreferences.walkOnlyMaxMinutes,
     location: riderLocation,
     locationPending,
   });
   const planned = useMemo(() => (plan.status === 'loaded' ? plan.itineraries : []), [plan]);
   const resumeRequest = plan.status === 'loaded' ? plan.resumeRequest : null;
-  const { maxWalkMinutes } = travelPreferences;
+  const { maxWalkMinutes, walkOnlyMaxMinutes } = travelPreferences;
   const { visibleItineraries, walkLimitMissed } = useMemo(() => {
-    const byMode = filterItinerariesByMode(planned, enabledModes);
+    // Walking the whole way ranks with the rest, by arrival like any trip.
+    const byMode = filterWalkOnlyItineraries(filterItinerariesByMode(planned, enabledModes), walkOnlyMaxMinutes);
     const withinWalk = filterItinerariesByWalk(byMode, maxWalkMinutes);
     return {
       visibleItineraries: distinctRouteItineraries(orderItineraries(withinWalk ?? byMode, preference, travelPreferences.fareType)),
       // Every trip walks longer than the rider's limit, so all of them show with a note.
       walkLimitMissed: maxWalkMinutes !== null && withinWalk === null && byMode.length > 0,
     };
-  }, [enabledModes, maxWalkMinutes, planned, preference, travelPreferences.fareType]);
+  }, [enabledModes, maxWalkMinutes, planned, preference, travelPreferences.fareType, walkOnlyMaxMinutes]);
   const notStepFree = useNotStepFreeTrips(visibleItineraries, stepFree);
   // Trips a wheelchair can't finish go last; the order is otherwise kept.
   const listedItineraries = notStepFree.size === 0 ? visibleItineraries : [...visibleItineraries].sort((a, b) => Number(notStepFree.has(a.id)) - Number(notStepFree.has(b.id)));
@@ -405,7 +408,7 @@ export function RouteResultsView({
             testID="modes-control"
           >
             <Icon color={modesFiltered ? colors.primary : colors.ink} name="modes" size={15} />
-            <Text style={[styles.toolbarPillText, modesFiltered && styles.activePillText]}>{modesFiltered ? `Modes · ${enabledModes.length}` : 'Modes'}</Text>
+            <Text style={[styles.toolbarPillText, modesFiltered && styles.activePillText]}>{modesFiltered ? `Modes (${enabledModes.length})` : 'Modes'}</Text>
           </PressableScale> : null}
           {!easyMode ? <PressableScale
             accessibilityLabel="Filter routes"
