@@ -259,6 +259,8 @@ describe('ordering and filtering', () => {
     expect(transitBadges(busLirr)).toEqual(['51', 'RK']);
     const subway = { ...transitSteps(lirr)[0]!, agency: { name: 'MTA New York City Transit' }, line: { name: 'N Line', shortName: 'N Line' }, mode: 'subway' as const };
     expect(lineBadge(subway)).toBe('N');
+    const metroNorth = { ...transitSteps(lirr)[0]!, agency: { name: 'Metro-North Railroad' }, line: { name: 'New Haven', shortName: 'New Haven' }, mode: 'rail' as const };
+    expect(lineBadge(metroNorth)).toBe('NH');
   });
 
   it('labels known and unknown fares', () => {

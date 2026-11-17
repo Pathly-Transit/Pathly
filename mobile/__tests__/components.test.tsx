@@ -39,6 +39,7 @@ describe('RouteBadge', () => {
   it('maps agencies to transit modes', () => {
     expect(transitModeForAgency('MTA Subway')).toBe('subway');
     expect(transitModeForAgency('LIRR')).toBe('rail');
+    expect(transitModeForAgency('Metro-North Railroad')).toBe('rail');
     expect(transitModeForAgency('Suffolk County Transit')).toBe('bus');
     expect(transitModeForAgency('MTA Bus')).toBe('bus');
     expect(transitModeForAgency('NYC Ferry')).toBe('ferry');
@@ -256,6 +257,8 @@ describe('badgeLabel', () => {
     expect(badgeLabel({ agency: 'Suffolk County Transit', shortName: '51' })).toBe('51');
     expect(badgeLabel({ agency: 'MTA Subway', shortName: 'E' })).toBe('E');
     expect(badgeLabel({ agency: 'LIRR', shortName: 'Port Jefferson Branch' })).toBe('PJ');
+    expect(badgeLabel({ agency: 'Metro-North Railroad', shortName: 'Hudson' })).toBe('HD');
+    expect(badgeLabel({ agency: 'Metro-North Railroad', shortName: 'New Haven' })).toBe('NH');
     // NYC DOT publishes no route_short_name, so the ferry's badge is its initials.
     expect(badgeLabel({ agency: 'Staten Island Ferry', shortName: 'Staten Island Ferry' })).toBe('SIF');
     expect(badgeLabel({ agency: 'LIRR', shortName: 'Ronkonkoma Branch' })).toBe('RK');

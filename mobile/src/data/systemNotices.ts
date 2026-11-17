@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { upcomingHolidays, type OutlookNotice } from './serviceOutlook';
 
 /**
- * Holidays that change service on nearly every line Pathly covers (subway, buses, LIRR, NICE,
+ * Holidays that change service on nearly every line Pathly covers (subway, buses, LIRR, Metro-North, NICE,
  * Suffolk, ferries): Sunday or holiday schedules, or no service at all on some lines. Smaller
  * holidays (Veterans Day, Columbus Day) change only some lines, so they stay on Route View's pill.
  */

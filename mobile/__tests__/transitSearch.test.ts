@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 
 import { autocompletePlaces, type SearchPlace } from '../src/data/placesSearch';
-import { mergeSearchResults, searchTransitStops } from '../src/data/stopSearch';
+import { mergeSearchResults, searchTransitStops, stopKindLabel } from '../src/data/stopSearch';
 import { usePlacesSearch } from '../src/hooks/usePlacesSearch';
 
 jest.mock('../src/data/placesSearch', () => ({
@@ -26,6 +26,10 @@ beforeEach(() => {
 });
 
 describe('mergeSearchResults', () => {
+  it('labels Metro-North stop results as stations of that railroad', () => {
+    expect(stopKindLabel('rail', 'Metro-North Railroad')).toBe('Metro-North station');
+  });
+
   it('keeps Google places in their order, then lists up to three stops', () => {
     const merged = mergeSearchResults(
       [stop('Jamaica'), stop('Jamaica-179 St', 'subway'), stop('Jamaica Bus Term', 'bus'), stop('Jamaica Center', 'subway')],

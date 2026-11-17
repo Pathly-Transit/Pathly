@@ -73,7 +73,7 @@ export function resetLineIndexForTests(index: readonly IndexedLine[] | null = nu
 type Mode = 'subway' | 'bus' | 'rail' | 'ferry';
 
 const AGENCY_MODE: Record<AgencyId, Mode> = {
-  subway: 'subway', lirr: 'rail', nycferry: 'ferry', siferry: 'ferry',
+  subway: 'subway', lirr: 'rail', metronorth: 'rail', nycferry: 'ferry', siferry: 'ferry',
   nice: 'bus', suffolk: 'bus', bx: 'bus', bk: 'bus', mn: 'bus', qn: 'bus', si: 'bus', busco: 'bus',
 };
 // Rail, subway and ferry lines come first: they're what people search for by name.
@@ -81,8 +81,10 @@ const MODE_RANK: Record<Mode, number> = { subway: 0, rail: 0, ferry: 1, bus: 2 }
 
 /** Words that say which kind of line is meant, and the agencies or modes they narrow to. */
 const FILTER_WORDS: { words: readonly string[]; keep: (line: IndexedLine) => boolean }[] = [
-  { words: ['subway', 'train', 'trains', 'metro', 'mta subway'], keep: (line) => line.agencyId === 'subway' || line.agencyId === 'lirr' },
-  { words: ['lirr', 'long island rail road', 'long island railroad', 'rail', 'railroad'], keep: (line) => line.agencyId === 'lirr' },
+  { words: ['subway', 'train', 'trains', 'metro', 'mta subway'], keep: (line) => line.agencyId === 'subway' || line.agencyId === 'lirr' || line.agencyId === 'metronorth' },
+  { words: ['lirr', 'long island rail road', 'long island railroad'], keep: (line) => line.agencyId === 'lirr' },
+  { words: ['metro north', 'metronorth', 'mnr'], keep: (line) => line.agencyId === 'metronorth' },
+  { words: ['rail', 'railroad', 'commuter rail'], keep: (line) => line.agencyId === 'lirr' || line.agencyId === 'metronorth' },
   { words: ['bus', 'buses'], keep: (line) => AGENCY_MODE[line.agencyId] === 'bus' },
   { words: ['ferry', 'ferries', 'boat'], keep: (line) => AGENCY_MODE[line.agencyId] === 'ferry' },
   { words: ['nice', 'n i c e', 'nassau'], keep: (line) => line.agencyId === 'nice' },
