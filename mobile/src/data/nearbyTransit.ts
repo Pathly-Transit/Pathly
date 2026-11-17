@@ -25,7 +25,7 @@ const findNearbyTransitCallable = callable<{ lat: number; lon: number }, FindNea
 );
 
 /**
- * Every real nearby route, across every configured agency (LIRR, subway, NICE Bus, Suffolk
+ * Every real nearby route, across every configured agency (Metro-North, LIRR, subway, NICE Bus, Suffolk
  * County Transit — gtfsAgencies.ts), sorted closest first — not a fixed handful of hand-picked
  * lines. Each result already carries both directions' real nearest stop (independently
  * resolved — see getNearestStopForRoute's own comment for why that matters), ready to convert

@@ -568,10 +568,12 @@ export function fareLabel(fare: TripFare | undefined, fareType: FareType = 'full
 }
 
 const LIRR_AGENCY = 'Long Island Rail Road';
+const METRO_NORTH_AGENCY = /metro[\s-]*north|\bmnr\b/i;
 
 /** The badge for a trip leg: LIRR branch codes ("PJ"), "N" for Google's "N Line", "51" for bus 51. */
 export function lineBadge(step: TransitStep): string {
   if (step.agency.name === LIRR_AGENCY) return badgeLabel({ agency: 'LIRR', shortName: step.line.name });
+  if (METRO_NORTH_AGENCY.test(step.agency.name)) return badgeLabel({ agency: 'Metro-North Railroad', shortName: step.line.shortName || step.line.name });
   const short = (step.line.shortName ?? '').replace(/\s+(Line|Train)$/i, '').trim();
   return badgeLabel({ agency: step.agency.name, shortName: short || step.line.name });
 }

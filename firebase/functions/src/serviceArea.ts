@@ -1,9 +1,9 @@
 /**
- * The app's service area: NYC, Nassau, and Suffolk as one rectangle. Mirrors
+ * The app's service area: NYC, Nassau, Suffolk, and Metro-North served destinations as one rectangle. Mirrors
  * mobile/src/data/serviceArea.ts (a test keeps the two identical).
  */
 export const SERVICE_AREA_BOUNDS = {
-  north: 41.2,
+  north: 41.85,
   south: 40.48,
   east: -71.85,
   west: -74.28,

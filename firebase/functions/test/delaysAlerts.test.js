@@ -34,6 +34,7 @@ function alertsFeed() {
       alert('other-line', [['MTASBWY', 'E']]),
       // Same route_id under another agency: Metro-North's line "A" isn't the A train.
       alert('other-agency', [['MNR', 'A']]),
+      alert('metro-north', [['MNR', '3']]),
       alert('bus', [['MTA NYCT', 'M15']], {}, 'Planned - Detour'),
     ],
   });
@@ -69,6 +70,7 @@ test('service alerts are matched to a route by agency and route_id, labeled by t
     assert.equal(a[0].header, 'Header now');
     assert.equal(a[0].description, 'Details now');
     assert.deepEqual((await getRouteAlerts('mn', 'M15')).map((alert) => [alert.label, alert.kind]), [['Detour in effect', 'detour']]);
+    assert.deepEqual((await getRouteAlerts('metronorth', '3')).map((alert) => alert.id), ['metro-north']);
     assert.deepEqual(await getRouteAlerts('lirr', '10'), []);
     // The MTA feed is read once for every route asked about.
     assert.equal(fetched.filter((url) => url === MTA_ALERTS_FEED_URL).length, 1);

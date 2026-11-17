@@ -44,6 +44,19 @@ test('a whole-word match outranks a longer word with the same start', async () =
   assert.equal(first.name, 'Penn Station');
 });
 
+test('Metro-North station search identifies the railroad and its branch lines', async () => {
+  const [poughkeepsie] = await searchStops('poughkeepsie', { lat: 41.7, lng: -73.9 });
+  assert.equal(poughkeepsie.name, 'Poughkeepsie');
+  assert.equal(poughkeepsie.id, 'metronorth:51');
+  assert.equal(poughkeepsie.agencyLabel, 'Metro-North Railroad');
+  assert.equal(poughkeepsie.mode, 'rail');
+  assert.deepEqual(poughkeepsie.routes.map((route) => route.shortName), ['Hudson']);
+
+  const [grandCentral] = await lookupStations([{ name: 'Grand Central', kind: 'rail' }], MIDTOWN);
+  assert.equal(grandCentral.name, 'Grand Central');
+  assert.ok(grandCentral.routes.some((route) => route.shortName === 'Hudson'));
+});
+
 test('the rider’s location breaks ties between equally good matches', async () => {
   const fromMidtown = (await searchStops('34 st', MIDTOWN)).map((stop) => stop.name);
   const fromBrooklyn = (await searchStops('34 st', { lat: 40.6551, lng: -74.0035 })).map((stop) => stop.name);

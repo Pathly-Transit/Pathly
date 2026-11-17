@@ -117,7 +117,7 @@ const preferences: { id: RoutePreference; label: string; icon: IconName }[] = [
 const transitModes: { id: TransitMode; label: string; icon: IconName }[] = [
   { id: 'subway', label: 'Subway', icon: 'subway' },
   { id: 'bus', label: 'Bus', icon: 'bus' },
-  { id: 'rail', label: 'LIRR', icon: 'rail' },
+  { id: 'rail', label: 'Commuter rail', icon: 'rail' },
   // Google can't be asked to avoid ferries, so this one only filters the results.
   { id: 'ferry', label: 'Ferry', icon: 'ferry' },
 ];

@@ -75,7 +75,13 @@ test('maps Google vehicle types to rider-facing modes', () => {
   assert.ok(steps.some((step) => step.kind === 'transit' && step.mode === 'rail' && step.agency.name === 'Long Island Rail Road'));
   assert.ok(steps.some((step) => step.kind === 'transit' && step.mode === 'bus' && step.agency.name === 'Suffolk County Transit'));
   assert.equal(modeForVehicle('SUBWAY'), 'subway');
+  assert.equal(modeForVehicle('COMMUTER_TRAIN'), 'rail');
   assert.equal(modeForVehicle('FERRY'), 'ferry');
+});
+
+test('matches Metro-North itinerary agency names to its own timetable', () => {
+  assert.deepEqual(agencyIdsForStep({ agency: { name: 'Metro-North Railroad' }, mode: 'rail' }), ['metronorth']);
+  assert.deepEqual(agencyIdsForStep({ agency: { name: 'MNR' }, mode: 'rail' }), ['metronorth']);
 });
 
 test('a route without a fare has none, unless the estimator prices it', () => {

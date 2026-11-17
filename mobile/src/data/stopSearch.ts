@@ -44,6 +44,7 @@ export function stopKindLabel(mode: StopSuggestion['mode'], agencyLabel: string)
   if (mode === 'subway') return 'Subway station';
   if (mode === 'bus') return 'Bus stop';
   if (mode === 'ferry') return 'Ferry landing';
+  if (/metro[\s-]*north|\bmnr\b/i.test(agencyLabel)) return 'Metro-North station';
   return `${agencyLabel} station`;
 }
 

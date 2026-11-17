@@ -145,6 +145,7 @@ const inboxDate = (date: Date | null) => (date ? date.toLocaleString('en-US', { 
 /** The agency names RouteBadge reads a line's shape from, for an inbox entry whose line isn't saved anymore. */
 const INBOX_AGENCY_NAMES: Record<string, string> = {
   lirr: 'LIRR',
+  metronorth: 'Metro-North Railroad',
   subway: 'MTA Subway',
   nice: 'NICE Bus',
   suffolk: 'Suffolk County Transit',
@@ -519,7 +520,7 @@ export function AccessibilitySettings({ onFeedback }: PageProps) {
 // ---------------------------------------------------------------------------------------------
 // Travel preferences
 
-const modeLabels: Record<TransitMode, string> = { subway: 'Subway', bus: 'Bus', rail: 'Rail', ferry: 'Ferry' };
+const modeLabels: Record<TransitMode, string> = { subway: 'Subway', bus: 'Bus', rail: 'Commuter rail', ferry: 'Ferry' };
 
 const FARE_TYPE_LABELS: Record<FareType, string> = { full: 'Full fare', reduced: 'Reduced fare', student: 'K-12 student', college: 'College student', fairFares: 'Fair Fares' };
 
@@ -834,7 +835,7 @@ export async function contactSupport(onFeedback: (message: string) => void): Pro
 }
 
 const FAQ: readonly { q: string; a: string }[] = [
-  { q: 'Where does Pathly work?', a: 'Pathly plans trips and shows live times for transit around New York and Long Island, including the LIRR, MTA subway and buses, NICE and Suffolk County buses, and NYC Ferry.' },
+  { q: 'Where does Pathly work?', a: 'Pathly plans trips and shows live times for transit around New York and Long Island, including the LIRR, Metro-North, MTA subway and buses, NICE and Suffolk County buses, and NYC Ferry.' },
   { q: 'Where do arrival times come from?', a: 'Live times come from each agency’s real-time feed when one is available, marked with a live signal. Otherwise Pathly shows the published timetable.' },
   { q: 'How are trips planned?', a: 'Trips come from Google’s transit planner. Your travel preferences set the modes, sorting, and walking used for each new search.' },
   { q: 'How do I save a place?', a: 'Tap the star on a trip, or go to Settings > Favorites to set Home, Work, and other places.' },

@@ -10,6 +10,7 @@ export const LINE_LAYER_GROUPS = [
   { id: 'subway', label: 'MTA Subway', icon: 'subway', agencies: ['subway'] },
   { id: 'bus', label: 'MTA Buses', icon: 'bus', agencies: ['bx', 'bk', 'mn', 'qn', 'si', 'busco'] },
   { id: 'lirr', label: 'LIRR', icon: 'rail', agencies: ['lirr'] },
+  { id: 'metronorth', label: 'Metro-North', icon: 'rail', agencies: ['metronorth'] },
   { id: 'ferry', label: 'NYC Ferries', icon: 'ferry', agencies: ['nycferry', 'siferry'] },
   { id: 'nice', label: 'NICE Buses', icon: 'bus', agencies: ['nice'] },
   { id: 'suffolk', label: 'Suffolk Buses', icon: 'bus', agencies: ['suffolk'] },

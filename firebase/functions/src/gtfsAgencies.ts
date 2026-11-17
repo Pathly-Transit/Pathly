@@ -11,7 +11,7 @@
 
 import type { GtfsSnapshotLimits } from './gtfsSnapshots';
 
-export type AgencyId = 'lirr' | 'subway' | 'nice' | 'suffolk' | BusAgencyId | 'nycferry' | 'siferry';
+export type AgencyId = 'lirr' | 'metronorth' | 'subway' | 'nice' | 'suffolk' | BusAgencyId | 'nycferry' | 'siferry';
 /** NYC Transit's five borough bus feeds and MTA Bus Company: one agency per published feed. */
 export type BusAgencyId = 'bx' | 'bk' | 'mn' | 'qn' | 'si' | 'busco';
 export const MTA_BUS_AGENCY_IDS: readonly BusAgencyId[] = ['bx', 'bk', 'mn', 'qn', 'si', 'busco'];
@@ -89,6 +89,7 @@ export type AgencyConfig = {
 };
 
 const LIRR_FEED_URL = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/lirr%2Fgtfs-lirr';
+const METRO_NORTH_FEED_URL = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr';
 
 const SUBWAY_FEED_BASE_URL = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/';
 /**
@@ -188,6 +189,20 @@ export const AGENCY_CONFIGS: Record<AgencyId, AgencyConfig> = {
     directionalStops: false,
     realtimeTripIdsMatchStatic: true,
     feedRequestsForRoute: () => [{ url: LIRR_FEED_URL }],
+  },
+  metronorth: {
+    id: 'metronorth',
+    displayName: 'Metro-North Railroad',
+    dataDir: 'metronorth',
+    staticFeedUrl: 'https://rrgtfsfeeds.s3.amazonaws.com/gtfsmnr.zip',
+    requiredStaticFallbacks: [{ routeId: '3', stopIds: ['1'] }],
+    // Stations use one stop_id for both directions; the GTFS direction_id is authoritative.
+    directionalStops: false,
+    // MTA live trip ids are train run identifiers and do not match the static trip_id scheme.
+    realtimeTripIdsMatchStatic: false,
+    serviceAlertAgencyIds: ['MNR'],
+    stopBounds: { south: 40.75, north: 41.82, west: -73.99, east: -72.92 },
+    feedRequestsForRoute: () => [{ url: METRO_NORTH_FEED_URL }],
   },
   subway: {
     id: 'subway',

@@ -40,8 +40,8 @@ Route Results gets real transit itineraries from the `planTrip` Cloud Function. 
 
 ## Live data sources
 
-- **Real-time vehicles and departures:** each agency's GTFS-RT feed. Agencies without one, such as the Staten Island Ferry, show timetable departures only.
-- **Service alerts:** MTA's public GTFS-RT alerts feed (subway, city buses, LIRR). Route detail lists these alerts under the departure times. If the alerts feed fails, the route shows no alerts instead of failing.
+- **Real-time vehicles and departures:** each agency's GTFS-RT feed. Metro-North and LIRR use their MTA railroad feeds; the MTA Bus Time, Swiftly, and NYC Ferry feeds serve their configured agencies. Agencies without a live feed, such as the Staten Island Ferry, show timetable departures only.
+- **Service alerts:** MTA's public GTFS-RT alerts feed (subway, city buses, LIRR, and Metro-North). Route detail lists these alerts under the departure times. If the alerts feed fails, the route shows no alerts instead of failing.
 
 ## Secrets
 
@@ -63,7 +63,7 @@ Don't create or share Firebase Admin service-account JSON keys for routine devel
 
 ## Static GTFS refresh
 
-Every day at 04:00 `America/New_York`, the deployed backend refreshes the official static GTFS feeds for every agency: LIRR, subway, NICE Bus, Suffolk County Transit, MTA city buses (five boroughs and MTA Bus Company), NYC Ferry, and the Staten Island Ferry. A successful run works like this:
+Every day at 04:00 `America/New_York`, the deployed backend refreshes the official static GTFS feeds for every agency: Metro-North, LIRR, subway, NICE Bus, Suffolk County Transit, MTA city buses (five boroughs and MTA Bus Company), NYC Ferry, and the Staten Island Ferry. A successful run works like this:
 
 1. It validates the full feed.
 2. It uploads an immutable ZIP to `gtfs/v1/<agency>/versions/<archive-sha256>.zip`.

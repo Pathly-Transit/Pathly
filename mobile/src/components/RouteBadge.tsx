@@ -9,7 +9,7 @@ export type TransitMode = 'subway' | 'bus' | 'rail' | 'ferry';
 
 export function transitModeForAgency(agency: string): TransitMode {
   if (agency === 'MTA Subway') return 'subway';
-  if (agency === 'LIRR') return 'rail';
+  if (agency === 'LIRR' || /metro[\s-]*north|\bmnr\b/i.test(agency)) return 'rail';
   if (agency === 'NYC Ferry' || agency === 'Staten Island Ferry') return 'ferry';
   return 'bus';
 }
@@ -34,6 +34,14 @@ const LIRR_BRANCH_CODES: Record<string, string> = {
   Ronkonkoma: 'RK',
   'West Hempstead': 'WH',
 };
+const METRO_NORTH_BRANCH_CODES: Record<string, string> = {
+  Danbury: 'DB',
+  Harlem: 'HM',
+  Hudson: 'HD',
+  'New Canaan': 'NC',
+  'New Haven': 'NH',
+  Waterbury: 'WB',
+};
 
 // Single-word route codes up to this long are shown whole (`SIM3C`, `BxM10`, `SIM10`): cutting
 // one down to initials would name a different route.
@@ -47,10 +55,11 @@ const MAX_ROUTE_CODE = 7;
 export function badgeLabel(route: { agency: string; shortName: string }): string {
   // Select Bus Service is signed the MTA's way: `M15+`, not `M15-SBS`.
   if (/-SBS$/i.test(route.shortName)) return `${route.shortName.replace(/-SBS$/i, '')}+`;
-  if (route.shortName.length <= MAX_BADGE_LABEL) return route.shortName;
-  if (!/\s/.test(route.shortName) && route.shortName.length <= MAX_ROUTE_CODE) return route.shortName;
   const name = route.shortName.replace(/\s+(Branch|Line|Service)$/i, '').trim();
   if (route.agency === 'LIRR' && LIRR_BRANCH_CODES[name]) return LIRR_BRANCH_CODES[name];
+  if (/metro[\s-]*north|\bmnr\b/i.test(route.agency) && METRO_NORTH_BRANCH_CODES[name]) return METRO_NORTH_BRANCH_CODES[name];
+  if (route.shortName.length <= MAX_BADGE_LABEL) return route.shortName;
+  if (!/\s/.test(route.shortName) && route.shortName.length <= MAX_ROUTE_CODE) return route.shortName;
   return name.split(/\s+/).map((word) => word[0]?.toUpperCase() ?? '').join('').slice(0, MAX_BADGE_LABEL);
 }
 

@@ -196,6 +196,7 @@ function transfersFor(route: RouteDetail, stop: LiveStop, live: Readonly<Record<
 /** How each live agency's own lines are labeled in the transfers data, to leave them out. */
 const OWN_TRANSFER_KIND: Record<NonNullable<RouteDetail['liveSource']>['agencyId'], Pick<StationTransfer, 'agency' | 'mode'>> = {
   lirr: { agency: 'LIRR', mode: 'rail' },
+  metronorth: { agency: 'Metro-North Railroad', mode: 'rail' },
   subway: { agency: 'NYC Subway', mode: 'subway' },
   nice: { agency: 'NICE Bus', mode: 'bus' },
   suffolk: { agency: 'Suffolk County Transit', mode: 'bus' },

@@ -19,6 +19,14 @@ test('a branch name finds the LIRR line', async () => {
   assert.ok(routes.some((route) => route.agencyId === 'lirr' && route.routeId === '10'));
 });
 
+test('Metro-North branch names and agency terms find discoverable lines', async () => {
+  const hudson = await searchRoutes('Hudson', 41.6, -73.9);
+  assert.ok(hudson.some((route) => route.agencyId === 'metronorth' && route.routeId === '1'));
+  const mnr = await searchRoutes('MNR', 41.6, -73.9);
+  assert.ok(mnr.length > 0);
+  assert.ok(mnr.every((route) => route.agencyId === 'metronorth'));
+});
+
 test('a query matching nothing finds nothing', async () => {
   assert.deepEqual(await searchRoutes('zzzz', ...MANHATTAN), []);
 });

@@ -64,7 +64,7 @@ function liveFeedRequests(agencyId: AgencyId, routeId: string) {
  * names/coordinates resolved via that agency's static GTFS data, delays from its real-time
  * feed) — the same logic regardless of agency; only the feed request(s) and static data
  * directory differ, both read from gtfsAgencies.ts. Most agencies publish one feed that
- * already bundles trip updates and vehicle positions together (LIRR, subway); Swiftly-hosted
+ * already bundles trip updates and vehicle positions together (LIRR, Metro-North, subway); Swiftly-hosted
  * agencies (NICE Bus, Suffolk County Transit) split those into two feeds instead, fetched in
  * parallel and merged here — downstream code still just sees one flat entity list either way.
  * Some agencies' realtime vehicle entities carry route_id directly on the trip descriptor (NYC

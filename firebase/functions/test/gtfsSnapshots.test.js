@@ -76,6 +76,7 @@ function currentLirrFiles(routeName = 'Port Jefferson') {
 }
 
 const AGENCY_FIXTURES = {
+  metronorth: [{ routeId: '3', stopIds: ['1', '2'] }],
   subway: [
     { routeId: 'E', stopIds: ['G06S', 'G06N'] },
     { routeId: '7', stopIds: ['701S', '701N'] },

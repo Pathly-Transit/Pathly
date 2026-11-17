@@ -347,9 +347,9 @@ export function describeRouteAt(agencyId: AgencyId, route: NearbyRouteInfo, lat:
 
 const MAX_ROUTE_RESULTS = 12;
 // Words a rider might search a line by besides its own names: its mode ("ferry", "bus", "train").
-const MODE_WORDS: Record<AgencyId, string> = { subway: 'subway train', lirr: 'rail train', nycferry: 'ferry boat', siferry: 'ferry boat', nice: 'bus', suffolk: 'bus', bx: 'bus', bk: 'bus', mn: 'bus', qn: 'bus', si: 'bus', busco: 'bus' };
+const MODE_WORDS: Record<AgencyId, string> = { subway: 'subway train', lirr: 'rail train', metronorth: 'metro north railroad commuter rail train mnr', nycferry: 'ferry boat', siferry: 'ferry boat', nice: 'bus', suffolk: 'bus', bx: 'bus', bk: 'bus', mn: 'bus', qn: 'bus', si: 'bus', busco: 'bus' };
 // Rail, subway and ferry lines come before buses: they're what people search for by name.
-const MODE_RANK: Record<AgencyId, number> = { subway: 0, lirr: 0, nycferry: 1, siferry: 1, nice: 2, suffolk: 2, bx: 2, bk: 2, mn: 2, qn: 2, si: 2, busco: 2 };
+const MODE_RANK: Record<AgencyId, number> = { subway: 0, lirr: 0, metronorth: 0, nycferry: 1, siferry: 1, nice: 2, suffolk: 2, bx: 2, bk: 2, mn: 2, qn: 2, si: 2, busco: 2 };
 const routeSearchText = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 /**
@@ -462,7 +462,7 @@ export function getAgencyLines(agencyId: AgencyId): Promise<AgencyLine[]> {
 export type StopTransfer = { agencyId: AgencyId; agencyDisplayName: string; routeId: string; shortName: string; color: string };
 
 // Station transfers (subway to LIRR at Jamaica) span a bigger complex than a bus stop pair does.
-const STATION_AGENCIES = new Set<AgencyId>(['subway', 'lirr', 'nycferry', 'siferry']);
+const STATION_AGENCIES = new Set<AgencyId>(['subway', 'lirr', 'metronorth', 'nycferry', 'siferry']);
 const STATION_TRANSFER_METERS = 250;
 const STOP_TRANSFER_METERS = 120;
 const GRID_DEGREES = 0.005;
@@ -552,6 +552,7 @@ export function getRouteTransfers(agencyId: AgencyId, routeId: string, direction
 const MAX_NEARBY_DISTANCE_METERS: Partial<Record<AgencyId, number>> = {
   subway: 1_600, // ~1 mile — subway stations are dense; anything farther isn't walkably "nearby".
   lirr: 8_000, // ~5 miles — LIRR branches are sparse; riders commonly drive to a station.
+  metronorth: 8_000, // Sparse commuter rail stations; riders commonly travel to a station.
   nice: 2_400, // ~1.5 miles — suburban bus stops are sparser than subway but denser than LIRR.
   suffolk: 2_400,
   nycferry: 2_400, // ferry landings are few and far between, like LIRR stations but on foot.
@@ -570,6 +571,7 @@ const MAX_NEARBY_ROUTES = 40;
 const MAX_NEARBY_CAP_METERS: Partial<Record<AgencyId, number>> = {
   subway: 6_000,
   lirr: 30_000,
+  metronorth: 30_000,
   nice: 12_000,
   suffolk: 12_000,
   nycferry: 12_000,

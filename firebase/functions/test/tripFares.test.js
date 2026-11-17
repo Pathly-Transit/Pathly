@@ -67,6 +67,7 @@ test('subway plus local bus is one $3.00 fare; express buses cost $7.25', () => 
 
 test('an unknown agency or an unmatched LIRR stop leaves the fare unknown', () => {
   assert.equal(estimate([leg('Hampton Jitney', { at: OFF_PEAK })]), undefined);
+  assert.equal(estimate([leg('Metro-North Railroad', { at: OFF_PEAK, mode: 'rail' })]), undefined);
   assert.equal(estimate([leg(LIRR, { from: { lat: 40.5, lng: -73 }, to: station('Penn Station'), at: OFF_PEAK, mode: 'rail' })]), undefined);
 });
 

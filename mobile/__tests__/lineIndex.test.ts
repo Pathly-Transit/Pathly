@@ -16,6 +16,8 @@ const index: IndexedLine[] = [
   line('mn', 'M15', '1 Av / 2 Av'),
   line('busco', 'X27', 'Bay Ridge - Manhattan Express'),
   line('lirr', 'Port Jefferson', 'Port Jefferson Branch', '1'),
+  line('metronorth', 'Hudson', 'Hudson', '1'),
+  line('metronorth', 'New Haven', 'New Haven', '3'),
   line('nycferry', 'ER', 'East River'),
   line('siferry', 'SIF', 'Staten Island Ferry'),
 ];
@@ -44,6 +46,14 @@ describe('line search on the device', () => {
     expect(names('ferry')).toEqual(['nycferry:ER', 'siferry:SIF']);
     expect(names('express bus')).toEqual(['busco:X27']);
     expect(names('sbs')).toEqual(expect.arrayContaining(['mn:M15-SBS', 'si:S79-SBS']));
+  });
+
+  it('finds Metro-North by agency, branch, and general commuter-rail terms', () => {
+    expect(names('metro north')).toEqual(expect.arrayContaining(['metronorth:Hudson', 'metronorth:New Haven']));
+    expect(names('MNR')).toEqual(expect.arrayContaining(['metronorth:Hudson', 'metronorth:New Haven']));
+    expect(names('Hudson')).toContain('metronorth:Hudson');
+    expect(names('commuter rail')).toEqual(expect.arrayContaining(['lirr:Port Jefferson', 'metronorth:Hudson', 'metronorth:New Haven']));
+    expect(names('Manhattan bus')).toEqual([]);
   });
 
   it("doesn't list buses for a place on their route: those are where they run, not their names", () => {

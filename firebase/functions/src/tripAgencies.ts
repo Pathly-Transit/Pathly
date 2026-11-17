@@ -3,6 +3,7 @@ import type { TransitStep } from './tripPlanning';
 
 /** Google's agency names, as Routes API transit steps report them. */
 export const LIRR_AGENCY = 'Long Island Rail Road';
+export const METRO_NORTH_AGENCY = 'Metro-North Railroad';
 export const NYCT_AGENCY = 'MTA New York City Transit';
 export const NICE_AGENCY = 'Nassau Inter-County Express';
 export const MTA_BUS_COMPANY_AGENCY = 'MTA Bus Company';
@@ -22,6 +23,9 @@ const isMtaBusCompany = (agency: string) => agency.toLowerCase() === MTA_BUS_COM
 /** Google splits Suffolk County Transit by area ("Suffolk County Transit - West", ...). */
 export const isSuffolk = (agency: string) => agency === 'Suffolk County Transit' || agency.startsWith('Suffolk County Transit -');
 
+/** Google has used both the MTA's official name and its shorter railroad name. */
+export const isMetroNorth = (agency: string) => /metro[\s-]*north|\bmnr\b/i.test(agency);
+
 /**
  * The Pathly agencies whose timetable a Google transit step may run on, most likely first. A city
  * bus could be in any of the borough feeds (a route can cross boroughs), so all of them are tried.
@@ -29,6 +33,7 @@ export const isSuffolk = (agency: string) => agency === 'Suffolk County Transit'
 export function agencyIdsForStep(step: Pick<TransitStep, 'agency' | 'mode'>): AgencyId[] {
   const name = step.agency.name;
   if (name === LIRR_AGENCY) return ['lirr'];
+  if (isMetroNorth(name)) return ['metronorth'];
   // The Staten Island Railway comes as an NYCT rail line; its timetable is the subway feed's SI.
   if (name === NYCT_AGENCY && (step.mode === 'subway' || step.mode === 'rail')) return ['subway'];
   if (((name === NYCT_AGENCY || name === MTA_AGENCY) && step.mode === 'bus') || isMtaBusCompany(name)) return [...MTA_BUS_AGENCY_IDS];
