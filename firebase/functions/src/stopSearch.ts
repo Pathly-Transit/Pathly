@@ -27,7 +27,7 @@ const COMPLEX_RADIUS_METERS = 300;
 const MIN_QUERY_LENGTH = 2;
 
 const AGENCY_MODES: Record<AgencyId, StopSuggestion['mode']> = {
-  lirr: 'rail', subway: 'subway', nice: 'bus', suffolk: 'bus',
+  lirr: 'rail', metronorth: 'rail', subway: 'subway', nice: 'bus', suffolk: 'bus',
   bx: 'bus', bk: 'bus', mn: 'bus', qn: 'bus', si: 'bus', busco: 'bus',
   nycferry: 'ferry', siferry: 'ferry',
 };

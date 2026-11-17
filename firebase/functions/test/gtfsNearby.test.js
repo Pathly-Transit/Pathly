@@ -50,18 +50,22 @@ test('Midtown lists every route within walking range without widening', async ()
 
 test('a cold start loads only the agencies that could be nearby', () => {
   // Stony Brook: none of the city's buses or ferries.
-  assert.deepEqual(agenciesNear(40.9126, -73.1234), ['lirr', 'subway', 'nice', 'suffolk']);
+  assert.deepEqual(agenciesNear(40.9126, -73.1234), ['lirr', 'metronorth', 'subway', 'nice', 'suffolk']);
   // Valley Stream, at the city line: Queens buses (and those of MTA Bus) reach it, Staten Island's don't.
   const valleyStream = agenciesNear(40.6643, -73.7085);
   assert.ok(valleyStream.includes('qn') && valleyStream.includes('busco'));
   assert.ok(!valleyStream.includes('si') && !valleyStream.includes('bx'));
   // Midtown: everything.
   assert.deepEqual(agenciesNear(40.7549, -73.984), Object.keys(AGENCY_CONFIGS));
+  // A northern Westchester station loads Metro-North without loading the Long Island buses.
+  const metroNorth = agenciesNear(41.6, -73.9);
+  assert.ok(metroNorth.includes('metronorth'));
+  assert.ok(!metroNorth.includes('mn'));
 });
 
 test('route transfers load only the agencies with a stop near the route', () => {
   // Stony Brook and Port Jefferson: no city bus or ferry stop within transfer distance.
-  assert.deepEqual(agenciesNearStops([{ lat: 40.9204, lon: -73.1283 }, { lat: 40.9346, lon: -73.0525 }]), ['lirr', 'subway', 'nice', 'suffolk']);
+  assert.deepEqual(agenciesNearStops([{ lat: 40.9204, lon: -73.1283 }, { lat: 40.9346, lon: -73.0525 }]), ['lirr', 'metronorth', 'subway', 'nice', 'suffolk']);
   // A route that reaches Jamaica picks up the Queens buses there.
   assert.ok(agenciesNearStops([{ lat: 40.9204, lon: -73.1283 }, { lat: 40.6995, lon: -73.8081 }]).includes('qn'));
   // A route with no stops needs only the agencies loaded everywhere.

@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { consumeTokenBucket, resetCallableSecurityForTests, setSharedRateLimitConsumerForTests } = require('../lib/callableSecurity');
-const { planTrip, requiredPlanTripRequest, setTripAlertsLookupForTests, setTripStopMatcherForTests } = require('../lib');
+const { planTrip, requiredPlanTripRequest, setTripAlertsLookupForTests, setTripLiveLookupForTests, setTripStopMatcherForTests } = require('../lib');
 const { SERVICE_AREA_BOUNDS } = require('../lib/serviceArea');
 
 const fixture = (name) => fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
@@ -29,6 +29,7 @@ test.beforeEach(() => {
 test.afterEach(() => {
   global.fetch = originalFetch;
   setTripStopMatcherForTests(undefined);
+  setTripLiveLookupForTests(undefined);
   setTripAlertsLookupForTests(undefined);
   setSharedRateLimitConsumerForTests(undefined);
 });
@@ -83,6 +84,32 @@ test('rejects a place-only endpoint that Google locates outside the service area
   await assert.rejects(() => run(validData), (error) => error.details?.reason === 'out-of-area');
 });
 
+test('accepts and plans a Metro-North destination beyond the former service-area bounds', async () => {
+  const raw = JSON.parse(fixture('routes-sbu-penn.json'));
+  const route = raw.routes[0];
+  route.legs[0].endLocation = { latLng: { latitude: 41.814722, longitude: -73.567 } };
+  const metroNorth = route.legs[0].steps.find((step) => step.transitDetails)?.transitDetails;
+  metroNorth.transitLine = {
+    agencies: [{ name: 'Metro-North Railroad' }],
+    name: 'Harlem',
+    nameShort: 'Harlem',
+    color: '#0039A6',
+    vehicle: { type: 'COMMUTER_TRAIN', name: { text: 'Train' } },
+  };
+  metroNorth.stopDetails.departureStop.name = 'Grand Central';
+  metroNorth.stopDetails.arrivalStop.name = 'Wassaic';
+  delete route.travelAdvisory;
+  delete route.localizedValues;
+  stubRoutes(raw);
+  setTripLiveLookupForTests(async () => []);
+
+  const { itineraries } = await run({ ...validData, destination: { placeId: 'wassaic', label: 'Wassaic' } });
+  const metroNorthItinerary = itineraries.find((itinerary) => itinerary.steps.some((step) => step.kind === 'transit' && step.agency.name === 'Metro-North Railroad'));
+  assert.ok(metroNorthItinerary, 'the Metro-North itinerary is returned');
+  assert.equal(metroNorthItinerary.fare, undefined, 'no fare is inferred when the routing service has none');
+  assert.ok(fetchCalls.length > 0, 'the request reached the routing service');
+});
+
 test('maps a Google failure to unavailable and an empty answer to no itineraries', async () => {
   stubRoutes({ error: { code: 403, status: 'PERMISSION_DENIED', message: 'Routes API has not been used' } }, 403);
   await assert.rejects(() => run(validData), (error) => error.code === 'unavailable');
@@ -123,6 +150,8 @@ test('validates the request shape and the plannable time window', () => {
 
 test('the backend service area matches the app\'s', () => {
   const mobile = fs.readFileSync(path.join(__dirname, '../../../mobile/src/data/serviceArea.ts'), 'utf8');
+  // Metro-North extends the former NYC/Suffolk service area north to its upper stations.
+  assert.equal(SERVICE_AREA_BOUNDS.north, 41.85, 'backend north includes Metro-North destinations');
   for (const [side, value] of Object.entries(SERVICE_AREA_BOUNDS)) {
     assert.match(mobile, new RegExp(`${side}: ${String(value).replace('.', '\\.')},`), `mobile ${side} is ${value}`);
   }
