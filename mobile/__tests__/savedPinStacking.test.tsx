@@ -1,18 +1,9 @@
-/* eslint-disable @typescript-eslint/no-require-imports -- Jest's hoisted mock factory cannot use module-scope imports. */
-import { render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 
-import { GoogleMapView as WebGoogleMapView } from '../src/components/GoogleMapView.web';
-import { metersPerPixelAtZoom, metersPerPixelForSpan, savedPinSvgUrl, stackSavedPins } from '../src/data/savedPlacePin';
+import { HomeMap } from '../src/components/HomeMap';
+import { metersPerPixelAtZoom, stackSavedPins } from '../src/data/savedPlacePin';
 import { placeToLocation, type SavedLocation } from '../src/data/userData';
 import { AppSettingsProvider } from '../src/theme/AppSettings';
-
-jest.mock('@react-google-maps/api', () => {
-  const { View } = require('react-native');
-  const GoogleMap = ({ children, ...props }: { children: React.ReactNode }) => <View {...props} testID="web-google-map">{children}</View>;
-  const Marker = (props: { title?: string }) => <View {...props} testID={props.title === 'Your location' ? 'web-rider-marker' : `web-${props.title}`} />;
-  const Rectangle = (props: object) => <View {...props} testID="web-service-area" />;
-  return { GoogleMap, Marker, Rectangle, useJsApiLoader: () => ({ isLoaded: true }) };
-});
 
 // Two places about 300 m apart in Midtown, and one in Brooklyn.
 const HOME = { latitude: 40.7549, longitude: -73.984 };
@@ -37,47 +28,32 @@ describe('stackSavedPins', () => {
       { position: FAR, leader: true },
     ]);
   });
-
-  it('reads the native map scale from its region span', () => {
-    // 0.05 degrees of longitude across a 400 px wide map at New York's latitude: about 10.5 m a pixel.
-    expect(metersPerPixelForSpan(0.05, 400, 40.75)).toBeCloseTo(10.54, 1);
-  });
-
-  it('draws the marker as one outlined circle', () => {
-    const svg = decodeURIComponent(savedPinSvgUrl('#0B4F9C', '#FFFFFF'));
-    expect(svg.match(/<(path|circle)\b/g)).toEqual(['<circle']);
-  });
-
-  it('draws an icon centered in the badge, in the ring color', () => {
-    const svg = decodeURIComponent(savedPinSvgUrl('#0B4F9C', '#FFFFFF', ['M0,0H256V256Z']));
-    expect(svg).toContain('<g transform="translate(7 7) scale(0.0625)" fill="#FFFFFF"><path d="M0,0H256V256Z"/></g>');
-  });
 });
 
-describe('web home map', () => {
-  beforeAll(() => {
-    class Point { constructor(public x: number, public y: number) {} }
-    Object.assign(globalThis, { google: { maps: { Point, SymbolPath: { CIRCLE: 'circle' } } } });
-  });
-
+describe('home map saved places', () => {
   const saved = (id: string, title: string, location: typeof HOME): SavedLocation => ({
     id,
     address: placeToLocation({ id, title, subtitle: '', location }, 'Destination'),
     dateSaved: null,
   });
 
-  it('draws colliding saved places fully overlapping, with only the top pin\'s icon', () => {
+  it("draws colliding saved places fully overlapping, with only the top pin's icon, and parts them zoomed in", () => {
     const screen = render(
       <AppSettingsProvider>
-        <WebGoogleMapView initialCamera={{ ...HOME, zoom: 11 }} location={HOME} savedLocations={[saved('home', 'Home', HOME), saved('gym', 'Gym', GYM)]} />
+        <HomeMap initialCamera={{ ...HOME, zoom: 11 }} location={HOME} savedLocations={[saved('home', 'Home', HOME), saved('gym', 'Gym', GYM)]} />
       </AppSettingsProvider>,
     );
-    const home = screen.getByTestId('web-Plan a trip to Home');
-    const gym = screen.getByTestId('web-Plan a trip to Gym');
-    expect(gym.props.position).toEqual(home.props.position);
-    const drawsIcon = (marker: typeof home) => decodeURIComponent(marker.props.icon.url).includes('<path');
-    expect(drawsIcon(home)).toBe(true);
-    expect(drawsIcon(gym)).toBe(false);
-    expect(home.props.zIndex).toBeGreaterThan(gym.props.zIndex);
+    const hidden = { includeHiddenElements: true };
+    const home = () => screen.getByTestId('saved-place-marker-home', hidden);
+    const gym = () => screen.getByTestId('saved-place-marker-gym', hidden);
+    expect(gym().props.coordinate).toEqual(home().props.coordinate);
+    expect(home().props.zIndex).toBeGreaterThan(gym().props.zIndex);
+    // The stacked pin's badge draws no icon of its own.
+    expect(home().props.children.props.icon).not.toBeNull();
+    expect(gym().props.children.props.icon).toBeNull();
+
+    act(() => fireEvent(screen.getByTestId('home-map'), 'cameraIdle', { center: HOME, zoom: 16, bearing: 0, pitch: 0, userInteraction: true }));
+    expect(gym().props.coordinate).toEqual(GYM);
+    expect(gym().props.children.props.icon).not.toBeNull();
   });
 });

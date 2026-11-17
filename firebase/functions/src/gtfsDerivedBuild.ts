@@ -7,6 +7,7 @@ import {
   GEOMETRY_DIR,
   DERIVED_VERSION,
   MANIFEST_FILE,
+  ROUTING_FILE,
   STOP_INDEXES_FILE,
   STOP_TIMES_DIR,
   derivedSources,
@@ -18,6 +19,7 @@ import {
 } from './gtfsDerived';
 import { readAgencyStaticData, readShapes, type ShapePoint, type StopTimeRow } from './gtfsFeed';
 import { computeRouteGeometry } from './gtfsGeometry';
+import { RoutingTimetableBuilder, stopTimeFlags, type RoutingStopTimeRow } from './routingTimetableBuild';
 
 /**
  * Prepares one agency's timetable for fast cold starts: reads stop_times.txt in `dataDir` once
@@ -26,6 +28,7 @@ import { computeRouteGeometry } from './gtfsGeometry';
  *                               many trips call at each stop (ordered pairs, in feed order)
  *   - stop_times/<route>.json   { rows: [tripId, stopId, arrival, departure, sequence][] }
  *   - geometry/<route>.json     { 0, 1 }: each direction's computeRouteGeometry result
+ *   - routing.bin               the whole timetable laid out for trip planning (routingTimetable.ts)
  *   - manifest.json             the source files (size + mtime) the output was built from
  * Used by scripts/build-gtfs-index.js for deploys and by the daily snapshot refresh.
  *
@@ -58,7 +61,7 @@ export async function buildDerivedData(agencyId: AgencyId, dataDir: string, outD
   const stopTimesPath = join(dataDir, 'stop_times.txt');
   if (existsSync(stopTimesPath)) {
     const parser = createReadStream(stopTimesPath).pipe(parse({ bom: true, columns: true }));
-    for await (const row of parser as AsyncIterable<StopTimeRow>) {
+    for await (const row of parser as AsyncIterable<StopTimeRow & { pickup_type?: string; drop_off_type?: string }>) {
       const trip = tripsById.get(row.trip_id);
       if (!trip) continue;
       const { routeId, directionId } = trip;
@@ -66,7 +69,9 @@ export async function buildDerivedData(agencyId: AgencyId, dataDir: string, outD
       if (routes) routes.add(routeId);
       else stopRoutes.set(row.stop_id, new Set([routeId]));
       const lines = pendingByRoute.get(routeId);
-      const entry: DerivedStopTimeRow = [row.trip_id, row.stop_id, row.arrival_time, row.departure_time, Number(row.stop_sequence)];
+      // Spilled with its pickup/drop-off rules for the routing timetable; the route's stop_times
+      // file keeps the first five fields.
+      const entry: RoutingStopTimeRow = [row.trip_id, row.stop_id, row.arrival_time, row.departure_time, Number(row.stop_sequence), stopTimeFlags(row.pickup_type, row.drop_off_type)];
       if (lines) lines.push(JSON.stringify(entry));
       else pendingByRoute.set(routeId, [JSON.stringify(entry)]);
       pendingCount += 1;
@@ -92,20 +97,25 @@ export async function buildDerivedData(agencyId: AgencyId, dataDir: string, outD
   writeFileSync(join(outDir, STOP_INDEXES_FILE), JSON.stringify(indexes));
 
   let shapes: Map<string, ShapePoint[]> | undefined;
+  const loadShapes = () => (shapes ??= readShapes(dataDir));
   const directionalStops = agencyConfig(agencyId).directionalStops;
+  const routing = new RoutingTimetableBuilder(agencyId, dataDir, staticData, loadShapes);
   for (const routeId of pendingByRoute.keys()) {
-    const rows = readFileSync(spillPath(routeId), 'utf-8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as DerivedStopTimeRow);
+    const spilled = readFileSync(spillPath(routeId), 'utf-8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as RoutingStopTimeRow);
+    routing.addRoute(routeId, spilled);
+    const rows = spilled.map((row): DerivedStopTimeRow => [row[0], row[1], row[2], row[3], row[4]]);
     writeFileSync(join(outDir, STOP_TIMES_DIR, routeFileName(routeId)), JSON.stringify({ rows }));
     const input = {
       directionalStops,
       stopsById: staticData.stopsById,
       tripsById,
       byTrip: indexStopTimeRows(rows).byTrip,
-      shapes: () => (shapes ??= readShapes(dataDir)),
+      shapes: loadShapes,
     };
     const geometry: DerivedRouteGeometry = { 0: computeRouteGeometry(input, 0), 1: computeRouteGeometry(input, 1) };
     writeFileSync(join(outDir, GEOMETRY_DIR, routeFileName(routeId)), JSON.stringify(geometry));
   }
+  writeFileSync(join(outDir, ROUTING_FILE), routing.finish());
   rmSync(spillDir, { recursive: true, force: true });
   // Last, so a manifest only ever describes a complete set of files.
   writeFileSync(join(outDir, MANIFEST_FILE), JSON.stringify({ version: DERIVED_VERSION, sources: derivedSources(dataDir) }));

@@ -14,13 +14,16 @@ export const STOP_INDEXES_FILE = 'stop-indexes.json';
 export const STOP_TIMES_DIR = 'stop_times';
 export const GEOMETRY_DIR = 'geometry';
 export const MANIFEST_FILE = 'manifest.json';
+/** The agency's timetable laid out for trip planning (routingTimetable.ts). */
+export const ROUTING_FILE = 'routing.bin';
 /**
  * Bumped whenever the file format changes, so older output is treated as stale. A bump makes every
  * instance ignore the published prepared files (raw GTFS instead: far slower, and the city bus
  * feeds outgrow the callables' memory) until the refresh job rebuilds them, so content-only fixes
  * are applied when the files are read instead (e.g. transitNames.ts in loadPreparedRouteGeometry).
+ * 4: added routing.bin.
  */
-export const DERIVED_VERSION = 3;
+export const DERIVED_VERSION = 4;
 
 /**
  * The agency-wide stop indexes, as ordered pairs (in the order a full scan first meets them):

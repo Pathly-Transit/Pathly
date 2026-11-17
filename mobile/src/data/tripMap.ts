@@ -52,7 +52,7 @@ export type TripMapProps = {
   testID?: string;
 };
 
-/** Where an interactive trip map rests: native keeps its region span; web keeps its zoom. */
+/** Where an interactive trip map rests: its center and zoom (a region span, from older maps). */
 export type TripMapCamera = { latitude: number; longitude: number; latitudeDelta?: number; longitudeDelta?: number; zoom?: number };
 
 export type TripMapLeg = { path: LatLng[]; walk: boolean; color?: string };

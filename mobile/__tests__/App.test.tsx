@@ -268,7 +268,7 @@ describe('Pathly prototype navigation', () => {
     fireEvent.press(screen.getByTestId('search-choose-on-map'));
     expect(screen.getByTestId('map-picker')).toBeTruthy();
     const pickerMap = screen.getByTestId('map-picker-map', { includeHiddenElements: true });
-    expect(pickerMap.props.mapPadding.bottom).toBeGreaterThan(0);
+    expect(pickerMap.props.padding.bottom).toBeGreaterThan(0);
     // Back returns to the search, still empty.
     fireEvent.press(screen.getByTestId('map-picker-back'));
     expect(screen.getByTestId('search-choose-on-map')).toBeTruthy();
@@ -794,9 +794,9 @@ describe('Pathly prototype navigation', () => {
     fireEvent.press(screen.getByTestId(`search-result-view-${LIRR_TRIP.id}`));
     const map = screen.getByTestId('search-trip-route-map', { includeHiddenElements: true });
     const [, first, second] = LIRR_TRIP.steps as [WalkStep, TransitStep, TransitStep];
-    expect(within(map).getByTestId('trip-map-walk-0', { includeHiddenElements: true }).props.lineDashPattern).toBeTruthy();
-    expect(within(map).getByTestId('trip-map-transit-1', { includeHiddenElements: true }).props.strokeColor).toBe(first.line.color);
-    expect(within(map).getByTestId('trip-map-transit-2', { includeHiddenElements: true }).props.strokeColor).toBe(second.line.color);
+    expect(within(map).getByTestId('trip-map-walk-0', { includeHiddenElements: true }).props.dotted).toBe(true);
+    expect(within(map).getByTestId('trip-map-transit-1', { includeHiddenElements: true }).props.color).toBe(first.line.color);
+    expect(within(map).getByTestId('trip-map-transit-2', { includeHiddenElements: true }).props.color).toBe(second.line.color);
     expect(within(map).getByTestId('trip-map-start-0', { includeHiddenElements: true })).toBeTruthy();
     expect(within(map).getAllByTestId(/^trip-map-end-/, { includeHiddenElements: true })).toHaveLength(1);
   });
@@ -1082,37 +1082,37 @@ describe('Pathly prototype navigation', () => {
 
   it('marks every stop in between on the interactive trip map, and labels a tapped or listed stop', async () => {
     const hidden = { includeHiddenElements: true };
-    const maps = jest.requireMock('react-native-maps') as { mockAnimateCamera: jest.Mock };
+    const kit = jest.requireMock('../src/map/MapCanvas') as { mockEaseTo: jest.Mock };
     const screen = await openResults();
     fireEvent.press(screen.getByTestId(`search-result-view-${LIRR_TRIP.id}`));
     const legs = LIRR_TRIP.steps.filter((step): step is TransitStep => step.kind === 'transit');
     // From far away the stops in between would pile up, so they wait until the map is zoomed in.
     const tripMap = screen.getByTestId('search-trip-route-map', hidden);
-    fireEvent(tripMap, 'regionChangeComplete', { latitude: 40.8, longitude: -73.4, latitudeDelta: 8, longitudeDelta: 8 });
+    const restAt = (zoom: number) => fireEvent(tripMap, 'cameraIdle', { center: { latitude: 40.8, longitude: -73.4 }, zoom, bearing: 0, pitch: 0, userInteraction: false });
+    restAt(6);
     expect(screen.queryAllByTestId(/^trip-map-via-/, hidden)).toHaveLength(0);
     expect(screen.getAllByTestId(/^trip-map-stop-/, hidden).length).toBeGreaterThan(0);
-    fireEvent(tripMap, 'regionChangeComplete', { latitude: 40.8, longitude: -73.4, latitudeDelta: 0.002, longitudeDelta: 0.002 });
+    restAt(18);
     const vias = screen.getAllByTestId(/^trip-map-via-/, hidden);
     expect(vias).toHaveLength(legs.reduce((total, leg) => total + (leg.stops?.length ?? 0), 0));
-    expect(StyleSheet.flatten(within(vias[0]!).UNSAFE_getByType(View).props.style).borderColor).toBe(legs[0]!.line.color);
+    expect(StyleSheet.flatten(vias[0]!.props.style).borderColor).toBe(legs[0]!.line.color);
 
     // The map takes gestures where the content doesn't cover it.
     const map = screen.getByTestId('search-trip-route-map', hidden);
-    expect(map.props.scrollEnabled).toBe(true);
-    expect(map.props.zoomEnabled).toBe(true);
+    expect(map.props.interactive).toBe(true);
 
     fireEvent.press(vias[0]!);
     const firstStop = legs[0]!.stops![0]!;
     expect(within(screen.getByTestId('trip-map-stop-label', hidden)).getByText(`${firstStop.name}, ${formatTripClock(firstStop.time)}`, hidden)).toBeTruthy();
-    fireEvent(map, 'press', { nativeEvent: { action: 'press' } });
+    fireEvent(map, 'press', { latitude: 40.8, longitude: -73.4 });
     expect(screen.queryByTestId('trip-map-stop-label', hidden)).toBeNull();
 
     // A stop pressed in the list centers the map on it and labels it.
-    maps.mockAnimateCamera.mockClear();
+    kit.mockEaseTo.mockClear();
     fireEvent.press(screen.getByTestId('search-trip-stops-toggle-0'));
     fireEvent.press(screen.getByTestId('search-trip-stop-0-1'));
     const second = legs[0]!.stops![1]!;
-    expect(maps.mockAnimateCamera).toHaveBeenCalledWith(expect.objectContaining({ center: { latitude: expect.closeTo(second.location.lat, 2), longitude: second.location.lng } }), expect.anything());
+    expect(kit.mockEaseTo).toHaveBeenCalledWith(expect.objectContaining({ center: { latitude: expect.closeTo(second.location.lat, 2), longitude: second.location.lng } }));
     expect(within(screen.getByTestId('trip-map-stop-label', hidden)).getByText(`${second.name}, ${formatTripClock(second.time)}`, hidden)).toBeTruthy();
     // No Fit button: the map has only Save and Locate.
     expect(screen.queryByLabelText('Show the whole trip')).toBeNull();
@@ -1120,34 +1120,36 @@ describe('Pathly prototype navigation', () => {
 
   it('keeps the results map where the rider moved it until the trip itself changes', async () => {
     const hidden = { includeHiddenElements: true };
-    const panned = { latitude: 40.8, longitude: -73.3, latitudeDelta: 0.02, longitudeDelta: 0.02 };
+    const panned = { center: { latitude: 40.8, longitude: -73.3 }, zoom: 14.5 };
     const screen = await openResults();
     const map = screen.getByTestId('results-map', hidden);
-    fireEvent(map, 'panDrag');
-    fireEvent(map, 'regionChangeComplete', panned, { isGesture: true });
+    // Where a trip map opens with nothing held: over the region, until the trip is framed.
+    const unheld = map.props.initialCamera;
+    fireEvent(map, 'userGesture');
+    fireEvent(map, 'cameraIdle', { ...panned, bearing: 0, pitch: 0, userInteraction: true });
 
     // Opening the search and backing out reopens the map there instead of reframing the trip.
     fireEvent.press(screen.getByTestId('destination-field'));
     fireEvent.press(screen.getByTestId('search-back'));
     await screen.findByTestId('route-results-view');
-    expect(screen.getByTestId('results-map', hidden).props.initialRegion).toEqual(panned);
+    expect(screen.getByTestId('results-map', hidden).props.initialCamera).toEqual(panned);
 
     // So does coming back from an opened trip.
     fireEvent.press(await screen.findByTestId(`search-result-view-${LIRR_TRIP.id}`));
     fireEvent.press(screen.getByTestId('search-trip-back'));
-    expect(screen.getByTestId('results-map', hidden).props.initialRegion).toEqual(panned);
+    expect(screen.getByTestId('results-map', hidden).props.initialCamera).toEqual(panned);
 
     // A new address frames the new trip.
     fireEvent.press(screen.getByTestId('destination-field'));
     await pickPlace(screen, 'times', 'times-square');
     await screen.findByTestId('route-results-view');
-    expect(screen.getByTestId('results-map', hidden).props.initialRegion).toBeUndefined();
+    expect(screen.getByTestId('results-map', hidden).props.initialCamera).toEqual(unheld);
   });
 
   it('lets the uncovered trip maps take gestures while the page and controls keep working', async () => {
     const hidden = { includeHiddenElements: true };
     const screen = await openResults();
-    expect(screen.getByTestId('results-map', hidden).props.scrollEnabled).toBe(true);
+    expect(screen.getByTestId('results-map', hidden).props.interactive).toBe(true);
     const mapViewport = StyleSheet.flatten(screen.getByTestId('results-map-viewport').props.style);
     // The results sheet scrolls over a fixed map, as on Home.
     expect(mapViewport.height).toBe(StyleSheet.flatten(screen.getByTestId('results-scroll-map-window').props.style).height);
@@ -1230,13 +1232,13 @@ describe('Pathly prototype navigation', () => {
   it('renders route detail, trip detail, and settings dark', async () => {
     grantLocation();
     const screen = await renderDark();
-    // Both Google maps are recolored dark (and still hide places), not left bright.
-    const isDarkMap = (map: { props: { customMapStyle?: { featureType?: string; elementType?: string; stylers: { color?: string }[] }[] } }) => {
-      const style = map.props.customMapStyle ?? [];
-      expect(style.find((rule) => !rule.featureType && rule.elementType === 'geometry')?.stylers[0]?.color).toBe('#16171A');
-      expect(style).toContainEqual({ featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] });
+    // Both maps draw the dark base map (which still hides places), not a bright one.
+    const isDarkMap = (map: { props: { mapStyle?: { layers: { id: string; 'source-layer'?: string; paint?: Record<string, unknown> }[] } } }) => {
+      const layers = map.props.mapStyle?.layers ?? [];
+      expect(layers.find((layer) => layer.id === 'background')?.paint?.['background-color']).toBe('#16171A');
+      expect(layers.filter((layer) => layer['source-layer'] === 'poi').every((layer) => layer.id.startsWith('station-'))).toBe(true);
     };
-    isDarkMap(await screen.findByTestId('google-map-view', { includeHiddenElements: true }));
+    isDarkMap(await screen.findByTestId('home-map', { includeHiddenElements: true }));
     fireEvent.press(await screen.findByTestId(`route-card-${PJ_CARD}-primary`));
     expect(backgroundOf(screen.getByTestId('route-detail-content'))).toBe(darkColors.surface);
     isDarkMap(await screen.findByTestId('route-map', { includeHiddenElements: true }));
@@ -1265,8 +1267,9 @@ describe('Pathly prototype navigation', () => {
     fireEvent.press(await screen.findByTestId(`route-card-${PJ_CARD}-primary`));
     expect(await screen.findByTestId('route-map', hidden)).toBeTruthy();
     // Stop dots show once they're zoomed apart.
-    const zoomIn = () => fireEvent(screen.getByTestId('route-map', hidden), 'regionChangeComplete', { latitude: 40.8, longitude: -73.4, latitudeDelta: 0.001, longitudeDelta: 0.001 });
-    fireEvent(screen.getByTestId('route-map', hidden), 'regionChangeComplete', { latitude: 40.8, longitude: -73.4, latitudeDelta: 2, longitudeDelta: 2 });
+    const restAt = (zoom: number) => fireEvent(screen.getByTestId('route-map', hidden), 'cameraIdle', { center: { latitude: 40.8, longitude: -73.4 }, zoom, bearing: 0, pitch: 0, userInteraction: false });
+    const zoomIn = () => restAt(19);
+    restAt(8);
     expect(screen.queryAllByTestId(/^route-stop-/, hidden).length).toBeLessThanOrEqual(1);
     zoomIn();
     await waitFor(() => expect(screen.getAllByTestId(/^route-stop-/, hidden)).toHaveLength(22));
@@ -1564,11 +1567,11 @@ describe('Pathly prototype navigation', () => {
     await screen.findByTestId(`route-card-${PJ_CARD}`);
     expect(screen.queryByTestId('search-center')).toBeNull();
 
-    const map = screen.getByTestId('google-map-view', { includeHiddenElements: true });
+    const map = screen.getByTestId('home-map', { includeHiddenElements: true });
     const nearbyBusy = () => screen.getByTestId('nearby-routes').props.accessibilityState?.busy;
     expect(nearbyBusy()).toBe(false);
-    fireEvent(map, 'panDrag');
-    fireEvent(map, 'regionChangeComplete', { latitude: 40.7685, longitude: -73.5251, latitudeDelta: 0.05, longitudeDelta: 0.05 });
+    fireEvent(map, 'userGesture');
+    fireEvent(map, 'cameraIdle', { center: { latitude: 40.7685, longitude: -73.5251 }, zoom: 13, bearing: 0, pitch: 0, userInteraction: true });
     // The old area's cards fade at once (still tappable, nothing moves) until the new area answers.
     expect(nearbyBusy()).toBe(true);
     await waitFor(() => expect(nearbyBusy()).toBe(false), { timeout: 2000 });
@@ -1582,7 +1585,7 @@ describe('Pathly prototype navigation', () => {
 
     // A programmatic move (no rider drag) doesn't start a center search.
     nearby.mockClear();
-    fireEvent(map, 'regionChangeComplete', { latitude: 40.9, longitude: -73.1, latitudeDelta: 0.05, longitudeDelta: 0.05 });
+    fireEvent(map, 'cameraIdle', { center: { latitude: 40.9, longitude: -73.1 }, zoom: 13, bearing: 0, pitch: 0, userInteraction: false });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 700));
     });
@@ -1597,80 +1600,73 @@ describe('Pathly prototype navigation', () => {
     await waitFor(() => expect(callableNamed('getRouteLiveStatus')).toHaveBeenCalledWith(expect.objectContaining({ lat: SERVICE_AREA_FALLBACK.latitude, lon: SERVICE_AREA_FALLBACK.longitude })));
   });
 
-  it("hides Google's points of interest and grays highways on the home and route maps", async () => {
-    const hidesPlaces = (map: { props: { customMapStyle?: unknown } }) => expect(map.props.customMapStyle).toEqual(expect.arrayContaining([
-      { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-      { featureType: 'road.highway', elementType: 'geometry.fill', stylers: [{ color: '#DADCE0' }] },
-    ]));
+  it('hides places\' labels (not stations\') and grays highways on the home and route maps', async () => {
+    const hidesPlaces = (map: { props: { mapStyle: { layers: { id: string; 'source-layer'?: string; paint?: Record<string, unknown> }[] } } }) => {
+      const { layers } = map.props.mapStyle;
+      expect(layers.filter((layer) => layer['source-layer'] === 'poi').map((layer) => layer.id)).toEqual(['station-dot', 'station-label']);
+      expect(layers.find((layer) => layer.id === 'road-road-motorway')?.paint?.['line-color']).toBe('#DADCE0');
+    };
     const screen = await renderHome();
     fireEvent.press(await screen.findByTestId(`route-card-${PJ_CARD}-primary`));
     hidesPlaces(await screen.findByTestId('route-map', { includeHiddenElements: true }));
     fireEvent.press(screen.getByTestId('route-back'));
-    hidesPlaces(await screen.findByTestId('google-map-view', { includeHiddenElements: true }));
+    hidesPlaces(await screen.findByTestId('home-map', { includeHiddenElements: true }));
   });
 
   it('shows a compass after the rider rotates the home map, and reorients to north', async () => {
-    const maps = jest.requireMock('react-native-maps') as { mockAnimateCamera: jest.Mock; mockCamera: { heading: number; pitch: number } };
+    const kit = jest.requireMock('../src/map/MapCanvas') as { mockEaseTo: jest.Mock };
     const screen = await renderHome();
     await screen.findByTestId(`route-card-${PJ_CARD}`);
-    const map = screen.getByTestId('google-map-view', { includeHiddenElements: true });
-    const settle = async () => {
-      fireEvent(map, 'regionChangeComplete', { latitude: 40.9, longitude: -73.1, latitudeDelta: 0.05, longitudeDelta: 0.05 });
+    const map = screen.getByTestId('home-map', { includeHiddenElements: true });
+    const settle = async (bearing: number, pitch = 0) => {
+      fireEvent(map, 'cameraIdle', { center: { latitude: 40.9, longitude: -73.1 }, zoom: 13, bearing, pitch, userInteraction: false });
       await act(async () => {});
     };
     expect(screen.queryByTestId('reorient-map')).toBeNull();
 
     // Twisted so north points right (heading 90): the compass appears, its needle pointing right.
-    maps.mockCamera.heading = 90;
-    try {
-      await settle();
-      const needle = StyleSheet.flatten(screen.getByTestId('reorient-needle', { includeHiddenElements: true }).props.style);
-      expect(needle.transform).toEqual([{ rotate: '-90deg' }]);
+    await settle(90);
+    const needle = StyleSheet.flatten(screen.getByTestId('reorient-needle', { includeHiddenElements: true }).props.style);
+    expect(needle.transform).toEqual([{ rotate: '-90deg' }]);
 
-      maps.mockAnimateCamera.mockClear();
-      fireEvent.press(screen.getByTestId('reorient-map'));
-      expect(maps.mockAnimateCamera).toHaveBeenCalledWith({ heading: 0, pitch: 0 }, expect.objectContaining({ duration: expect.any(Number) }));
+    kit.mockEaseTo.mockClear();
+    fireEvent.press(screen.getByTestId('reorient-map'));
+    expect(kit.mockEaseTo).toHaveBeenCalledWith({ bearing: 0, pitch: 0, durationMs: expect.any(Number) });
 
-      // Back at north-up, the compass goes away.
-      maps.mockCamera.heading = 0;
-      await settle();
-      expect(screen.queryByTestId('reorient-map')).toBeNull();
+    // Back at north-up, the compass goes away.
+    await settle(0);
+    expect(screen.queryByTestId('reorient-map')).toBeNull();
 
-      // A tilt alone also counts.
-      maps.mockCamera.pitch = 30;
-      await settle();
-      expect(screen.getByTestId('reorient-map')).toBeTruthy();
-    } finally {
-      maps.mockCamera.heading = 0;
-      maps.mockCamera.pitch = 0;
-    }
+    // A tilt alone also counts.
+    await settle(0, 30);
+    expect(screen.getByTestId('reorient-map')).toBeTruthy();
   });
 
   it('reopens the home map on the purple dot after visiting a route', async () => {
-    const { mockAnimateToRegion } = jest.requireMock('react-native-maps') as { mockAnimateToRegion: jest.Mock };
+    const { mockEaseTo } = jest.requireMock('../src/map/MapCanvas') as { mockEaseTo: jest.Mock };
     const screen = await renderHome();
     await screen.findByTestId(`route-card-${PJ_CARD}`);
-    const hicksville = { latitude: 40.7685, longitude: -73.5251, latitudeDelta: 0.08, longitudeDelta: 0.08 };
-    const map = screen.getByTestId('google-map-view', { includeHiddenElements: true });
-    fireEvent(map, 'panDrag');
-    fireEvent(map, 'regionChangeComplete', hicksville);
+    const hicksville = { latitude: 40.7685, longitude: -73.5251 };
+    const map = screen.getByTestId('home-map', { includeHiddenElements: true });
+    fireEvent(map, 'userGesture');
+    fireEvent(map, 'cameraIdle', { center: hicksville, zoom: 12.5, bearing: 0, pitch: 0, userInteraction: true });
     expect(screen.getByTestId('search-center')).toBeTruthy();
 
     fireEvent.press(await screen.findByTestId(`route-card-${PJ_CARD}-primary`));
     await screen.findByTestId('route-back');
-    mockAnimateToRegion.mockClear();
+    mockEaseTo.mockClear();
     fireEvent.press(screen.getByTestId('route-back'));
 
     // The rebuilt map opens where the rider left it, with the dot, and isn't pulled back to GPS.
-    const reopened = await screen.findByTestId('google-map-view', { includeHiddenElements: true });
-    expect(reopened.props.region).toEqual(hicksville);
+    const reopened = await screen.findByTestId('home-map', { includeHiddenElements: true });
+    expect(reopened.props.initialCamera).toEqual({ center: hicksville, zoom: 12.5 });
     expect(screen.getByTestId('search-center')).toBeTruthy();
     await act(async () => {});
-    expect(mockAnimateToRegion).not.toHaveBeenCalled();
+    expect(mockEaseTo).not.toHaveBeenCalled();
   });
 
   it('keeps the home map where the rider panned it until the location button is pressed', async () => {
-    const { mockAnimateToRegion } = jest.requireMock('react-native-maps') as { mockAnimateToRegion: jest.Mock };
+    const { mockEaseTo } = jest.requireMock('../src/map/MapCanvas') as { mockEaseTo: jest.Mock };
     let onPosition: ((position: { coords: { latitude: number; longitude: number } }) => void) | undefined;
     (Location.requestForegroundPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'granted' });
     (Location.getForegroundPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'granted', canAskAgain: true });
@@ -1679,26 +1675,26 @@ describe('Pathly prototype navigation', () => {
       onPosition = callback;
       return Promise.resolve({ remove: jest.fn() });
     });
-    mockAnimateToRegion.mockClear();
+    mockEaseTo.mockClear();
 
     const screen = await renderHome();
     await screen.findByTestId(`route-card-${PJ_CARD}`);
     // Hydration can settle after the first fix, so the map may mount already centered on it.
-    const map = screen.getByTestId('google-map-view', { includeHiddenElements: true });
-    expect(map.props.region).toEqual(expect.objectContaining({ latitude: 40.92, longitude: -73.13 }));
-    fireEvent(map, 'panDrag');
-    fireEvent(map, 'regionChangeComplete', { latitude: 40.7685, longitude: -73.5251, latitudeDelta: 0.05, longitudeDelta: 0.05 });
-    mockAnimateToRegion.mockClear();
+    const map = screen.getByTestId('home-map', { includeHiddenElements: true });
+    expect(map.props.initialCamera.center).toEqual(expect.objectContaining({ latitude: 40.92, longitude: -73.13 }));
+    fireEvent(map, 'userGesture');
+    fireEvent(map, 'cameraIdle', { center: { latitude: 40.7685, longitude: -73.5251 }, zoom: 13, bearing: 0, pitch: 0, userInteraction: true });
+    mockEaseTo.mockClear();
 
     // Routine GPS updates move only the rider's dot, not the map.
     await waitFor(() => expect(onPosition).toBeDefined());
     await act(async () => onPosition!({ coords: { latitude: 40.93, longitude: -73.12 } }));
     await act(async () => onPosition!({ coords: { latitude: 40.94, longitude: -73.11 } }));
-    expect(mockAnimateToRegion).not.toHaveBeenCalled();
+    expect(mockEaseTo).not.toHaveBeenCalled();
 
     // The location button brings the map back to the rider.
     fireEvent.press(screen.getByLabelText('Center on current location'));
-    await waitFor(() => expect(mockAnimateToRegion).toHaveBeenCalledWith(expect.objectContaining({ latitude: 40.92, longitude: -73.13 }), expect.any(Number)));
+    await waitFor(() => expect(mockEaseTo).toHaveBeenCalledWith(expect.objectContaining({ center: expect.objectContaining({ latitude: 40.92, longitude: -73.13 }) })));
     (Location.requestForegroundPermissionsAsync as jest.Mock).mockResolvedValue({ status: 'denied' });
   });
 
@@ -1956,12 +1952,12 @@ describe('Pathly prototype navigation', () => {
     it('marks stops with white dots in the route color and emphasizes the nearest one', async () => {
       const screen = await openPortJefferson();
       const routeLine = screen.getByTestId('route-line', hidden);
-      expect(routeLine.props.strokeColor).toBe(routeById.ronkonkoma.color);
+      expect(routeLine.props.color).toBe(routeById.ronkonkoma.color);
       // Follows the backend's real shape path (mocked as 3 points per hop), not one straight
       // segment per stop pair. Westbound, the rider's Stony Brook is the second stop: the hop
       // behind it is faint, and the rest of the line ahead is full strength.
       const behindLine = screen.getByTestId('route-line-behind', hidden);
-      expect(behindLine.props.strokeColor).toBe(`${routeById.ronkonkoma.color}59`);
+      expect(behindLine.props.color).toBe(`${routeById.ronkonkoma.color}59`);
       expect(behindLine.props.coordinates).toHaveLength(3 + 1);
       expect(routeLine.props.coordinates).toHaveLength((routeById.ronkonkoma.stops!.length - 2) * 3 + 1);
       expect(routeLine.props.coordinates[0]).toEqual(behindLine.props.coordinates[3]);
@@ -1970,22 +1966,20 @@ describe('Pathly prototype navigation', () => {
       expect(stops).toHaveLength(22);
       for (const stop of stops) {
         const name = stop.props.testID.replace('route-stop-', '');
-        expect(stop.props.title).toBe(name);
-        expect(stop.props.anchor).toEqual({ x: 0.5, y: 0.5 });
-        const dot = StyleSheet.flatten(within(stop).getByTestId(`route-dot-${name}`, hidden).props.style);
+        const dot = StyleSheet.flatten(stop.props.style);
         // Westbound from Stony Brook, Port Jefferson is behind the rider: its outline is faint.
         expect(dot).toMatchObject(name === 'Stony Brook'
           ? { backgroundColor: '#FFFFFF', borderColor: routeById.ronkonkoma.color }
           : { backgroundColor: '#FFFFFF', borderColor: name === 'Port Jefferson' ? `${routeById.ronkonkoma.color}59` : routeById.ronkonkoma.color });
         // Ordinary stops are exactly as wide as the line, so they don't bulge out of it; the rider's is bigger.
-        if (name === 'Stony Brook') expect(dot.width).toBeGreaterThan(routeLine.props.strokeWidth);
-        else expect(dot.width).toBe(routeLine.props.strokeWidth);
+        if (name === 'Stony Brook') expect(dot.width).toBeGreaterThan(routeLine.props.width);
+        else expect(dot.width).toBe(routeLine.props.width);
       }
       // Opens zoomed on the rider's nearest station (mocked geometry places Stony Brook at 40.89, -73.09).
-      const region = screen.getByTestId('route-map', hidden).props.initialRegion;
-      expect(region.latitude).toBeCloseTo(40.89);
-      expect(region.longitude).toBeCloseTo(-73.09);
-      expect(region.latitudeDelta).toBe(0.06);
+      const camera = screen.getByTestId('route-map', hidden).props.initialCamera;
+      expect(camera.center.latitude).toBeCloseTo(40.89);
+      expect(camera.center.longitude).toBeCloseTo(-73.09);
+      expect(camera.zoom).toBe(13);
     });
 
     it('names the train in big text over the map, letting gestures through', async () => {
@@ -2006,7 +2000,8 @@ describe('Pathly prototype navigation', () => {
       // The arrow sits along the line ahead of the stop, not on Stony Brook itself.
       const arrow = screen.getByTestId('route-direction-arrow', hidden);
       expect(arrow.props.coordinate.latitude).not.toBeCloseTo(40.89, 4);
-      expect(arrow.props.flat).toBe(true);
+      // Turned to the line's bearing on the ground, so it turns with the map.
+      expect(typeof arrow.props.rotation).toBe('number');
       // The faint part ends, and the full part starts, at Stony Brook itself (mocked at 40.89, -73.09).
       const ahead = screen.getByTestId('route-line', hidden).props.coordinates;
       const behind = screen.getByTestId('route-line-behind', hidden).props.coordinates;
@@ -2149,15 +2144,13 @@ describe('Pathly prototype navigation', () => {
     it('centers the live map on the rider from the location button', async () => {
       const screen = await openPortJefferson();
       const map = () => screen.getByTestId('route-map', hidden);
-      // The rider's dot is drawn by the app, not Google's own location layer.
-      expect(map().props.showsUserLocation).toBe(false);
 
       const permissionRequests = (Location.requestForegroundPermissionsAsync as jest.Mock).mock.calls.length;
       fireEvent.press(screen.getByTestId('route-location'));
       // Pressing refreshes the rider's location (a fresh permission check + fix), like the home button.
       expect((Location.requestForegroundPermissionsAsync as jest.Mock).mock.calls.length).toBe(permissionRequests + 1);
       expect(screen.getByTestId('route-location').props.accessibilityState).toEqual({ selected: true });
-      fireEvent(map(), 'panDrag');
+      fireEvent(map(), 'userGesture');
       expect(screen.getByTestId('route-location').props.accessibilityState).toEqual({ selected: false });
       await act(async () => {}); // settle the location refresh
     });

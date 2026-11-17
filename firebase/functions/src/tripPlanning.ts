@@ -1,20 +1,18 @@
 import { createHash } from 'crypto';
 
 import { simplifyPath } from './gtfsGeometry';
-import { displayStepColor } from './routeColors';
-import { agencyIdsForStep } from './tripAgencies';
-import { displayTransitName } from './transitNames';
 
 /**
- * Real transit trip planning through the Google Routes API (computeRoutes, travelMode TRANSIT):
- * builds the request from the app's trip criteria and reshapes Google's response into the
- * app's own small itinerary format, so clients never parse Google's.
+ * The trip-planning request and itinerary formats the app reads (mirrored in
+ * mobile/src/data/tripPlanning.ts), and the pieces of an itinerary shared by Pathly's planner
+ * (tripPlanner.ts): fares, simplified paths, and walking the whole way.
  */
 
 export type TravelModeOption = 'subway' | 'bus' | 'rail';
 export type TripPreference = 'fastest' | 'transfers' | 'cheapest';
 export type LatLng = { lat: number; lng: number };
 
+/** A place given by coordinates; an older app can send only a Google place id (resolved in index.ts). */
 export type TripEndpoint = { placeId?: string; lat?: number; lng?: number; label: string };
 export type PlanTripRequest = {
   origin: TripEndpoint;
@@ -22,7 +20,9 @@ export type PlanTripRequest = {
   time: { mode: 'now' } | { mode: 'depart' | 'arrive'; at: string };
   preference: TripPreference;
   modes: TravelModeOption[];
-  /** The rider turned walking off (Settings -> Travel preferences): ask for less walking. */
+  /** Ferries may be ridden unless the rider turned them off (apps before this field always rode them). */
+  ferry?: boolean;
+  /** The rider turned walking off (Settings -> Travel preferences): walk less to and between stops. */
   lessWalking?: boolean;
   /** Also offer walking the whole way when it takes at most this many minutes (walkOnlyItinerary). */
   walkOnlyMaxMinutes?: number;
@@ -32,7 +32,6 @@ export type TripStop = { name: string; location: LatLng; time: string };
 export type WalkStep = { kind: 'walk'; durationSeconds: number; distanceMeters: number; toName: string; path: LatLng[] };
 export type TransitStep = {
   kind: 'transit';
-  /** Ferry legs can't be requested or excluded at Google (it has no ferry travel mode); the app filters them. */
   mode: TravelModeOption | 'ferry' | 'other';
   agency: { name: string; url?: string };
   line: { name: string; shortName?: string; color?: string; textColor?: string; vehicleName?: string };
@@ -42,17 +41,17 @@ export type TransitStep = {
   stopCount: number;
   durationSeconds: number;
   path: LatLng[];
-  /** The stops in between, in order, when the leg matched a trip in Pathly's timetables (tripStops.ts). */
+  /** The stops in between, in order. */
   stops?: TripStop[];
-  /** That scheduled trip's GTFS trip_id (shown by the admin ID overlay). */
+  /** The scheduled trip's GTFS trip_id (shown by the admin ID overlay). */
   tripId?: string;
   /**
    * Scheduled departures of the same line between the same two stops around this one (this one
-   * included), so the rider can pick another (tripStops.ts). `stopTimes` follow `stops` when that
-   * trip calls at the same stops in between.
+   * included), so the rider can pick another. `stopTimes` follow `stops` when that trip calls at
+   * the same stops in between.
    */
   departures?: TripDeparture[];
-  /** The leg's GTFS line, direction and boarding stop (tripStops.ts), so the app can show its live vehicles. */
+  /** The leg's GTFS line, direction and boarding stop, so the app can show its live vehicles. */
   liveRoute?: { agencyId: string; routeId: string; boardStopId: string; alightStopId?: string; directionId?: number };
   /** What the agency's live feed says about this leg's trip (tripLive.ts); absent when it says nothing. */
   live?: LegLive;
@@ -72,12 +71,12 @@ export type LegLive = { status: 'tracked' | 'cancelled' | 'skips-stop'; departs?
 export type LegConnection = { status: 'tight' | 'missed'; spareSeconds: number };
 export type TripDeparture = { departs: string; arrives: string; stopTimes?: string[] };
 export type TripStep = WalkStep | TransitStep;
+/** One part of a fare: a ride, what it adds, and why ("Free transfer within 2 hours"). */
+export type FareLine = { label: string; text: string; note?: string };
 /**
  * `reduced`: the 65+/disability/Medicare fare, when the published rules price every step.
  * `student` (K-12), `college` and `fairFares` likewise, each only when it's cheaper than the full fare.
  */
-/** One part of a fare: a ride, what it adds, and why ("Free transfer within 2 hours"). */
-export type FareLine = { label: string; text: string; note?: string };
 export type DiscountRider = 'reduced' | 'student' | 'college' | 'fairFares';
 export type RiderFare = { text: string; cents: number; lines?: FareLine[] };
 export type TripFare = { text: string; cents: number; currency: string; estimated: boolean; lines?: FareLine[] } & Partial<Record<DiscountRider, RiderFare>>;
@@ -91,268 +90,39 @@ export type Itinerary = {
   steps: TripStep[];
 };
 
-export const ROUTES_API_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes';
-/** Only what the app renders, which keeps responses small (see design.md). */
-export const ROUTES_FIELD_MASK = [
-  'routes.legs.steps.travelMode',
-  'routes.legs.steps.staticDuration',
-  'routes.legs.steps.distanceMeters',
-  'routes.legs.steps.polyline.encodedPolyline',
-  'routes.legs.steps.startLocation',
-  'routes.legs.steps.endLocation',
-  'routes.legs.steps.transitDetails',
-  'routes.legs.startLocation',
-  'routes.legs.endLocation',
-  'routes.duration',
-  'routes.distanceMeters',
-  'routes.travelAdvisory.transitFare',
-  'routes.localizedValues.transitFare',
-].join(',');
+/** Prices a trip's rides from the agencies' published fares (tripFares.ts). */
+export type FareEstimator = (steps: readonly TransitStep[], departureTime: string, rider?: 'full' | DiscountRider) => TripFare | undefined;
 
-const ALL_MODES: readonly TravelModeOption[] = ['subway', 'bus', 'rail'];
-const GOOGLE_MODES: Record<TravelModeOption, string[]> = { subway: ['SUBWAY', 'LIGHT_RAIL'], bus: ['BUS'], rail: ['TRAIN'] };
-// Visually identical at street zoom, while keeping a four-itinerary response to tens of KB.
-const PATH_SIMPLIFY_METERS = 4;
-const MIN_WALK_SECONDS = 30;
-const MIN_WALK_METERS = 30;
+const DISCOUNT_RIDERS: readonly DiscountRider[] = ['reduced', 'student', 'college', 'fairFares'];
 
-function waypoint(endpoint: TripEndpoint) {
-  if (endpoint.placeId) return { placeId: endpoint.placeId };
-  return { location: { latLng: { latitude: endpoint.lat, longitude: endpoint.lng } } };
-}
-
-/** The computeRoutes request body for a trip. */
-export function buildRoutesRequest(request: PlanTripRequest): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    origin: waypoint(request.origin),
-    destination: waypoint(request.destination),
-    travelMode: 'TRANSIT',
-    computeAlternativeRoutes: true,
-    languageCode: 'en-US',
-    units: 'IMPERIAL',
-  };
-  if (request.time.mode === 'depart') body.departureTime = request.time.at;
-  if (request.time.mode === 'arrive') body.arrivalTime = request.time.at;
-
-  // Google treats these as preferences, not filters; the app filters excluded modes itself too.
-  const transitPreferences: Record<string, unknown> = {};
-  const modes = ALL_MODES.filter((mode) => request.modes.includes(mode));
-  if (modes.length > 0 && modes.length < ALL_MODES.length) transitPreferences.allowedTravelModes = modes.flatMap((mode) => GOOGLE_MODES[mode]);
-  // Google takes one routing preference; fewer transfers is the rider's explicit sort, so it wins.
-  if (request.preference === 'transfers') transitPreferences.routingPreference = 'FEWER_TRANSFERS';
-  else if (request.lessWalking) transitPreferences.routingPreference = 'LESS_WALKING';
-  if (Object.keys(transitPreferences).length > 0) body.transitPreferences = transitPreferences;
-  return body;
-}
-
-/** Google's encoded polyline algorithm (precision 5). */
-export function decodePolyline(encoded: string): LatLng[] {
-  const points: LatLng[] = [];
-  let index = 0;
-  let lat = 0;
-  let lng = 0;
-  const next = () => {
-    let result = 0;
-    let shift = 0;
-    let byte: number;
-    do {
-      byte = encoded.charCodeAt(index++) - 63;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-    } while (byte >= 0x20 && index < encoded.length + 1);
-    return result & 1 ? ~(result >> 1) : result >> 1;
-  };
-  while (index < encoded.length) {
-    lat += next();
-    lng += next();
-    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+/**
+ * The trip's fare from the published fare rules, with each discount fare the rules price lower:
+ * sent with every fare, so which one applies to the rider never leaves their device.
+ */
+export function itineraryFare(transits: readonly TransitStep[], departureTime: string, estimateFare?: FareEstimator): TripFare | undefined {
+  if (transits.length === 0 || !estimateFare) return undefined;
+  let fare = estimateFare(transits, departureTime);
+  if (!fare) return undefined;
+  for (const rider of DISCOUNT_RIDERS) {
+    const discounted = estimateFare(transits, departureTime, rider);
+    if (discounted && discounted.cents < fare.cents) {
+      fare = { ...fare, [rider]: { text: discounted.text, cents: discounted.cents, ...(discounted.lines ? { lines: discounted.lines } : {}) } };
+    }
   }
-  return points;
+  return fare;
 }
 
-function simplified(points: readonly LatLng[]): LatLng[] {
+// Visually identical at street zoom, while keeping a six-itinerary response to tens of KB.
+const PATH_SIMPLIFY_METERS = 4;
+
+/** A path simplified for the app and rounded to about a meter. */
+export function simplifiedPath(points: readonly LatLng[]): LatLng[] {
   return simplifyPath(points.map((point) => ({ lat: point.lat, lon: point.lng })), PATH_SIMPLIFY_METERS)
     .map((point) => ({ lat: Math.round(point.lat * 1e5) / 1e5, lng: Math.round(point.lon * 1e5) / 1e5 }));
 }
 
-/** Google's vehicle types, in the app's three rider-facing modes ("other" can't be filtered out). */
-export function modeForVehicle(type: string | undefined): TransitStep['mode'] {
-  switch (type) {
-    case 'SUBWAY': case 'METRO_RAIL': case 'LIGHT_RAIL': case 'TRAM': case 'MONORAIL':
-      return 'subway';
-    case 'BUS': case 'INTERCITY_BUS': case 'TROLLEYBUS':
-      return 'bus';
-    case 'RAIL': case 'COMMUTER_TRAIN': case 'HEAVY_RAIL': case 'HIGH_SPEED_TRAIN': case 'LONG_DISTANCE_TRAIN':
-      return 'rail';
-    case 'FERRY':
-      return 'ferry';
-    default:
-      return 'other';
-  }
-}
-
-type GoogleLatLng = { latLng?: { latitude?: number; longitude?: number } };
-type GoogleStep = {
-  travelMode?: string;
-  staticDuration?: string;
-  distanceMeters?: number;
-  polyline?: { encodedPolyline?: string };
-  transitDetails?: {
-    stopDetails?: {
-      arrivalStop?: { name?: string; location?: GoogleLatLng };
-      departureStop?: { name?: string; location?: GoogleLatLng };
-      arrivalTime?: string;
-      departureTime?: string;
-    };
-    headsign?: string;
-    stopCount?: number;
-    transitLine?: {
-      agencies?: { name?: string; uri?: string }[];
-      name?: string;
-      nameShort?: string;
-      color?: string;
-      textColor?: string;
-      vehicle?: { name?: { text?: string }; type?: string };
-    };
-  };
-};
-type GoogleMoney = { currencyCode?: string; units?: string; nanos?: number };
-type GoogleRoute = {
-  legs?: { steps?: GoogleStep[]; startLocation?: GoogleLatLng; endLocation?: GoogleLatLng }[];
-  travelAdvisory?: { transitFare?: GoogleMoney };
-  localizedValues?: { transitFare?: { text?: string } };
-};
-export type RoutesResponse = { routes?: GoogleRoute[] };
-
-/** A fare for the whole itinerary when Google can't price every step; see tripFares.ts. */
-const DISCOUNT_RIDERS: readonly DiscountRider[] = ['reduced', 'student', 'college', 'fairFares'];
-
-export type FareEstimator = (steps: readonly TransitStep[], departureTime: string, rider?: 'full' | DiscountRider) => TripFare | undefined;
-
-const seconds = (duration: string | undefined) => Number.parseFloat(duration ?? '0') || 0;
-const toLatLng = (location: GoogleLatLng | undefined): LatLng => ({ lat: location?.latLng?.latitude ?? 0, lng: location?.latLng?.longitude ?? 0 });
 const addSeconds = (iso: string, delta: number) => new Date(Date.parse(iso) + delta * 1000).toISOString();
 
-function googleFare(route: GoogleRoute): TripFare | undefined {
-  const money = route.travelAdvisory?.transitFare;
-  if (!money?.currencyCode) return undefined;
-  const cents = Math.round(Number(money.units ?? 0) * 100 + (money.nanos ?? 0) / 1e7);
-  const text = route.localizedValues?.transitFare?.text || `$${(cents / 100).toFixed(2)}`;
-  return { text, cents, currency: money.currencyCode, estimated: false };
-}
-
-function transitStep(step: GoogleStep): TransitStep {
-  const details = step.transitDetails!;
-  const stops = details.stopDetails ?? {};
-  const line = details.transitLine ?? {};
-  const agency = line.agencies?.[0];
-  const departure = stops.departureTime ?? '';
-  const arrival = stops.arrivalTime ?? '';
-  const mode = modeForVehicle(line.vehicle?.type);
-  const agencyName = agency?.name ?? 'Transit';
-  // Buses get the same colors as everywhere else in Pathly (routeColors.ts), not Google's.
-  const busColor = displayStepColor(agencyIdsForStep({ agency: { name: agencyName }, mode }), { name: line.name, shortName: line.nameShort, color: line.color });
-  return {
-    kind: 'transit',
-    mode,
-    agency: { name: agencyName, ...(agency?.uri ? { url: agency.uri } : {}) },
-    line: {
-      name: line.name ?? line.nameShort ?? 'Transit',
-      ...(line.nameShort ? { shortName: line.nameShort } : {}),
-      ...(busColor ? { color: busColor, textColor: '#FFFFFF' } : {
-        ...(line.color ? { color: line.color } : {}),
-        ...(line.textColor ? { textColor: line.textColor } : {}),
-      }),
-      ...(line.vehicle?.name?.text ? { vehicleName: line.vehicle.name.text } : {}),
-    },
-    // Google passes along the agency's own stop names and headsigns, so a feed's all-caps or
-    // lowercase entry ("staten island expwy/wooley av") reached riders as-is; recase them the
-    // same way as names read from the timetables.
-    ...(details.headsign ? { headsign: displayTransitName(details.headsign) } : {}),
-    from: { name: displayTransitName(stops.departureStop?.name ?? ''), location: toLatLng(stops.departureStop?.location), time: departure },
-    to: { name: displayTransitName(stops.arrivalStop?.name ?? ''), location: toLatLng(stops.arrivalStop?.location), time: arrival },
-    stopCount: details.stopCount ?? 0,
-    durationSeconds: Math.max(0, (Date.parse(arrival) - Date.parse(departure)) / 1000) || seconds(step.staticDuration),
-    path: simplified(decodePolyline(step.polyline?.encodedPolyline ?? '')),
-  };
-}
-
-/** One route: consecutive walking instructions merge into one walk, named for where it leads. */
-function normalizeRoute(route: GoogleRoute, requestTime: string, destinationLabel: string, estimateFare?: FareEstimator): Itinerary | null {
-  const googleSteps = (route.legs ?? []).flatMap((leg) => leg.steps ?? []);
-  if (googleSteps.length === 0) return null;
-
-  const steps: TripStep[] = [];
-  let walk: { durationSeconds: number; distanceMeters: number; path: LatLng[] } | null = null;
-  const flushWalk = (toName: string) => {
-    if (!walk) return;
-    // Changing buses at the same stop shows up as a few seconds of "walking"; it isn't a step.
-    if (walk.durationSeconds < MIN_WALK_SECONDS && walk.distanceMeters < MIN_WALK_METERS) {
-      walk = null;
-      return;
-    }
-    steps.push({ kind: 'walk', durationSeconds: Math.round(walk.durationSeconds), distanceMeters: Math.round(walk.distanceMeters), toName, path: simplified(walk.path) });
-    walk = null;
-  };
-  for (const step of googleSteps) {
-    if (step.transitDetails) {
-      const transit = transitStep(step);
-      flushWalk(transit.from.name);
-      steps.push(transit);
-      continue;
-    }
-    walk ??= { durationSeconds: 0, distanceMeters: 0, path: [] };
-    walk.durationSeconds += seconds(step.staticDuration);
-    walk.distanceMeters += step.distanceMeters ?? 0;
-    walk.path.push(...decodePolyline(step.polyline?.encodedPolyline ?? ''));
-  }
-  flushWalk(destinationLabel);
-
-  const transits = steps.filter((step): step is TransitStep => step.kind === 'transit');
-  const firstTransit = steps.findIndex((step) => step.kind === 'transit');
-  let departureTime: string;
-  let arrivalTime: string;
-  if (firstTransit < 0) {
-    // Walking only: it starts when asked.
-    departureTime = requestTime;
-    arrivalTime = addSeconds(requestTime, steps.reduce((sum, step) => sum + step.durationSeconds, 0));
-  } else {
-    // Google's route duration counts from the request time, overstating a trip whose first
-    // vehicle leaves later; the trip really starts with the walk to that vehicle.
-    const walkBefore = steps.slice(0, firstTransit).reduce((sum, step) => sum + step.durationSeconds, 0);
-    const lastTransit = steps.length - 1 - [...steps].reverse().findIndex((step) => step.kind === 'transit');
-    const walkAfter = steps.slice(lastTransit + 1).reduce((sum, step) => sum + step.durationSeconds, 0);
-    departureTime = addSeconds(transits[0]!.from.time, -walkBefore);
-    arrivalTime = addSeconds(transits.at(-1)!.to.time, walkAfter);
-  }
-
-  const key = transits.length === 0 ? 'walk' : transits.map((step) => `${step.line.name}|${step.from.name}|${step.from.time}`).join('>');
-  const google = googleFare(route);
-  const estimatedFare = estimateFare?.(transits, departureTime);
-  const fullFare = google
-    // Google gives only a total: the published rules can explain it only when they reach the same one.
-    ? { ...google, ...(estimatedFare?.lines && estimatedFare.cents === google.cents ? { lines: estimatedFare.lines } : {}) }
-    : estimatedFare;
-  // Sent with every fare, so which one applies to the rider never leaves their device.
-  let fare = fullFare;
-  for (const rider of DISCOUNT_RIDERS) {
-    const discounted = fullFare ? estimateFare?.(transits, departureTime, rider) : undefined;
-    if (fare && discounted && discounted.cents < fare.cents) {
-      fare = { ...fare, [rider]: { text: discounted.text, cents: discounted.cents, ...(discounted.lines ? { lines: discounted.lines } : {}) } };
-    }
-  }
-  return {
-    id: createHash('sha256').update(key).digest('hex').slice(0, 12),
-    departureTime,
-    arrivalTime,
-    durationSeconds: Math.round((Date.parse(arrivalTime) - Date.parse(departureTime)) / 1000),
-    transfers: Math.max(0, transits.length - 1),
-    ...(fare ? { fare } : {}),
-    steps,
-  };
-}
-
-/** Google's routes as app itineraries, in Google's order, with repeated trips dropped. */
 /** Walking pace for a walk-only trip: about 3 mph, as the app's other walking estimates. */
 export const WALK_ONLY_METERS_PER_SECOND = 1.3;
 /** The longest walk-only trip a rider can ask for. */
@@ -379,29 +149,12 @@ export function walkOnlyItinerary(
   const departs = time.mode === 'now' ? nowMs : time.mode === 'depart' ? Date.parse(time.at) : Date.parse(time.at) - durationSeconds * 1000;
   const departureTime = new Date(departs).toISOString();
   return {
-    // The same id as a walk-only route from Google, so the two never both show.
+    // Every walk-only trip shares one id, so it's offered once.
     id: createHash('sha256').update('walk').digest('hex').slice(0, 12),
     departureTime,
     arrivalTime: addSeconds(departureTime, durationSeconds),
     durationSeconds,
     transfers: 0,
-    steps: [{ kind: 'walk', durationSeconds, distanceMeters: Math.round(walk.meters), toName: destinationLabel, path: simplified(walk.path) }],
+    steps: [{ kind: 'walk', durationSeconds, distanceMeters: Math.round(walk.meters), toName: destinationLabel, path: simplifiedPath(walk.path) }],
   };
-}
-
-export function normalizeRoutesResponse(
-  response: RoutesResponse,
-  requestTime: string,
-  destinationLabel: string,
-  estimateFare?: FareEstimator,
-): Itinerary[] {
-  const seen = new Set<string>();
-  const itineraries: Itinerary[] = [];
-  for (const route of response.routes ?? []) {
-    const itinerary = normalizeRoute(route, requestTime, destinationLabel, estimateFare);
-    if (!itinerary || seen.has(itinerary.id)) continue;
-    seen.add(itinerary.id);
-    itineraries.push(itinerary);
-  }
-  return itineraries;
 }

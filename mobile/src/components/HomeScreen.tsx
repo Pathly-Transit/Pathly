@@ -58,7 +58,7 @@ import { CurrentLocationButton } from './CurrentLocationButton';
 import { DeparturesView } from './DeparturesView';
 import { EnrouteNavigationView, EnrouteRecoveryView, type EnrouteLocationState } from './EnrouteNavigationView';
 import { RideGuideView } from './RideGuideView';
-import { GoogleMapView, type HomeMapCamera } from './GoogleMapView';
+import { HomeMap, type HomeMapCamera } from './HomeMap';
 import { LineLayersSheet } from './LineLayersSheet';
 import { LoadingScreen } from './LoadingScreen';
 import { MAP_CONTROL_SIZE, MapControlButton } from './MapControlButton';
@@ -1211,7 +1211,7 @@ export function HomeScreen() {
       <>
         {/* The map stays fixed while the sheet scrolls over it; its fixed height keeps the legal credits above the resting sheet. */}
         <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: mapHeight }} testID="home-map-viewport">
-        <GoogleMapView
+        <HomeMap
           initialCamera={homeCamera}
           lines={mapLines}
           location={location}

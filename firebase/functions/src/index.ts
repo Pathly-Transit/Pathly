@@ -36,17 +36,13 @@ import { sendSavedRouteAlerts } from './routeAlerts';
 import { getRouteStatus } from './gtfsStatus';
 import { isInServiceArea } from './serviceArea';
 import { lookupStations, searchStops, type StationLookup } from './stopSearch';
-import { agencyIdsForStep } from './tripAgencies';
 import { createFareEstimator } from './tripFares';
+import { planTransitTrip } from './tripPlanner';
 import {
-  buildRoutesRequest,
   MAX_WALK_ONLY_MINUTES,
-  normalizeRoutesResponse,
-  ROUTES_API_URL,
-  ROUTES_FIELD_MASK,
   type Itinerary,
+  type LatLng,
   type PlanTripRequest,
-  type RoutesResponse,
   type TripEndpoint,
   type TravelModeOption,
   type TripPreference,
@@ -55,7 +51,6 @@ import {
 } from './tripPlanning';
 import { walkingPath } from './walkingGraph';
 import { addLiveStatus } from './tripLive';
-import { addTripStops, matchTripStops } from './tripStops';
 
 const CALLABLE_RUNTIME_SERVICE_ACCOUNT = 'pathly-callable-runtime@pathly-b7f0f.iam.gserviceaccount.com';
 const GTFS_WRITER_SERVICE_ACCOUNT = 'pathly-gtfs-writer@pathly-b7f0f.iam.gserviceaccount.com';
@@ -99,7 +94,7 @@ const RATE_LIMITS = {
   // The home map's line layers: one call per agency switched on.
   getAgencyLines: { userPerMinute: 30 },
   getAccessibleStops: { userPerMinute: 30 },
-  // Each plan is one billed Routes API request (Compute Routes Essentials).
+  // Each plan runs Pathly's own planner (several timetable searches) on a transit instance.
   planTrip: { userPerMinute: 20 },
   geocodeAddress: { userPerMinute: 10 },
   // "Choose on map" names the pin once the map comes to rest.
@@ -122,9 +117,6 @@ const RATE_LIMITS = {
   getBackendStatus: { userPerMinute: 6 },
 } satisfies Record<string, CallableRateLimit>;
 
-// City bus timetables load from Cloud Storage on first use, which the budget leaves room for.
-const TRIP_STOPS_BUDGET_MS = 3_000;
-let tripStopMatcher = matchTripStops;
 // Live feeds are usually already cached by route status polling; a slow one isn't waited on long.
 const TRIP_LIVE_BUDGET_MS = 2_500;
 let tripLiveLookup: Parameters<typeof addLiveStatus>[3];
@@ -136,10 +128,6 @@ let tripAlertsLookup: Parameters<typeof addLiveStatus>[5];
 /** Unit-test dependency injection only. */
 export function setTripAlertsLookupForTests(lookup: typeof tripAlertsLookup): void {
   tripAlertsLookup = lookup;
-}
-/** Unit-test dependency injection only. */
-export function setTripStopMatcherForTests(matcher: typeof matchTripStops | undefined): void {
-  tripStopMatcher = matcher ?? matchTripStops;
 }
 
 /** Refresh official static feeds daily; each agency publishes atomically and retries safely. */
@@ -711,10 +699,10 @@ export const describeTransitRoute = onCall<DescribeTransitRouteRequest>(protecte
 
 const TRIP_MODES: readonly TravelModeOption[] = ['subway', 'bus', 'rail'];
 const TRIP_PREFERENCES: readonly TripPreference[] = ['fastest', 'transfers', 'cheapest'];
-// The Routes API plans transit from 7 days ago to 100 days ahead.
+// From a week back to 100 days ahead; the published timetables reach a month or more out.
 const TRIP_TIME_PAST_MS = 7 * 24 * 60 * 60 * 1000;
 const TRIP_TIME_FUTURE_MS = 100 * 24 * 60 * 60 * 1000;
-const ROUTES_TIMEOUT_MS = 15_000;
+const PLACE_LOOKUP_TIMEOUT_MS = 8_000;
 
 function outOfArea(): HttpsError {
   return new HttpsError('invalid-argument', 'This trip is outside the area Pathly covers.', { reason: 'out-of-area' });
@@ -759,7 +747,10 @@ export function requiredPlanTripRequest(data: unknown, nowMs = Date.now()): Plan
 
   const { preference, modes } = request;
   if (typeof preference !== 'string' || !TRIP_PREFERENCES.includes(preference as TripPreference)) throw badTripRequest('preference is invalid');
-  if (!Array.isArray(modes) || modes.length === 0 || modes.some((mode) => !TRIP_MODES.includes(mode as TravelModeOption))) throw badTripRequest('modes are invalid');
+  if (!Array.isArray(modes) || modes.some((mode) => !TRIP_MODES.includes(mode as TravelModeOption))) throw badTripRequest('modes are invalid');
+  if (request.ferry !== undefined && typeof request.ferry !== 'boolean') throw badTripRequest('ferry is invalid');
+  // Ferries alone (the app's Ferry switch the only one on) send no other mode, and say so.
+  if (modes.length === 0 && request.ferry !== true) throw badTripRequest('modes are invalid');
   if (request.lessWalking !== undefined && typeof request.lessWalking !== 'boolean') throw badTripRequest('lessWalking is invalid');
   const walkOnly = request.walkOnlyMaxMinutes;
   if (walkOnly !== undefined && (typeof walkOnly !== 'number' || !Number.isInteger(walkOnly) || walkOnly < 1 || walkOnly > MAX_WALK_ONLY_MINUTES)) throw badTripRequest('walkOnlyMaxMinutes is invalid');
@@ -769,82 +760,81 @@ export function requiredPlanTripRequest(data: unknown, nowMs = Date.now()): Plan
     time: tripTime,
     preference: preference as TripPreference,
     modes: [...new Set(modes as TravelModeOption[])],
+    ...(request.ferry === false ? { ferry: false } : {}),
     ...(request.lessWalking === true ? { lessWalking: true } : {}),
     ...(walkOnly !== undefined ? { walkOnlyMaxMinutes: walkOnly } : {}),
   };
 }
 
 /**
- * Real transit itineraries between two places, from the Google Routes API (computeRoutes,
- * TRANSIT, with alternatives), reshaped into the app's itinerary format (tripPlanning.ts).
- * The Maps key stays server-side. An empty list means Google found no transit trip.
- * Client call: httpsCallable(functions, 'planTrip')({ origin, destination, time, preference, modes, lessWalking? }).
+ * Where an endpoint is: its coordinates, or for a Google place id alone (sent by apps that saved
+ * a trip before every endpoint carried coordinates), the place's location from Google Places.
+ */
+async function endpointLocation(endpoint: TripEndpoint): Promise<LatLng> {
+  if (endpoint.lat !== undefined && endpoint.lng !== undefined) return { lat: endpoint.lat, lng: endpoint.lng };
+  let location: { latitude?: number; longitude?: number } | undefined;
+  try {
+    const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(endpoint.placeId ?? '')}`, {
+      headers: { 'X-Goog-Api-Key': googleMapsApiKey.value(), 'X-Goog-FieldMask': 'location' },
+      signal: AbortSignal.timeout(PLACE_LOOKUP_TIMEOUT_MS),
+    });
+    if (response.ok) location = ((await response.json()) as { location?: { latitude?: number; longitude?: number } }).location;
+    else logger.warn('Could not locate a trip endpoint', { event: 'trip_planning_place_unavailable', httpStatus: response.status });
+  } catch (error) {
+    logger.warn('Could not locate a trip endpoint', { event: 'trip_planning_place_unavailable', reason: error instanceof Error ? error.message : String(error) });
+  }
+  if (location?.latitude === undefined || location.longitude === undefined) throw new HttpsError('unavailable', 'Trips could not be loaded right now.');
+  return { lat: location.latitude, lng: location.longitude };
+}
+
+/** Unit-test dependency injection only: plan with this instead of Pathly's planner. */
+let transitPlanner = planTransitTrip;
+export function setTransitPlannerForTests(planner: typeof planTransitTrip | undefined): void {
+  transitPlanner = planner ?? planTransitTrip;
+}
+
+/**
+ * Real transit itineraries between two places, planned by Pathly itself (tripPlanner.ts) from the
+ * agencies' published timetables and OpenStreetMap's streets, so a plan costs no outside request.
+ * Each leg is then checked against the agencies' live feeds (tripLive.ts). An empty list means no
+ * transit trip gets there.
+ * Client call: httpsCallable(functions, 'planTrip')({ origin, destination, time, preference, modes, ferry?, lessWalking?, walkOnlyMaxMinutes? }).
  */
 export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary[] }>>(
-  // The bus feeds' keys too: the live check reads NYC, Suffolk, and NICE buses (tripLive.ts).
-  { ...protectedCallableOptions, secrets: [googleMapsApiKey, swiftlyApiKey, mtaBusTimeApiKey], timeoutSeconds: 30 },
+  // The bus feeds' keys for the live check (NYC, Suffolk, and NICE buses, tripLive.ts); the Maps key
+  // only locates a place sent without coordinates. Every agency's timetable is held for planning.
+  { ...protectedCallableOptions, memory: '2GiB', secrets: [googleMapsApiKey, swiftlyApiKey, mtaBusTimeApiKey], timeoutSeconds: 60 },
   async (request) => {
     await enforceCallableSecurity(request, 'planTrip', RATE_LIMITS.planTrip);
     const nowMs = Date.now();
     const trip = requiredPlanTripRequest(request.data, nowMs);
+    const [origin, destination] = await Promise.all([endpointLocation(trip.origin), endpointLocation(trip.destination)]);
+    if (![origin, destination].every((point) => isInServiceArea(point.lat, point.lng))) throw outOfArea();
 
-    let body: RoutesResponse & { error?: { status?: string; message?: string } };
-    let status: number;
-    try {
-      const response = await fetch(ROUTES_API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': googleMapsApiKey.value(), 'X-Goog-FieldMask': ROUTES_FIELD_MASK },
-        body: JSON.stringify(buildRoutesRequest(trip)),
-        signal: AbortSignal.timeout(ROUTES_TIMEOUT_MS),
-      });
-      status = response.status;
-      body = (await response.json()) as typeof body;
-    } catch (error) {
-      logger.warn('Trip planning request failed', { event: 'trip_planning_unavailable', reason: error instanceof Error ? error.message : String(error) });
-      throw new HttpsError('unavailable', 'Trips could not be loaded right now.');
-    }
-    if (status < 200 || status >= 300 || body.error) {
-      logger.warn('Trip planning request was rejected', { event: 'trip_planning_unavailable', httpStatus: status, googleStatus: body.error?.status, reason: body.error?.message });
-      throw new HttpsError('unavailable', 'Trips could not be loaded right now.');
-    }
-
-    // Endpoints given only as a place are checked against the service area here, where the
-    // route says where they are.
-    const legs = body.routes?.[0]?.legs ?? [];
-    const ends = [legs[0]?.startLocation, legs.at(-1)?.endLocation].map((location) => location?.latLng);
-    if (ends.some((point) => point?.latitude !== undefined && point.longitude !== undefined && !isInServiceArea(point.latitude, point.longitude))) throw outOfArea();
-
-    const requestTime = trip.time.mode === 'now' ? new Date(nowMs).toISOString() : trip.time.at;
-    // Google has no fares for the LIRR, NICE, or Suffolk; estimate those from published fares.
+    // Fares come from the agencies' published fare rules; the LIRR's depend on each station's zone.
     await prepareAgencyStaticData('lirr');
     const estimateFare = createFareEstimator(loadAgencyStaticData('lirr').stopsById.values());
-    const itineraries = normalizeRoutesResponse(body, requestTime, trip.destination.label, estimateFare);
-    const walkOnly = walkOnlyOption(trip, ends, nowMs, itineraries);
+    let itineraries: Itinerary[];
+    try {
+      itineraries = await transitPlanner({ request: trip, origin, destination, nowMs, estimateFare });
+    } catch (error) {
+      logger.error('Trip planning failed', { event: 'trip_planning_unavailable', reason: error instanceof Error ? error.message : String(error) });
+      throw new HttpsError('unavailable', 'Trips could not be loaded right now.');
+    }
+    const walkOnly = walkOnlyOption(trip, origin, destination, nowMs, itineraries);
     if (walkOnly) itineraries.push(walkOnly);
-    // Stops in between come from Pathly's own timetables (Google gives only a count); any leg not
-    // matched within the budget simply goes without.
-    const agencies = new Set(itineraries.flatMap((itinerary) => itinerary.steps.flatMap((step) => (step.kind === 'transit' ? agencyIdsForStep(step) : []))));
-    for (const agencyId of agencies) await prepareAgencyStaticData(agencyId);
-    const withStops = await addTripStops(itineraries, TRIP_STOPS_BUDGET_MS, tripStopMatcher);
-    // Then each leg against the agencies' live feeds: cancelled trips, live times, missed connections.
-    return { itineraries: await addLiveStatus(withStops, TRIP_LIVE_BUDGET_MS, nowMs, tripLiveLookup, undefined, tripAlertsLookup) };
+    // Each leg against the agencies' live feeds: cancelled trips, live times, missed connections.
+    return { itineraries: await addLiveStatus(itineraries, TRIP_LIVE_BUDGET_MS, nowMs, tripLiveLookup, undefined, tripAlertsLookup) };
   },
 );
 
 /**
  * Walking the whole way, when the rider asked for it (walkOnlyMaxMinutes) and it's short enough,
- * from Pathly's street graph rather than another billed Google call. The search stops at the
- * farthest the cap allows, so a long trip costs no more than a short one. Ends come from the
- * request's coordinates, else from where Google's route starts and ends.
+ * from Pathly's street graph. The search stops at the farthest the cap allows, so a long trip
+ * costs no more than a short one.
  */
-function walkOnlyOption(trip: PlanTripRequest, ends: ({ latitude?: number; longitude?: number } | undefined)[], nowMs: number, itineraries: Itinerary[]): Itinerary | null {
+function walkOnlyOption(trip: PlanTripRequest, from: LatLng, to: LatLng, nowMs: number, itineraries: Itinerary[]): Itinerary | null {
   if (!trip.walkOnlyMaxMinutes || itineraries.some((itinerary) => itinerary.steps.every((step) => step.kind === 'walk'))) return null;
-  const point = (endpoint: TripEndpoint, end: { latitude?: number; longitude?: number } | undefined) =>
-    endpoint.lat !== undefined && endpoint.lng !== undefined ? { lat: endpoint.lat, lng: endpoint.lng }
-      : end?.latitude !== undefined && end.longitude !== undefined ? { lat: end.latitude, lng: end.longitude } : null;
-  const from = point(trip.origin, ends[0]);
-  const to = point(trip.destination, ends[1]);
-  if (!from || !to) return null;
   const walk = walkingPath(from.lat, from.lng, to.lat, to.lng, walkOnlyLimitMeters(trip.walkOnlyMaxMinutes));
   if (!walk) return null;
   return walkOnlyItinerary({ meters: walk.meters, path: walk.path.map((spot) => ({ lat: spot.lat, lng: spot.lon })) }, trip.time, nowMs, trip.destination.label, trip.walkOnlyMaxMinutes);

@@ -20,7 +20,7 @@ export type TripStop = { name: string; location: LatLng; time: string };
 export type WalkStep = { kind: 'walk'; durationSeconds: number; distanceMeters: number; toName: string; path: LatLng[] };
 export type TransitStep = {
   kind: 'transit';
-  /** Google has no ferry travel mode to request, so ferry legs are only ever filtered here. */
+  /** Ferries are asked for (or not) on their own (`ferry` in the request); 'other' is anything else (trams). */
   mode: TripMode | 'ferry' | 'other';
   agency: { name: string; url?: string };
   line: { name: string; shortName?: string; color?: string; textColor?: string; vehicleName?: string };
@@ -30,13 +30,13 @@ export type TransitStep = {
   stopCount: number;
   durationSeconds: number;
   path: LatLng[];
-  /** The stops in between, in order, when the backend matched the leg to Pathly's timetables. */
+  /** The stops in between, in order. */
   stops?: TripStop[];
-  /** That scheduled trip's GTFS trip_id (admin ID overlay). */
+  /** The scheduled trip's GTFS trip_id (admin ID overlay). */
   tripId?: string;
   /** The same line's scheduled departures between the same two stops, this one included (tripDepartures.ts). */
   departures?: TripDeparture[];
-  /** The leg's GTFS line, direction and boarding stop (backend tripStops.ts), for its live vehicles. */
+  /** The leg's GTFS line, direction and boarding stop (backend tripPlanner.ts), for its live vehicles. */
   liveRoute?: { agencyId: string; routeId: string; boardStopId: string; alightStopId?: string; directionId?: number };
   /** What the agency's live feed says about this leg's trip (backend tripLive.ts). */
   live?: LegLive;
@@ -82,7 +82,9 @@ type PlanTripRequest = {
   time: { mode: 'now' } | { mode: 'depart' | 'arrive'; at: string };
   preference: RoutePreference;
   modes: TripMode[];
-  /** Settings -> Travel preferences with walking off: ask Google for less walking. */
+  /** False when the rider turned ferries off; left out, ferries may be ridden. */
+  ferry?: false;
+  /** Settings -> Travel preferences with walking off: plan with less walking. */
   lessWalking?: boolean;
   /** Also plan walking the whole way, when it takes at most this many minutes. */
   walkOnlyMaxMinutes?: number;
@@ -298,7 +300,7 @@ export function riderLocation(location: Coordinates, status: LocationStatus): Co
 // ---------------------------------------------------------------------------------------------
 // Requests
 
-/** What the admin's request log keeps of a plan: each trip's lines, times, and fare, not Google's content. */
+/** What the admin's request log keeps of a plan: each trip's lines, times, and fare, not every step. */
 export function summarizeItineraries({ itineraries }: { itineraries: Itinerary[] }) {
   return {
     count: itineraries.length,
@@ -322,6 +324,8 @@ export type PlanTripOptions = {
   time: TripTimeChoice;
   preference: RoutePreference;
   modes: readonly TripMode[];
+  /** Whether ferries may be ridden (the Ferry mode switch); true unless turned off. */
+  ferry?: boolean;
   /** Ask for trips with less walking (Settings -> Travel preferences, walking off). */
   lessWalking?: boolean;
   /** Also offer walking the whole way up to this many minutes (Settings -> Travel preferences); null is off. */
@@ -333,7 +337,8 @@ export type PlanTripOptions = {
 
 /**
  * Captures the route-results request as a safe relaunch reference. Coordinate endpoints are
- * timestamped so navigation storage can enforce the Routes API's 30-day coordinate lifetime.
+ * timestamped so navigation storage can enforce Google Places' 30-day limit on keeping the
+ * coordinates of a place it found.
  */
 export function createResumePlanRequest(
   { endpoints, location, time, preference, modes, lessWalking = false, now = new Date(appNow()) }: PlanTripOptions,
@@ -359,19 +364,19 @@ export function createResumePlanRequest(
 }
 
 /**
- * Whether to ask Google for less walking: the Less walking sort, or walking turned off in
- * Settings. Google takes one routing preference, so fewer transfers wins over it.
+ * Whether to plan with less walking: the Less walking sort, or walking turned off in Settings.
+ * The fewer-transfers sort wins over it, so that sort's trips aren't cut short for walking.
  */
 function asksLessWalking(preference: RoutePreference, lessWalking: boolean): boolean {
   return preference === 'walking' || (lessWalking && preference !== 'transfers');
 }
 
 /**
- * Real itineraries for the trip criteria from the backend (Google Routes API). Results are kept
- * for two minutes in memory only, so moving between results and a trip doesn't plan (and bill)
- * again; they're never stored, since itineraries go stale and Google limits caching them.
+ * Real itineraries for the trip criteria from Pathly's own planner (the backend's planTrip,
+ * from the agencies' timetables). Results are kept for two minutes in memory only, so moving
+ * between results and a trip doesn't plan again; they're never stored, since itineraries go stale.
  */
-export async function planTrip({ endpoints, location, time, preference, modes, lessWalking = false, walkOnlyMaxMinutes = null, refresh = false, now = new Date(appNow()) }: PlanTripOptions): Promise<TripPlanResult> {
+export async function planTrip({ endpoints, location, time, preference, modes, ferry = true, lessWalking = false, walkOnlyMaxMinutes = null, refresh = false, now = new Date(appNow()) }: PlanTripOptions): Promise<TripPlanResult> {
   const origin = endpointFor(endpoints.origin, endpoints.originPlace, location);
   if ('problem' in origin) return { ok: false, problem: origin.problem, field: 'origin' };
   const destination = endpointFor(endpoints.destination, endpoints.destinationPlace, location);
@@ -382,10 +387,11 @@ export async function planTrip({ endpoints, location, time, preference, modes, l
     destination: destination.endpoint,
     // The backend's "now" is real, so an admin's mock time goes as an explicit departure.
     time: time.mode === 'now' ? (isMockClock() ? { mode: 'depart', at: now.toISOString() } : { mode: 'now' }) : { mode: time.mode, at: tripTimeAt(time, now).at },
-    // Lowest fare and fastest sort the same results; fewer transfers and less walking ask Google
+    // Lowest fare and fastest sort the same results; fewer transfers and less walking plan
     // differently.
     preference: preference === 'transfers' ? 'transfers' : 'fastest',
     modes: [...modes],
+    ...(ferry ? {} : { ferry: false as const }),
     ...(asksLessWalking(preference, lessWalking) ? { lessWalking: true } : {}),
     // Walking turned off in Settings means no walk-only trip either.
     ...(walkOnlyMaxMinutes !== null && !lessWalking ? { walkOnlyMaxMinutes } : {}),
@@ -496,12 +502,11 @@ export function orderItineraries(itineraries: readonly Itinerary[], preference: 
 }
 
 /**
- * The modes to ask Google to prefer: the enabled ones it knows (it has no ferry mode). With only
- * Ferry enabled there's nothing to ask for, so every mode is asked and the app's filter decides.
+ * The modes a plan may ride, besides ferries (asked for on their own, `ferry` in planTrip's
+ * options): empty when only Ferry is switched on.
  */
 export function requestModes(enabled: readonly TransitMode[]): TripMode[] {
-  const known = enabled.filter((mode): mode is TripMode => mode !== 'ferry');
-  return known.length > 0 ? known : ['subway', 'bus', 'rail'];
+  return enabled.filter((mode): mode is TripMode => mode !== 'ferry');
 }
 
 /** The longest walk-only trip the backend plans. */
@@ -513,8 +518,8 @@ export function isWalkOnly(itinerary: Itinerary): boolean {
 }
 
 /**
- * Drops walking the whole way when it's over the rider's cap (or the cap is off); Google sometimes
- * offers one of its own. Every trip with a ride is kept.
+ * Drops walking the whole way when it's over the rider's cap (or the cap is off), as one planned
+ * before the setting changed may be. Every trip with a ride is kept.
  */
 export function filterWalkOnlyItineraries(itineraries: readonly Itinerary[], walkOnlyMaxMinutes: number | null): Itinerary[] {
   return itineraries.filter((itinerary) => !isWalkOnly(itinerary) || (walkOnlyMaxMinutes !== null && itinerary.durationSeconds <= walkOnlyMaxMinutes * 60));
@@ -537,14 +542,14 @@ export function filterItinerariesByWalk(itineraries: readonly Itinerary[], maxWa
   return within.length > 0 ? [...within, ...itineraries.filter(isWalkOnly)] : null;
 }
 
-/** Itineraries that use only enabled modes; Google treats excluded modes as a preference only. */
+/** Itineraries that use only enabled modes (a plan from before a switch changed may not). */
 export function filterItinerariesByMode(itineraries: readonly Itinerary[], modes: readonly TransitMode[]): Itinerary[] {
   return itineraries.filter((itinerary) => itinerary.steps.every((step) => step.kind !== 'transit' || step.mode === 'other' || modes.includes(step.mode)));
 }
 
 /**
- * One trip per route: Google often returns the same lines at several departure times (six "take
- * the 51" trips). Keeps each line sequence's first trip in the given order; the later departures
+ * One trip per route: a plan often has the same lines at several departure times (the next
+ * train as well). Keeps each line sequence's first trip in the given order; the later departures
  * stay a tap away in that trip's departure picker.
  */
 export function distinctRouteItineraries(itineraries: readonly Itinerary[]): Itinerary[] {
@@ -561,7 +566,7 @@ export function transitSteps(itinerary: Itinerary): TransitStep[] {
   return itinerary.steps.filter((step): step is TransitStep => step.kind === 'transit');
 }
 
-/** The fare as a card shows it: the rider's fare type where it's known, else the adult one-way fare (Google's or the published fare rules'), or unknown. */
+/** The fare as a card shows it: the rider's fare type where it's known, else the adult one-way fare from the published fare rules, or unknown. */
 export function fareLabel(fare: TripFare | undefined, fareType: FareType = 'full'): string {
   if (!fare) return 'Fare N/A';
   return riderFare(fare, fareType)?.text ?? fare.text;
@@ -570,7 +575,7 @@ export function fareLabel(fare: TripFare | undefined, fareType: FareType = 'full
 const LIRR_AGENCY = 'Long Island Rail Road';
 const METRO_NORTH_AGENCY = /metro[\s-]*north|\bmnr\b/i;
 
-/** The badge for a trip leg: LIRR branch codes ("PJ"), "N" for Google's "N Line", "51" for bus 51. */
+/** The badge for a trip leg: LIRR branch codes ("PJ"), "N" for an "N Line", "51" for bus 51. */
 export function lineBadge(step: TransitStep): string {
   if (step.agency.name === LIRR_AGENCY) return badgeLabel({ agency: 'LIRR', shortName: step.line.name });
   if (METRO_NORTH_AGENCY.test(step.agency.name)) return badgeLabel({ agency: 'Metro-North Railroad', shortName: step.line.shortName || step.line.name });

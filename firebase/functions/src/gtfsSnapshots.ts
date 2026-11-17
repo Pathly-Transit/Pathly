@@ -136,8 +136,13 @@ export type HydratedGtfsSnapshot = {
 /** route-files.json in an on-demand agency's core archive: each route file's size and hash. */
 export const ROUTE_FILES_INDEX = 'route-files.json';
 export type RouteFileIndex = Record<string, { size: number; sha256: string }>;
+/**
+ * The prepared files an on-demand agency keeps in Cloud Storage, each fetched on first use: every
+ * route's stop times and geometry, and the agency's routing timetable (read only by trip planning).
+ */
+const ON_DEMAND_FILE_PATTERN = /^(?:(?:stop_times|geometry)\/[^/\\]+\.json|routing\.bin)$/;
 const ROUTE_FILE_UPLOAD_CONCURRENCY = 16;
-/** One route's prepared stop times (a long Brooklyn route is a few MB). */
+/** One route's prepared stop times (a long Brooklyn route is a few MB), or an agency's routing timetable (Brooklyn's is under 2 MB). */
 const MAX_ROUTE_FILE_BYTES = 32 * 1024 * 1024;
 
 type SnapshotState = {
@@ -1181,7 +1186,7 @@ async function buildSplitDerivedArchive(
     const routeFiles = (await readdir(derivedDir, { recursive: true, withFileTypes: true }))
       .filter((entry) => entry.isFile())
       .map((entry) => relative(derivedDir, join(entry.parentPath, entry.name)).split(sep).join('/'))
-      .filter((name) => /^(?:stop_times|geometry)\//.test(name))
+      .filter((name) => ON_DEMAND_FILE_PATTERN.test(name))
       .sort();
     const index: RouteFileIndex = {};
     for (let start = 0; start < routeFiles.length; start += ROUTE_FILE_UPLOAD_CONCURRENCY) {
@@ -1190,7 +1195,7 @@ async function buildSplitDerivedArchive(
         index[name] = { size: data.length, sha256: sha256(data) };
         try {
           await storage.file(`${prefix}/${name}`).save(data, {
-            metadata: { cacheControl: 'private, max-age=31536000, immutable', contentType: 'application/json' },
+            metadata: { cacheControl: 'private, max-age=31536000, immutable', contentType: name.endsWith('.json') ? 'application/json' : 'application/octet-stream' },
             preconditionOpts: { ifGenerationMatch: 0 },
             resumable: false,
             validation: 'crc32c',
@@ -1505,7 +1510,7 @@ async function retireVersion(
     const index = unzipSync(new Uint8Array(core), { filter: (entry) => entry.name === ROUTE_FILES_INDEX })[ROUTE_FILES_INDEX];
     if (index) {
       for (const name of Object.keys(JSON.parse(Buffer.from(index).toString('utf-8')) as RouteFileIndex)) {
-        if (/^(?:stop_times|geometry)\/[^/\\]+\.json$/.test(name)) doomed.push(`${retiredDerived.routeFilesPrefix}/${name}`);
+        if (ON_DEMAND_FILE_PATTERN.test(name)) doomed.push(`${retiredDerived.routeFilesPrefix}/${name}`);
       }
     }
   }
@@ -1686,7 +1691,7 @@ function assertExtractedMatchesManifest(extracted: ExtractedGtfsArchive, manifes
 }
 
 // A prepared archive holds only these files; anything else (or any nested path) is rejected.
-const DERIVED_ENTRY_PATTERN = /^(?:manifest\.json|stop-indexes\.json|route-files\.json|(?:stop_times|geometry)\/[^/\\]+\.json)$/;
+const DERIVED_ENTRY_PATTERN = /^(?:manifest\.json|stop-indexes\.json|route-files\.json|routing\.bin|(?:stop_times|geometry)\/[^/\\]+\.json)$/;
 
 /**
  * The snapshot's prepared files, verified against its manifest, or undefined (logged) when they

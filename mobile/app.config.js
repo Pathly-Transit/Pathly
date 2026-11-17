@@ -57,13 +57,8 @@ module.exports = {
       'expo-web-browser',
       'expo-sharing',
       ['expo-notifications', { color: '#0B4F9C' }],
-      [
-        'react-native-maps',
-        {
-          iosGoogleMapsApiKey: process.env.GOOGLE_MAPS_IOS_API_KEY,
-          androidGoogleMapsApiKey: process.env.GOOGLE_MAPS_ANDROID_API_KEY,
-        },
-      ],
+      // Every map draws OpenStreetMap vector tiles with MapLibre Native (src/map/): no map API key.
+      '@maplibre/maplibre-react-native',
       [
         'expo-splash-screen',
         {

@@ -213,6 +213,7 @@ export function RouteResultsView({
     time: tripTime,
     preference,
     modes: requestModes(enabledModes),
+    ferry: enabledModes.includes('ferry'),
     lessWalking: !travelPreferences.allowWalking,
     walkOnlyMaxMinutes: travelPreferences.walkOnlyMaxMinutes,
     location: riderLocation,
