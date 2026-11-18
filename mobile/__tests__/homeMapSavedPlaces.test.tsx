@@ -79,7 +79,15 @@ describe('home map saved-place markers', () => {
     expect(marker.props.icon.anchor).toEqual({ x: 15, y: 15 });
     expect(marker.props.options).toEqual({ optimized: false });
     expect(screen.queryByTestId('web-Plan a trip to Future', { includeHiddenElements: true })).toBeNull();
-    fireEvent(marker, 'click');
-    expect(onSavedLocationPress).toHaveBeenCalledWith(savedWork, [savedWork]);
+    jest.useFakeTimers();
+    try {
+      fireEvent(marker, 'click');
+      // Opens only after the browser's own click, so that click can't land on the details' backdrop.
+      expect(onSavedLocationPress).not.toHaveBeenCalled();
+      jest.runOnlyPendingTimers();
+      expect(onSavedLocationPress).toHaveBeenCalledWith(savedWork, [savedWork]);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

@@ -12,6 +12,7 @@ import { metersPerPixelAtZoom, SAVED_PIN, savedPinSvgUrl, savedPlaceColor, stack
 import { locationPoint, savedPlaceName, type SavedLocation } from '../data/userData';
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useTheme } from '../theme/AppSettings';
+import { afterClick } from './afterClick';
 import { iconPaths } from './Icon';
 import { savedLocationIcon } from './SavedPlacesStrip';
 import { HeadingBeamMarker } from './HeadingBeamMarker';
@@ -232,7 +233,9 @@ export function GoogleMapView({ initialCamera, lines = [], location, onCameraCha
                   anchor: new google.maps.Point(SAVED_PIN.size / 2, SAVED_PIN.size / 2),
                 }}
                 key={saved.id}
-                onClick={() => onSavedLocationPress?.(saved, savedPins.filter((pin) => pin.position === pinPosition).map((pin) => pin.saved))}
+                // Google Maps reports the tap before the browser's own click arrives; opening the
+                // details at once put their backdrop under that click, which closed them again.
+                onClick={() => afterClick(() => onSavedLocationPress?.(saved, savedPins.filter((pin) => pin.position === pinPosition).map((pin) => pin.saved)))}
                 options={{ optimized: false }}
                 position={{ lat: pinPosition.latitude, lng: pinPosition.longitude }}
                 title={markerLabel}

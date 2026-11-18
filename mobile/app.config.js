@@ -35,7 +35,8 @@ module.exports = {
     experiments: { reactCompiler: true, baseUrl: '/app' },
     ios: {
       supportsTablet: true,
-      bundleIdentifier: 'com.pathly.app',
+      // Must match the app record in App Store Connect. Android's package stays com.pathly.app.
+      bundleIdentifier: 'com.mpaxos.pathly',
     },
     android: {
       // Permanent once the app is uploaded to Google Play.

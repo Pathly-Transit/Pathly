@@ -33,6 +33,8 @@ type TransitCardProps = {
 };
 
 const CARD_HORIZONTAL_MARGIN = 8;
+/** The card is a fixed 104 tall, so the big time can only grow this much with the phone's text size. */
+const MAX_TIME_FONT_SCALE = 1.3;
 // How far a touch/mouse-down has to travel before it's treated as a swipe instead of a tap.
 const SWIPE_THRESHOLD = 24;
 /**
@@ -82,12 +84,19 @@ function PageBody({ index, item, route, styles }: {
         <View style={[styles.timing, !item.live && styles.scheduledTiming]}>
           <View style={styles.timeRow}>
             {item.live ? <View style={styles.signalSpacer} /> : null}
-            <Text style={styles.minutes} testID={`transit-${route.id}-arrival-${index}`}>
+            <Text
+              adjustsFontSizeToFit={true}
+              maxFontSizeMultiplier={MAX_TIME_FONT_SCALE}
+              minimumFontScale={0.6}
+              numberOfLines={1}
+              style={styles.minutes}
+              testID={`transit-${route.id}-arrival-${index}`}
+            >
               {departureDisplay(item.minutes).value}
             </Text>
             {item.live ? <LiveSignal style={styles.signal} /> : null}
           </View>
-          <Text style={styles.minuteUnit}>{departureDisplay(item.minutes).unit}</Text>
+          <Text maxFontSizeMultiplier={MAX_TIME_FONT_SCALE} numberOfLines={1} style={styles.minuteUnit}>{departureDisplay(item.minutes).unit}</Text>
         </View>
       )}
     </>
@@ -287,11 +296,14 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   signalSpacer: { width: LIVE_SIGNAL_WIDTH },
   signal: { marginLeft: 2, marginTop: 1 },
   savedBadge: { position: 'absolute', top: 6, right: 8 },
+  // iOS clips the top of glyphs whose line is shorter than the font, so the line gets room to draw
+  // and the negative margin keeps the layout as tight as before.
   minutes: {
+    marginVertical: -4,
     color: colors.white,
     ...typography.displayTime,
     fontSize: 35,
-    lineHeight: 34,
+    lineHeight: 42,
   },
   minuteUnit: {
     marginTop: -1,
