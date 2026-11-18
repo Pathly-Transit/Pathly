@@ -40,6 +40,10 @@ const MAX_STOP_TIMES_PER_TRIP = 500;
 const MANIFEST_CHECK_INTERVAL_MS = 5 * 60_000;
 const DOWNLOAD_TIMEOUT_MS = 2 * 60_000;
 const SNAPSHOT_CHECK_TIMEOUT_MS = 10_000;
+// A new instance has no last good snapshot, so a timeout there means serving the older bundled
+// copy (or no data, for on-demand agencies). Give its first check longer, but keep two rounds of
+// a warm-up's agency checks inside the 60 s callable deadline.
+const FIRST_SNAPSHOT_CHECK_TIMEOUT_MS = 25_000;
 
 const RUNTIME_FILES = [
   'routes.txt',
@@ -1817,13 +1821,14 @@ async function checkForSnapshot(
 export async function hydrateCurrentGtfsSnapshot(
   agencyId: AgencyId,
   nowMs = Date.now(),
-  snapshotCheckTimeoutMs = SNAPSHOT_CHECK_TIMEOUT_MS,
+  timeoutMs?: number,
 ): Promise<HydratedGtfsSnapshot | null> {
   if (!remoteSnapshotsEnabled()) return null;
 
   const previous = snapshotStates.get(agencyId) ?? { checkedAtMs: 0, snapshot: null };
   if (previous.inFlight) return previous.inFlight;
   if (nowMs - previous.checkedAtMs < MANIFEST_CHECK_INTERVAL_MS) return previous.snapshot;
+  const snapshotCheckTimeoutMs = timeoutMs ?? (previous.snapshot ? SNAPSHOT_CHECK_TIMEOUT_MS : FIRST_SNAPSHOT_CHECK_TIMEOUT_MS);
 
   // Share the handled promise, not the raw storage operation. Every concurrent caller must
   // resolve to the same last-good/bundled fallback when Storage fails.

@@ -112,6 +112,8 @@ The Staten Island Ferry's feed leaves `direction_id` blank, so the refresh fills
 
 Set up alerts on `gtfs_refresh_failed`, `gtfs_snapshot_fallback`, `gtfs_snapshot_derived_failed`, and `gtfs_service_expiring`. Also alert if no complete refresh (`gtfs_refresh_completed`) succeeds within 26 hours.
 
+A single slow cold start can log up to one `gtfs_snapshot_fallback` per agency and then recover by itself. So the fallback alert uses the `pathly_gtfs_snapshot_fallback` log-based metric and fires only when there are more than 8 events across all functions in an hour.
+
 The refresh keeps immutable ZIP history instead of deleting archives during publication. That keeps content rollback and A-to-B-to-A reuse safe. Don't apply a blanket lifecycle rule that could remove an archive a live manifest references. If you ever need to clean up by hand, pause the scheduler first, and keep every current and previous archive that a manifest references.
 
 ## App Check rollout
