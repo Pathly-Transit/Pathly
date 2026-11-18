@@ -12,6 +12,7 @@ android/
 dist/
 build/
 coverage/
+/tmp/
 *.tsbuildinfo
 
 # Local configuration
@@ -29,6 +30,11 @@ coverage/
 play-service-account.json
 google-services.json
 GoogleService-Info.plist
+# Apple API/signing credentials belong in local/EAS credential storage.
+*.p8
+*.p12
+*.mobileprovision
+credentials.json
 
 # Firebase
 .firebase/
