@@ -23,6 +23,7 @@
       }
     },
     "production": {
+      "node": "24.9.0",
       "autoIncrement": true,
       "distribution": "store",
       "environment": "production",
