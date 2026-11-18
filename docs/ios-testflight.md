@@ -2,13 +2,14 @@
 
 This runbook prepares a signed iOS build for TestFlight. It does not certify public-release readiness. The [November 12 QA assessment](release-qa/2026-11-12/assessment.md) records passing JavaScript checks and an Android debug build, but no completed iOS build or physical-device navigation test. Record new results against the exact commit and build tested.
 
-As of November 18, the existing App Store Connect record is being configured, the supplied API key is stored locally with its path and Key ID, and its Issuer ID is still missing for this upload flow. Expo login works as `elemels`, but the existing `@pathlyapp/pathly` project denies that account read access. Its owner must grant appropriate project access or arrange use of an already authorized account. The inspected App Store Connect browser session shows the sign-in page. A completed production `.ipa`, successful upload and native device results have not been established by this handoff.
+As of November 18, the existing App Store Connect record has been verified: Apple ID `6836052767`, bundle ID `com.mpaxos.pathly`. The supplied API key is stored locally with its path and Key ID, and its Issuer ID is still missing for this upload flow. Expo login works as `elemels`, but the existing `@pathlyapp/pathly` project denies that account read access. Its owner must grant appropriate project access or arrange use of an already authorized account. A completed production `.ipa`, successful upload and native device results have not been established by this handoff.
 
 ## App identity
 
 | Setting | Expected value |
 | --- | --- |
 | iOS bundle identifier | `com.mpaxos.pathly` |
+| App Store Connect Apple ID | `6836052767` |
 | Expo project | `@pathlyapp/pathly` |
 | EAS project ID | `deefeb3d-b292-44e7-8e70-64f8f7bf6a87` |
 | Current display version | `0.1.0` |
@@ -26,13 +27,13 @@ Use the existing Apple Developer membership and the account holder's App Store C
 | Supplied `.p8` API private key and Key ID | Already prepared on this workstation in ignored `mobile/.credentials/`, with the path and Key ID in ignored `mobile/.env.testflight.local`. On another machine, retrieve the shared file through the approved private channel. Confirm the key is still active and its role permits uploading builds. Keep its contents out of Git, screenshots, chat, and logs. |
 | API Issuer ID | For the supplied team key, ask the account holder to copy this from **App Store Connect → Users and Access → Integrations → App Store Connect API → Team Keys**. A Team ID is not an Issuer ID. |
 | Apple Team ID | Confirm the previously supplied Team ID matches the developer membership used to sign `com.mpaxos.pathly`. It identifies the signing team, not the app record. |
-| Numeric App Store Connect app ID (`ascAppId`) | In an authorized Apple session, open **Apps → Pathly → App Information → General Information → Apple ID**. Anyone with the relevant app-information access can retrieve it; it is not specific to the teammate entering metadata. This is not the bundle identifier or the Apple account email. |
+| Numeric App Store Connect app ID (`ascAppId`) | Verified as `6836052767` in [Pathly App Information](https://appstoreconnect.apple.com/apps/6836052767/distribution/info) and set in the submission profile. Anyone with the relevant app-information access can retrieve it; it is not specific to the teammate entering metadata. This is not the bundle identifier or the Apple account email. |
 | Signing materials | Confirm an Apple Distribution certificate and App Store provisioning profile for the bundle ID are available to EAS, or arrange their initial setup with the account holder. The `.p8` upload key alone does not establish that signing is configured. |
 | Expo access | Sign in with an account that can access `@pathlyapp/pathly` and its production environment. |
 
 The November 18 checks of project information, iOS build history, and production environment metadata all returned an authorization denial for the existing project when signed in as `elemels`. Ask the `pathlyapp` owner to arrange access through Expo's supported collaboration route. Keep the existing project ID; creating a new project would not recover its signing credentials, environment, or build history.
 
-Use the existing Pathly App Store Connect record; do not create another record to work around missing access or an unknown numeric ID. Confirm that record uses `com.mpaxos.pathly`. The submission profile deliberately leaves `ascAppId` unset until its real value is confirmed. Add that numeric Apple ID as a string under `submit.production.ios.ascAppId` in `mobile/eas.json` before the store-input check. Both the store check and submission wrapper enforce this requirement: the wrapper stops before launching EAS while the numeric ID is absent. [Expo explains where to find `ascAppId`](https://docs.expo.dev/submit/ios/#how-to-find-ascappid).
+Use the existing Pathly App Store Connect record; do not create another record to work around missing access. The submission profile pins its confirmed `ascAppId` to `6836052767`, matching `com.mpaxos.pathly`. Both the store check and submission wrapper require a numeric ID: the wrapper stops before launching EAS if it is removed or malformed. [Expo explains where to find `ascAppId`](https://docs.expo.dev/submit/ios/#how-to-find-ascappid).
 
 The account holder should supply the Issuer ID if invited users cannot access **Integrations**. A redirect from that restricted section does not establish that the app or backend is down.
 
@@ -60,7 +61,7 @@ npm run ios:preflight
 
 This checks local app metadata and client-configuration readiness. It does not log in to Apple, inspect live EAS production values, validate key permissions, or prove that a signed build runs.
 
-The local handoff still needs the approved canonical `ADMIN_EMAILS` list. Restore it from an authorized maintainer using the canonical backend environment file or approved process environment; do not invent a new list to make preflight pass. The store check additionally needs the confirmed numeric `ascAppId` and missing Issuer ID. These expected failures must remain visible until their inputs are resolved.
+The local handoff still needs the approved canonical `ADMIN_EMAILS` list. Restore it from an authorized maintainer using the canonical backend environment file or approved process environment; do not invent a new list to make preflight pass. The store check additionally needs the missing Issuer ID; the numeric `ascAppId` is already configured. These expected failures must remain visible until their inputs are resolved.
 
 Verify **the EAS production environment**, using the [configuration reference](mobile-configuration.md), before queuing a cloud build:
 
@@ -139,6 +140,7 @@ The [existing device script](release-qa/2026-11-12/native-platform-notes.md#exac
 - **Locked-screen alerts:** current source configures when-in-use location and foreground progression, without a background task. Decide the launch promise. If timely locked-screen get-off alerts remain part of it, implement an explicit native lifecycle with appropriate consent, reconciliation and cleanup, then verify it on hardware. Do not advertise this as established behavior.
 - **iOS login:** native Google sign-in is conditional on the iOS OAuth ID, which is absent locally; no Sign in with Apple implementation is currently present. Verify the actual production offering. If Google login is offered for the primary account, resolve [Apple Guideline 4.8](https://developer.apple.com/app-store/review/guidelines/#login-services) before review unless a documented exception applies. Guest/email login alone does not establish an exception. Include this decision in external-beta preparation as well as public-release preparation.
 - **Store and reviewer material:** reconcile the app information already being prepared with the final build: app description, screenshots for supported devices, age rating, support/privacy URLs, accurate privacy disclosures including third-party SDKs, export-compliance answers, and reviewer instructions/access. Verify policy and deletion behavior against the actual build and backend. Do not invent answers from a dependency list.
+- **Marketing version:** the existing App Store version is currently `1.0`, while the Expo app configuration is `0.1.0`. Confirm the intended public-release version before selecting its release build.
 - **Release evidence:** close or explicitly scope the outstanding findings in the [release assessment](release-qa/2026-11-12/assessment.md). Neither this guide nor a passing preflight is release signoff. Keep unrun device combinations and unresolved processing/review issues visible in the handoff.
 
 Public availability requires a separate App Store version, completed metadata, App Review and the team's release decision. [Apple's publishing overview](https://developer.apple.com/help/app-store-connect/manage-your-apps-availability/overview-of-publishing-your-app-on-the-app-store/) describes that final stage.
@@ -160,6 +162,7 @@ Preparation is based on main commit `4fa282a` on branch `codex/testflight-prep`.
 | CocoaPods | Installed successfully: 120 dependencies, 121 pods |
 | Unsigned simulator compilation | **BUILD SUCCEEDED**: Pathly scheme, Debug configuration, arm64, Xcode 27.2 / iOS Simulator SDK 27.2, code signing disabled; minimum runtime iOS 16.4, iPhone and iPad |
 | Expo access | Login succeeded as `elemels`; project information, iOS build history and production environment reads were denied for the existing project |
-| Local store preflight | Expected failures: canonical `ADMIN_EMAILS`, confirmed numeric `ascAppId`, and team-key Issuer ID. Local Firebase, Maps/Places fallback, key ID and private-key shape checks passed |
+| Apple app record | Verified Apple ID `6836052767` and bundle ID `com.mpaxos.pathly` in the signed-in App Information page; submission profile updated |
+| Local store preflight | Expected failures: canonical `ADMIN_EMAILS` and team-key Issuer ID. Confirmed numeric app ID, local Firebase, Maps/Places fallback, key ID and private-key shape checks passed |
 
 The simulator result is a Debug development-client binary without an embedded production JavaScript bundle. It was not launched or device-tested and is not a signed Release archive or TestFlight `.ipa`. Cloud production values, signing availability, build history, installed-device behavior and TestFlight processing remain unverified. Native Google OAuth is absent locally; check the intended production offering. No cloud build, upload, deployment, account-role change or public release was performed.
