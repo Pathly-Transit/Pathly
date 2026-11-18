@@ -171,6 +171,21 @@ npm run deploy:web
 
 This exports the web bundle to `mobile/dist`, puts it under `/app` next to the landing page and privacy policy from `website/` (in `dist/site`), and deploys only Hosting. pathly.web.app is the landing page, pathly.web.app/app is the web app, and pathly.web.app/privacy stays where the app and Play listing link to it. It doesn't change Cloud Functions, Firestore, or Storage. You need to be signed in to the Firebase CLI (`npx firebase-tools login`) with access to the `pathly-b7f0f` project. The `EXPO_PUBLIC_` values in your local `mobile/.env` are built into the bundle, so deploy from a machine that has the full config.
 
+## iOS release
+
+iOS uses the bundle identifier `com.mpaxos.pathly` and the EAS project `@pathlyapp/pathly`. Follow the [TestFlight runbook](docs/ios-testflight.md) for Apple account access, signing, production configuration, upload inputs and device testing. Run its repository commands from the root; direct EAS commands run from `mobile/`.
+
+```sh
+npm run ios:preflight            # check local metadata and client configuration
+npm run build:ios                # queue a signed production iOS build on EAS
+npm run ios:preflight -- --store  # also check submission inputs
+npm run submit:ios -- --id <EAS-build-id>  # upload this exact production build
+```
+
+These commands load ignored `mobile/.env.testflight.local`. The local API-key file/path and signing-team inputs are prepared; the Issuer ID, confirmed numeric App Store Connect app ID, and approved local `ADMIN_EMAILS` still need resolution. Submission stops before EAS if the numeric app ID is missing. EAS and App Store Connect both require sign-in; production cloud configuration remains unverified. See the runbook before starting a build or upload.
+
+TestFlight distribution and public App Store release are separate steps. The `ios-simulator` EAS profile cannot be submitted to TestFlight. Native device checks and the documented background-navigation/login decisions remain open until verified for the release build.
+
 ## Android release
 
 Android builds run on EAS (`mobile/eas.json`). The package name is `com.pathly.app` and can't change after the first Google Play upload. Run these commands from `mobile/` after `npx eas-cli login`.
