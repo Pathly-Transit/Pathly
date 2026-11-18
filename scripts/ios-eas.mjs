@@ -46,7 +46,7 @@ if (action === 'submit' && !args.includes('--help') && !args.includes('-h')) {
     process.exit(1);
   }
   if (typeof appId !== 'string' || !/^\d+$/.test(appId)) {
-    console.error('Set the confirmed numeric ascAppId for Sammi\'s existing App Store Connect app in mobile/eas.json before submitting.');
+    console.error('Set the confirmed numeric ascAppId for the existing Pathly App Store Connect record in mobile/eas.json before submitting.');
     process.exit(1);
   }
 }

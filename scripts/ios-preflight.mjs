@@ -53,7 +53,7 @@ export function checkIosRelease({ app, eas, env, store = false, readKey = readFi
     const submit = eas.submit?.production?.ios ?? {};
     check(submit.appleTeamId === 'MRANRL5SNC', 'Submission targets the professor\'s Apple team');
     if (env.EXPO_APPLE_TEAM_ID) check(env.EXPO_APPLE_TEAM_ID === submit.appleTeamId, 'Build and submission Apple Team IDs agree');
-    check(typeof submit.ascAppId === 'string' && /^\d+$/.test(submit.ascAppId), 'Confirmed numeric ascAppId is set in mobile/eas.json (obtain the existing app ID from Sammi)');
+    check(typeof submit.ascAppId === 'string' && /^\d+$/.test(submit.ascAppId), 'Confirmed numeric ascAppId is set in mobile/eas.json (App Store Connect: App Information, Apple ID)');
     check(/^[A-Z0-9]{10}$/.test(substitute(submit.ascApiKeyId, env) ?? ''), 'App Store Connect API Key ID has the expected format');
     check(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(substitute(submit.ascApiKeyIssuerId, env) ?? ''), 'App Store Connect team-key Issuer ID is configured');
     let validKey = false;
