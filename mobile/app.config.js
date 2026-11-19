@@ -37,6 +37,10 @@ module.exports = {
       supportsTablet: true,
       // Must match the app record in App Store Connect. Android's package stays com.pathly.app.
       bundleIdentifier: 'com.mpaxos.pathly',
+      // Networking/authentication use standard or Apple OS-provided cryptography.
+      infoPlist: {
+        ITSAppUsesNonExemptEncryption: false,
+      },
     },
     android: {
       // Permanent once the app is uploaded to Google Play.
