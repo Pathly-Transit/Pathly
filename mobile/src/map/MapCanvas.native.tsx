@@ -29,8 +29,9 @@ import {
 } from './mapTypes';
 
 /**
- * The map kit on iOS and Android (mapTypes.ts), drawn by MapLibre Native: the base map, lines and
- * dots as GeoJSON layers slotted above it (mapStyle.ts's overlay slots), and markers as live views.
+ * The map kit on iOS and Android (mapTypes.ts), drawn by MapLibre Native (an open-source renderer
+ * compiled into the app, showing nothing of its own): Pathly's base map (mapStyle.ts), lines and
+ * dots as GeoJSON layers slotted above it, and markers as live views.
  */
 
 /** The map's bearing, for markers turned to the ground; only those markers re-render as it turns. */
@@ -73,7 +74,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
   ref,
 ) {
-  const { colors, isDark } = useTheme();
+  const { isDark } = useTheme();
   // As JSON, which is what the native map takes (and an unchanged theme sends nothing new).
   const mapStyle = useMemo(() => JSON.stringify(pathlyMapStyle(isDark)), [isDark]);
   const mapRef = useRef<MapRef>(null);
@@ -134,7 +135,8 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       testID={testID}
     >
       <Map
-        attribution={true}
+        // No logo or attribution control of the renderer's own (the base map's data is public domain and needs no credit).
+        attribution={false}
         compass={false}
         contentInset={contentInset}
         doubleTapHoldZoom={interactive}
@@ -158,7 +160,6 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
           onUserGesture?.();
         }}
         ref={mapRef}
-        tintColor={colors.mutedInk}
         touchPitch={interactive && pitchEnabled}
         touchRotate={interactive && rotateEnabled}
         touchZoom={interactive}

@@ -30,7 +30,11 @@
     "deploy:functions": "node scripts/check-deploy-env.mjs backend && npm run build --workspace functions && npx --yes firebase-tools@15.32.1 deploy --only functions",
     "build:web": "npm run build:web --workspace @pathly/mobile",
     "build:site": "npm run build:web && node scripts/build-site.mjs",
-    "deploy:web": "node scripts/check-deploy-env.mjs web && npm run build:site && npx --yes firebase-tools@15.32.1 deploy --only hosting"
+    "deploy:web": "node scripts/check-deploy-env.mjs web && npm run build:site && npx --yes firebase-tools@15.32.1 deploy --only hosting",
+    "map:download": "node scripts/build-map.mjs download",
+    "map:build": "node --max-old-space-size=8192 scripts/build-map.mjs build",
+    "map:fonts": "node scripts/build-map-fonts.mjs",
+    "map:serve": "node scripts/serve-map.mjs"
   },
   "devDependencies": {
     "@fission-ai/openspec": "^1.13.2"

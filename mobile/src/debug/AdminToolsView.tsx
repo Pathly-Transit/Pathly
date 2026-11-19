@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { Platform, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Card, createStyles as createProfileStyles, Header, SettingRow, ToggleRow } from '../components/ProfileView';
+import { Card, createStyles as createProfileStyles, Header, SettingRow, ToggleRow } from '../components/SettingsKit';
 import { PressableScale } from '../components/PressableScale';
 import { refreshLiveDataNow } from '../data/TransitLiveContext';
 import { LIVE_CACHE_KEY, NEARBY_CACHE_KEY } from '../data/deviceCache';

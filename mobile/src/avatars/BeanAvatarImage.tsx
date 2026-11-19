@@ -41,7 +41,10 @@ export function BeanAvatar({ config, size = 48, animated = false, accessibilityL
         { translateY: idle.interpolate({ inputRange: [0, 1], outputRange: [0, -size * 0.025] }) },
         { rotate: idle.interpolate({ inputRange: [0, 1], outputRange: ['-1.5deg', '1.5deg'] }) },
       ] } : undefined}>
-        <SvgXml accessible={false} xml={beanAvatarSvg(config)} width={size} height={size} />
+        {/* The drawing itself stays out of screen readers (the view around it carries any label);
+            on the web the svg is a plain element that screen readers already skip, and
+            `accessible` isn't an attribute it takes. */}
+        <SvgXml {...(Platform.OS === 'web' ? {} : { accessible: false })} xml={beanAvatarSvg(config)} width={size} height={size} />
       </Animated.View>
     </View>
   );

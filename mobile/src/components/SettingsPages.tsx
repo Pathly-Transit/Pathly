@@ -29,7 +29,7 @@ import { fontFamilies, typography } from '../theme/typography';
 import { SheetPanel } from './SheetPanel';
 import { ConfirmDialog } from './ConfirmDialog';
 import { RouteAlertsPrompt, type RouteAlertsRequest } from './RouteAlertsPrompt';
-import { Card, ChoiceRow, createStyles as createProfileStyles, SettingRow, ToggleRow } from './ProfileView';
+import { Card, ChoiceRow, createStyles as createProfileStyles, SettingRow, ToggleRow } from './SettingsKit';
 import { Icon } from './Icon';
 import { PressableScale } from './PressableScale';
 import { badgeLabel, RouteBadge, transitModeForAgency, type TransitMode } from './RouteBadge';

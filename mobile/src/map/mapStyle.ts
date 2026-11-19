@@ -1,25 +1,33 @@
 // Types only (erased from the bundle): the style spec both map libraries render.
-import type { ExpressionSpecification, LayerSpecification, StyleSpecification } from '@maplibre/maplibre-gl-style-spec';
+import type { ExpressionSpecification, LayerSpecification, StyleSpecification, SymbolLayerSpecification } from '@maplibre/maplibre-gl-style-spec';
+
+import { MAP_EXPLORATION_BOUNDS } from '../data/serviceArea';
 
 /**
  * The base map every Pathly map draws (home, route, trip, and choose-on-map; native and web):
- * OpenStreetMap's streets, buildings, water, parks, and places as vector tiles in the
- * OpenMapTiles schema, styled here to read like the familiar maps riders know — white streets
- * with gray edges, blue water, green parks — with Pathly's own changes: highways in quiet gray so
- * route lines stand out, no business or attraction labels (stations keep theirs), and a dark
- * version for the dark theme.
+ * Pathly's own vector tiles of New York City, Long Island, and the region around them, built from
+ * public-domain government data (Census TIGER/Line streets, water, parks, and places; USGS names;
+ * NYC building footprints) by scripts/build-map.mjs, and labeled in Nunito, the app's typeface
+ * (scripts/build-map-fonts.mjs). Styled to read like the familiar maps riders know (white streets
+ * with gray edges, blue water, green parks) with Pathly's own changes: highways in quiet gray so
+ * route lines stand out, no business labels (stations keep theirs), and a dark version.
  *
- * Tiles come from OpenFreeMap (openfreemap.org: free, no key, no request limits, refreshed from
- * OpenStreetMap every week). EXPO_PUBLIC_MAP_TILES_URL and EXPO_PUBLIC_MAP_GLYPHS_URL point the
- * map at another OpenMapTiles-schema source instead (a self-hosted copy, for instance). The
- * attribution OpenStreetMap's license requires is shown on every map.
+ * The tiles and fonts are served from Pathly's site. EXPO_PUBLIC_MAP_TILES_URL and
+ * EXPO_PUBLIC_MAP_GLYPHS_URL point the map elsewhere (a local copy while building the map, say).
  */
 
-const DEFAULT_TILES_URL = 'https://tiles.openfreemap.org/planet';
-const DEFAULT_GLYPHS_URL = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
-export const MAP_TILES_URL = process.env.EXPO_PUBLIC_MAP_TILES_URL || DEFAULT_TILES_URL;
-const MAP_GLYPHS_URL = process.env.EXPO_PUBLIC_MAP_GLYPHS_URL || DEFAULT_GLYPHS_URL;
-export const MAP_ATTRIBUTION = '© OpenStreetMap contributors · © OpenMapTiles · OpenFreeMap';
+const SITE = 'https://pathly.web.app/map';
+export const MAP_TILES_URL = process.env.EXPO_PUBLIC_MAP_TILES_URL || `${SITE}/tiles/{z}/{x}/{y}.pbf`;
+const MAP_GLYPHS_URL = process.env.EXPO_PUBLIC_MAP_GLYPHS_URL || `${SITE}/fonts/{fontstack}/{range}.pbf`;
+
+/** Where the tiles reach (the build's overview area: the exploration box and the region around it). */
+const TILE_BOUNDS: [number, number, number, number] = [
+  MAP_EXPLORATION_BOUNDS.west - 5,
+  MAP_EXPLORATION_BOUNDS.south - 4,
+  MAP_EXPLORATION_BOUNDS.east + 5,
+  MAP_EXPLORATION_BOUNDS.north + 4,
+];
+const TILES_MAX_ZOOM = 14;
 
 /**
  * Empty layers at the top of the style that Pathly's own lines and dots are slotted beneath
@@ -29,23 +37,21 @@ export const MAP_ATTRIBUTION = '© OpenStreetMap contributors · © OpenMapTiles
 export const OVERLAY_SLOTS = 8;
 export const overlaySlotId = (slot: number) => `pathly-slot-${Math.max(0, Math.min(OVERLAY_SLOTS, slot))}`;
 
-const SOURCE = 'openmaptiles';
-const REGULAR = ['Noto Sans Regular'];
-const BOLD = ['Noto Sans Bold'];
-const ITALIC = ['Noto Sans Italic'];
+const SOURCE = 'pathly';
+const REGULAR = ['Nunito-Regular'];
+const SEMIBOLD = ['Nunito-SemiBold'];
+const BOLD = ['Nunito-Bold'];
+const ITALIC = ['Nunito-Italic'];
 
 type Palette = {
   land: string;
   manMade: string;
   park: string;
-  wood: string;
   grass: string;
   hospital: string;
   school: string;
-  sand: string;
   water: string;
   aeroArea: string;
-  runway: string;
   building: string;
   buildingOutline: string;
   casing: string;
@@ -66,10 +72,10 @@ type Palette = {
   neighborhoodLabel: string;
   roadLabel: string;
   waterLabel: string;
+  parkLabel: string;
   stationLabel: string;
   stationDot: string;
   stationRing: string;
-  houseNumber: string;
 };
 
 /** Light: the familiar map's colors, highways grayed (they competed with route lines). */
@@ -77,14 +83,11 @@ const LIGHT: Palette = {
   land: '#F3F2EF',
   manMade: '#EDECE9',
   park: '#CBEAC2',
-  wood: '#D2EBC8',
   grass: '#DCEFD3',
   hospital: '#FBE7E5',
   school: '#F0ECE4',
-  sand: '#F6EFD2',
   water: '#A8D0F2',
   aeroArea: '#E8E8EA',
-  runway: '#D7D9DD',
   building: '#E6E4E0',
   buildingOutline: '#D8D6D1',
   casing: '#DADCE0',
@@ -105,10 +108,10 @@ const LIGHT: Palette = {
   neighborhoodLabel: '#7A7F86',
   roadLabel: '#5F6368',
   waterLabel: '#3F77B0',
+  parkLabel: '#3E7B4C',
   stationLabel: '#3C4F66',
   stationDot: '#FFFFFF',
   stationRing: '#5F7189',
-  houseNumber: '#9AA0A6',
 };
 
 /** Dark: black and dark-gray surfaces, light-gray labels; water and parks just distinguishable. */
@@ -116,14 +119,11 @@ const DARK: Palette = {
   land: '#16171A',
   manMade: '#1B1C1F',
   park: '#18241C',
-  wood: '#18241C',
   grass: '#18221B',
   hospital: '#1E1B1D',
   school: '#1C1C1F',
-  sand: '#1E1D19',
   water: '#0D1724',
   aeroArea: '#1B1C1F',
-  runway: '#2A2D33',
   building: '#1E1F23',
   buildingOutline: '#25272C',
   casing: '#1B1C1F',
@@ -144,10 +144,10 @@ const DARK: Palette = {
   neighborhoodLabel: '#80868E',
   roadLabel: '#9AA0A8',
   waterLabel: '#4E6A88',
+  parkLabel: '#5F8E69',
   stationLabel: '#B3B9C1',
   stationDot: '#16171A',
   stationRing: '#8E949C',
-  houseNumber: '#5F656D',
 };
 
 /** A line width growing with zoom (each step up doubles the scale, so widths grow ~1.5x per zoom). */
@@ -155,20 +155,28 @@ function width(...stops: number[]): ExpressionSpecification {
   return ['interpolate', ['exponential', 1.5], ['zoom'], ...stops] as ExpressionSpecification;
 }
 
-const NAME: ExpressionSpecification = ['coalesce', ['get', 'name_en'], ['get', 'name']];
+/** The same widths, with ramps (link) narrower than the highway they join. */
+function widthWithLinks(...stops: number[]): ExpressionSpecification {
+  const out: unknown[] = ['interpolate', ['exponential', 1.5], ['zoom']];
+  for (let i = 0; i < stops.length; i += 2) out.push(stops[i], ['case', ['==', ['get', 'link'], 1], stops[i + 1]! * 0.55, stops[i + 1]]);
+  return out as ExpressionSpecification;
+}
 
-type RoadKind = { id: string; classes: string[]; fill: keyof Palette; casing: keyof Palette; minzoom: number; fillWidth: ExpressionSpecification; casingWidth: ExpressionSpecification };
+const NAME: ExpressionSpecification = ['get', 'name'];
+const POINTS: ExpressionSpecification = ['==', ['geometry-type'], 'Point'];
+const AREAS: ExpressionSpecification = ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false];
 
-/** Street classes, least important first so the bigger roads draw over them. */
+type RoadKind = { id: string; kinds: string[]; fill: keyof Palette; casing: keyof Palette; minzoom: number; fillWidth: ExpressionSpecification; casingWidth: ExpressionSpecification };
+
+/** Street kinds, least important first so the bigger roads draw over them. */
 const ROADS: RoadKind[] = [
-  { id: 'path', classes: ['path', 'track'], fill: 'path', casing: 'path', minzoom: 14, fillWidth: width(14, 0.5, 18, 2.5), casingWidth: width(14, 0, 18, 0) },
-  { id: 'service', classes: ['service'], fill: 'minor', casing: 'casing', minzoom: 14, fillWidth: width(14, 0.6, 16, 3, 18, 8), casingWidth: width(14, 1.2, 16, 4.5, 18, 10) },
-  { id: 'minor', classes: ['minor', 'busway'], fill: 'minor', casing: 'casing', minzoom: 12, fillWidth: width(12, 0.5, 14, 2, 16, 6, 18, 16), casingWidth: width(12, 0.8, 14, 3, 16, 7.5, 18, 18.5) },
-  { id: 'tertiary', classes: ['tertiary'], fill: 'arterial', casing: 'arterialCasing', minzoom: 10, fillWidth: width(10, 0.6, 12, 1.4, 14, 3.5, 16, 8, 18, 20), casingWidth: width(10, 1, 12, 2.2, 14, 5, 16, 10, 18, 23) },
-  { id: 'secondary', classes: ['secondary'], fill: 'arterial', casing: 'arterialCasing', minzoom: 9, fillWidth: width(9, 0.6, 12, 1.8, 14, 4.5, 16, 10, 18, 24), casingWidth: width(9, 1, 12, 2.8, 14, 6, 16, 12, 18, 27) },
-  { id: 'primary', classes: ['primary'], fill: 'arterial', casing: 'arterialCasing', minzoom: 7, fillWidth: width(7, 0.5, 10, 1.2, 12, 2.4, 14, 5.5, 16, 12, 18, 28), casingWidth: width(7, 0.9, 10, 2, 12, 3.6, 14, 7.2, 16, 14, 18, 31) },
-  { id: 'trunk', classes: ['trunk'], fill: 'highway', casing: 'highwayCasing', minzoom: 5, fillWidth: width(5, 0.5, 10, 1.6, 12, 3, 14, 6, 16, 13, 18, 30), casingWidth: width(5, 0.8, 10, 2.4, 12, 4.2, 14, 7.8, 16, 15, 18, 33) },
-  { id: 'motorway', classes: ['motorway'], fill: 'motorway', casing: 'motorwayCasing', minzoom: 4, fillWidth: width(4, 0.5, 10, 1.8, 12, 3.2, 14, 6.5, 16, 14, 18, 32), casingWidth: width(4, 0.8, 10, 2.6, 12, 4.4, 14, 8.4, 16, 16, 18, 35) },
+  { id: 'path', kinds: ['path'], fill: 'path', casing: 'path', minzoom: 14, fillWidth: width(14, 0.5, 18, 2.5), casingWidth: width(14, 0, 18, 0) },
+  { id: 'service', kinds: ['service'], fill: 'minor', casing: 'casing', minzoom: 14, fillWidth: width(14, 0.6, 16, 3, 18, 8), casingWidth: width(14, 1.2, 16, 4.5, 18, 10) },
+  { id: 'minor', kinds: ['minor'], fill: 'minor', casing: 'casing', minzoom: 12, fillWidth: width(12, 0.5, 14, 2, 16, 6, 18, 16), casingWidth: width(12, 0.8, 14, 3, 16, 7.5, 18, 18.5) },
+  { id: 'tertiary', kinds: ['tertiary'], fill: 'arterial', casing: 'arterialCasing', minzoom: 10, fillWidth: width(10, 0.6, 12, 1.4, 14, 3.5, 16, 8, 18, 20), casingWidth: width(10, 1, 12, 2.2, 14, 5, 16, 10, 18, 23) },
+  { id: 'secondary', kinds: ['secondary'], fill: 'arterial', casing: 'arterialCasing', minzoom: 8, fillWidth: width(8, 0.5, 12, 1.8, 14, 4.5, 16, 10, 18, 24), casingWidth: width(8, 0.9, 12, 2.8, 14, 6, 16, 12, 18, 27) },
+  { id: 'primary', kinds: ['primary'], fill: 'arterial', casing: 'arterialCasing', minzoom: 6, fillWidth: width(6, 0.5, 10, 1.2, 12, 2.4, 14, 5.5, 16, 12, 18, 28), casingWidth: width(6, 0.9, 10, 2, 12, 3.6, 14, 7.2, 16, 14, 18, 31) },
+  { id: 'motorway', kinds: ['motorway'], fill: 'motorway', casing: 'motorwayCasing', minzoom: 4, fillWidth: widthWithLinks(4, 0.5, 10, 1.8, 12, 3.2, 14, 6.5, 16, 14, 18, 32), casingWidth: widthWithLinks(4, 0.8, 10, 2.6, 12, 4.4, 14, 8.4, 16, 16, 18, 35) },
 ];
 
 function roadLayers(palette: Palette, brunnel: 'tunnel' | 'road' | 'bridge'): LayerSpecification[] {
@@ -180,9 +188,9 @@ function roadLayers(palette: Palette, brunnel: 'tunnel' | 'road' | 'bridge'): La
     id: `road-${brunnel}-${road.id}-casing`,
     type: 'line',
     source: SOURCE,
-    'source-layer': 'transportation',
+    'source-layer': 'road',
     minzoom: road.minzoom,
-    filter: ['all', brunnelFilter, ['match', ['get', 'class'], road.classes, true, false]],
+    filter: ['all', brunnelFilter, ['match', ['get', 'kind'], road.kinds, true, false]],
     layout: { 'line-cap': brunnel === 'tunnel' ? 'butt' : 'round', 'line-join': 'round' },
     paint: { 'line-color': palette[road.casing], 'line-width': road.casingWidth, 'line-opacity': opacity, ...(brunnel === 'tunnel' ? { 'line-dasharray': [1, 0.5] } : {}) },
   }));
@@ -190,9 +198,9 @@ function roadLayers(palette: Palette, brunnel: 'tunnel' | 'road' | 'bridge'): La
     id: `road-${brunnel}-${road.id}`,
     type: 'line',
     source: SOURCE,
-    'source-layer': 'transportation',
+    'source-layer': 'road',
     minzoom: road.minzoom,
-    filter: ['all', brunnelFilter, ['match', ['get', 'class'], road.classes, true, false]],
+    filter: ['all', brunnelFilter, ['match', ['get', 'kind'], road.kinds, true, false]],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': palette[road.fill],
@@ -205,51 +213,51 @@ function roadLayers(palette: Palette, brunnel: 'tunnel' | 'road' | 'bridge'): La
   return brunnel === 'bridge' ? ROADS.flatMap((_, index) => [casings[index - 1], fills[index]].filter((layer): layer is LayerSpecification => layer !== undefined)) : [...casings, ...fills];
 }
 
+/**
+ * A label layer, plus copies for labels too small to show by the tiles' last zoom: those carry the
+ * zoom they show from (`lz`, 15 or 16), and their copy waits until then.
+ */
+function withLateLabels(layer: SymbolLayerSpecification & { filter: ExpressionSpecification }): LayerSpecification[] {
+  return [
+    { ...layer, filter: ['all', layer.filter, ['!', ['has', 'lz']]] },
+    ...[15, 16].map((zoom): LayerSpecification => ({ ...layer, id: `${layer.id}-${zoom}`, minzoom: zoom, filter: ['all', layer.filter, ['==', ['get', 'lz'], zoom]] })),
+  ];
+}
+
 function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
+  const halo = { 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.5 };
   return [
     { id: 'background', type: 'background', paint: { 'background-color': palette.land } },
+    { id: 'sea', type: 'fill', source: SOURCE, 'source-layer': 'sea', paint: { 'fill-color': palette.water } },
+    { id: 'land', type: 'fill', source: SOURCE, 'source-layer': 'land', paint: { 'fill-color': palette.land } },
     {
       id: 'landuse-man-made',
       type: 'fill',
       source: SOURCE,
       'source-layer': 'landuse',
-      filter: ['match', ['get', 'class'], ['residential', 'commercial', 'industrial', 'retail', 'railway', 'garages', 'quarry'], true, false],
-      paint: { 'fill-color': palette.manMade, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0, 11, 0.7] },
+      filter: ['all', AREAS, ['match', ['get', 'kind'], ['commercial', 'industrial'], true, false]],
+      paint: { 'fill-color': palette.manMade, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0, 12, 0.8] },
     },
-    { id: 'landuse-hospital', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['==', ['get', 'class'], 'hospital'], paint: { 'fill-color': palette.hospital } },
-    { id: 'landuse-school', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['match', ['get', 'class'], ['school', 'university', 'college', 'kindergarten'], true, false], paint: { 'fill-color': palette.school } },
-    { id: 'landuse-cemetery', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 11, filter: ['==', ['get', 'class'], 'cemetery'], paint: { 'fill-color': palette.grass } },
-    { id: 'landcover-wood', type: 'fill', source: SOURCE, 'source-layer': 'landcover', filter: ['==', ['get', 'class'], 'wood'], paint: { 'fill-color': palette.wood } },
-    { id: 'landcover-grass', type: 'fill', source: SOURCE, 'source-layer': 'landcover', minzoom: 10, filter: ['match', ['get', 'class'], ['grass', 'farmland', 'wetland'], true, false], paint: { 'fill-color': palette.grass, 'fill-opacity': 0.8 } },
-    { id: 'landcover-sand', type: 'fill', source: SOURCE, 'source-layer': 'landcover', minzoom: 10, filter: ['==', ['get', 'class'], 'sand'], paint: { 'fill-color': palette.sand } },
-    { id: 'landuse-recreation', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['match', ['get', 'class'], ['pitch', 'playground', 'stadium', 'zoo', 'theme_park'], true, false], paint: { 'fill-color': palette.grass } },
-    { id: 'park', type: 'fill', source: SOURCE, 'source-layer': 'park', paint: { 'fill-color': palette.park } },
-    { id: 'water', type: 'fill', source: SOURCE, 'source-layer': 'water', filter: ['!=', ['get', 'brunnel'], 'tunnel'], paint: { 'fill-color': palette.water } },
+    { id: 'landuse-airport', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 9, filter: ['all', AREAS, ['==', ['get', 'kind'], 'airport']], paint: { 'fill-color': palette.aeroArea } },
+    { id: 'landuse-hospital', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['all', AREAS, ['==', ['get', 'kind'], 'hospital']], paint: { 'fill-color': palette.hospital } },
+    { id: 'landuse-school', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['all', AREAS, ['match', ['get', 'kind'], ['school', 'university'], true, false]], paint: { 'fill-color': palette.school } },
+    { id: 'landuse-cemetery', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 11, filter: ['all', AREAS, ['==', ['get', 'kind'], 'cemetery']], paint: { 'fill-color': palette.grass } },
+    { id: 'landuse-recreation', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['all', AREAS, ['match', ['get', 'kind'], ['theme_park', 'zoo'], true, false]], paint: { 'fill-color': palette.grass } },
+    { id: 'park', type: 'fill', source: SOURCE, 'source-layer': 'park', filter: ['all', AREAS, ['match', ['get', 'kind'], ['park', 'national_park'], true, false]], paint: { 'fill-color': palette.park } },
+    { id: 'park-golf', type: 'fill', source: SOURCE, 'source-layer': 'park', minzoom: 10, filter: ['all', AREAS, ['==', ['get', 'kind'], 'golf_course']], paint: { 'fill-color': palette.grass } },
+    // The water over parks and the like, whose outlines often run out over a bay.
+    { id: 'water', type: 'fill', source: SOURCE, 'source-layer': 'water', paint: { 'fill-color': palette.water } },
     {
       id: 'waterway',
       type: 'line',
       source: SOURCE,
       'source-layer': 'waterway',
-      minzoom: 8,
-      filter: ['!=', ['get', 'brunnel'], 'tunnel'],
+      minzoom: 10,
       layout: { 'line-cap': 'round' },
       // Rivers and canals wider than streams; zoom must be the outermost curve.
       paint: {
         'line-color': palette.water,
-        'line-width': ['interpolate', ['exponential', 1.5], ['zoom'], 8, ['match', ['get', 'class'], ['river', 'canal'], 0.6, 0], 12, ['match', ['get', 'class'], ['river', 'canal'], 1.8, 0.4], 14, ['match', ['get', 'class'], ['river', 'canal'], 3, 1], 18, ['match', ['get', 'class'], ['river', 'canal'], 12, 4]],
-      },
-    },
-    { id: 'aeroway-area', type: 'fill', source: SOURCE, 'source-layer': 'aeroway', minzoom: 10, filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false], paint: { 'fill-color': palette.aeroArea } },
-    {
-      id: 'aeroway-runway',
-      type: 'line',
-      source: SOURCE,
-      'source-layer': 'aeroway',
-      minzoom: 11,
-      filter: ['all', ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false], ['match', ['get', 'class'], ['runway', 'taxiway'], true, false]],
-      paint: {
-        'line-color': palette.runway,
-        'line-width': ['interpolate', ['exponential', 1.5], ['zoom'], 11, ['match', ['get', 'class'], 'runway', 2, 0.2], 14, ['match', ['get', 'class'], 'runway', 12, 3], 18, ['match', ['get', 'class'], 'runway', 80, 20]],
+        'line-width': ['interpolate', ['exponential', 1.5], ['zoom'], 10, ['match', ['get', 'kind'], ['river', 'canal'], 0.8, 0], 12, ['match', ['get', 'kind'], ['river', 'canal'], 1.8, 0.4], 14, ['match', ['get', 'kind'], ['river', 'canal'], 3, 1], 18, ['match', ['get', 'kind'], ['river', 'canal'], 12, 4]],
       },
     },
     {
@@ -270,19 +278,16 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
       id: 'railway',
       type: 'line',
       source: SOURCE,
-      'source-layer': 'transportation',
+      'source-layer': 'rail',
       minzoom: 10,
-      // Subways run underground, where a street map doesn't draw them.
-      filter: ['all', ['==', ['get', 'class'], 'rail'], ['!=', ['get', 'brunnel'], 'tunnel']],
       paint: { 'line-color': palette.rail, 'line-width': width(10, 0.6, 14, 1.4, 18, 3) },
     },
     {
       id: 'railway-hatching',
       type: 'line',
       source: SOURCE,
-      'source-layer': 'transportation',
+      'source-layer': 'rail',
       minzoom: 14,
-      filter: ['all', ['==', ['get', 'class'], 'rail'], ['!=', ['get', 'brunnel'], 'tunnel']],
       paint: { 'line-color': palette.rail, 'line-width': width(14, 3, 18, 8), 'line-dasharray': [0.2, 4] },
     },
     ...roadLayers(palette, 'bridge'),
@@ -290,9 +295,8 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
       id: 'ferry',
       type: 'line',
       source: SOURCE,
-      'source-layer': 'transportation',
+      'source-layer': 'ferry',
       minzoom: 12,
-      filter: ['==', ['get', 'class'], 'ferry'],
       paint: { 'line-color': palette.ferry, 'line-width': width(12, 0.7, 16, 1.6), 'line-dasharray': [3, 2], 'line-opacity': 0.7 },
     },
     {
@@ -300,17 +304,7 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
       type: 'line',
       source: SOURCE,
       'source-layer': 'boundary',
-      filter: ['all', ['==', ['get', 'admin_level'], 4], ['!=', ['get', 'maritime'], 1]],
       paint: { 'line-color': palette.boundary, 'line-width': width(4, 0.6, 12, 1.6), 'line-dasharray': [3, 2] },
-    },
-    {
-      id: 'boundary-county',
-      type: 'line',
-      source: SOURCE,
-      'source-layer': 'boundary',
-      minzoom: 9,
-      filter: ['all', ['==', ['get', 'admin_level'], 6], ['!=', ['get', 'maritime'], 1]],
-      paint: { 'line-color': palette.boundary, 'line-width': width(9, 0.5, 14, 1.2), 'line-dasharray': [2, 2], 'line-opacity': 0.7 },
     },
     {
       id: 'waterway-label',
@@ -318,34 +312,42 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
       source: SOURCE,
       'source-layer': 'waterway',
       minzoom: 13,
-      filter: ['match', ['get', 'class'], ['river', 'canal'], true, false],
+      filter: ['all', ['has', 'name'], ['match', ['get', 'kind'], ['river', 'canal'], true, false]],
       layout: { 'symbol-placement': 'line', 'text-field': NAME, 'text-font': ITALIC, 'text-size': 12, 'text-letter-spacing': 0.1 },
-      paint: { 'text-color': palette.waterLabel, 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.2 },
+      paint: { 'text-color': palette.waterLabel, ...halo, 'text-halo-width': 1.2 },
     },
-    ...(['point', 'line'] as const).map((placement): LayerSpecification => ({
-      id: `water-label-${placement}`,
+    ...withLateLabels({
+      id: 'water-label',
       type: 'symbol',
       source: SOURCE,
       'source-layer': 'water_name',
-      minzoom: 9,
-      filter: ['match', ['geometry-type'], placement === 'line' ? ['LineString', 'MultiLineString'] : ['Point', 'MultiPoint'], true, false],
+      filter: POINTS,
       layout: {
         'text-field': NAME,
         'text-font': ITALIC,
-        'text-size': ['interpolate', ['linear'], ['zoom'], 9, 11, 14, 14],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 6, ['match', ['get', 'kind'], 'ocean', 13, 11], 14, ['match', ['get', 'kind'], ['ocean', 'bay'], 16, 13]],
         'text-max-width': 8,
         'text-letter-spacing': 0.05,
-        'symbol-placement': placement,
       },
-      paint: { 'text-color': palette.waterLabel, 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.2 },
-    })),
+      paint: { 'text-color': palette.waterLabel, ...halo, 'text-halo-width': 1.2 },
+    }),
+    ...withLateLabels({
+      id: 'park-label',
+      type: 'symbol',
+      source: SOURCE,
+      'source-layer': 'park',
+      minzoom: 10,
+      filter: POINTS,
+      layout: { 'text-field': NAME, 'text-font': REGULAR, 'text-size': ['interpolate', ['linear'], ['zoom'], 10, 10.5, 16, 13], 'text-max-width': 7, 'text-padding': 4 },
+      paint: { 'text-color': palette.parkLabel, ...halo },
+    }),
     {
       id: 'road-label',
       type: 'symbol',
       source: SOURCE,
-      'source-layer': 'transportation_name',
+      'source-layer': 'road',
       minzoom: 13,
-      filter: ['match', ['get', 'class'], ['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor', 'service'], true, false],
+      filter: ['all', ['has', 'name'], ['match', ['get', 'kind'], ['motorway', 'primary', 'secondary', 'tertiary', 'minor', 'service'], true, false]],
       layout: {
         'symbol-placement': 'line',
         'text-field': NAME,
@@ -356,25 +358,15 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
         'text-rotation-alignment': 'map',
         'text-pitch-alignment': 'viewport',
       },
-      paint: { 'text-color': palette.roadLabel, 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.5 },
+      paint: { 'text-color': palette.roadLabel, ...halo },
     },
     {
-      id: 'housenumber',
-      type: 'symbol',
-      source: SOURCE,
-      'source-layer': 'housenumber',
-      minzoom: 17,
-      layout: { 'text-field': ['get', 'housenumber'], 'text-font': REGULAR, 'text-size': 10, 'text-padding': 2 },
-      paint: { 'text-color': palette.houseNumber, 'text-halo-color': palette.labelHalo, 'text-halo-width': 1 },
-    },
-    {
-      // Rail and subway stations and ferry terminals keep their names (other places' are hidden).
+      // Rail and subway stations and ferry landings keep their names (businesses' are hidden).
       id: 'station-dot',
       type: 'circle',
       source: SOURCE,
       'source-layer': 'poi',
       minzoom: 14,
-      filter: ['any', ['all', ['==', ['get', 'class'], 'railway'], ['match', ['get', 'subclass'], ['station', 'halt', 'subway'], true, false]], ['==', ['get', 'class'], 'ferry_terminal']],
       paint: {
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 3, 17, 4.5],
         'circle-color': palette.stationDot,
@@ -388,7 +380,6 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
       source: SOURCE,
       'source-layer': 'poi',
       minzoom: 14,
-      filter: ['any', ['all', ['==', ['get', 'class'], 'railway'], ['match', ['get', 'subclass'], ['station', 'halt', 'subway'], true, false]], ['==', ['get', 'class'], 'ferry_terminal']],
       layout: {
         'text-field': NAME,
         'text-font': BOLD,
@@ -398,18 +389,28 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
         'text-max-width': 8,
         'text-padding': 4,
       },
-      paint: { 'text-color': palette.stationLabel, 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.5 },
+      paint: { 'text-color': palette.stationLabel, ...halo },
     },
     {
       id: 'airport-label',
       type: 'symbol',
       source: SOURCE,
-      'source-layer': 'aerodrome_label',
-      minzoom: 10,
-      filter: ['match', ['get', 'class'], ['international', 'public', 'regional'], true, false],
-      layout: { 'text-field': NAME, 'text-font': BOLD, 'text-size': 11, 'text-max-width': 8 },
-      paint: { 'text-color': palette.label, 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.5 },
+      'source-layer': 'landuse',
+      minzoom: 9,
+      filter: ['all', POINTS, ['==', ['get', 'kind'], 'airport']],
+      layout: { 'text-field': NAME, 'text-font': SEMIBOLD, 'text-size': 11, 'text-max-width': 8 },
+      paint: { 'text-color': palette.label, ...halo },
     },
+    ...withLateLabels({
+      id: 'place-island',
+      type: 'symbol',
+      source: SOURCE,
+      'source-layer': 'place',
+      minzoom: 10,
+      filter: ['==', ['get', 'kind'], 'island'],
+      layout: { 'text-field': NAME, 'text-font': REGULAR, 'text-size': ['interpolate', ['linear'], ['zoom'], 10, 10.5, 16, 13], 'text-max-width': 7, 'text-padding': 6 },
+      paint: { 'text-color': palette.neighborhoodLabel, ...halo },
+    }),
     {
       id: 'place-neighborhood',
       type: 'symbol',
@@ -417,20 +418,9 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
       'source-layer': 'place',
       minzoom: 13,
       maxzoom: 17,
-      filter: ['match', ['get', 'class'], ['neighbourhood', 'quarter'], true, false],
+      filter: ['==', ['get', 'kind'], 'neighbourhood'],
       layout: { 'text-field': NAME, 'text-font': REGULAR, 'text-size': ['interpolate', ['linear'], ['zoom'], 13, 10.5, 16, 12.5], 'text-max-width': 7, 'text-padding': 6 },
-      paint: { 'text-color': palette.neighborhoodLabel, 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.5 },
-    },
-    {
-      id: 'place-suburb',
-      type: 'symbol',
-      source: SOURCE,
-      'source-layer': 'place',
-      minzoom: 11,
-      maxzoom: 16,
-      filter: ['match', ['get', 'class'], ['suburb', 'borough'], true, false],
-      layout: { 'text-field': NAME, 'text-font': REGULAR, 'text-size': ['interpolate', ['linear'], ['zoom'], 11, 11, 15, 14], 'text-max-width': 7, 'text-padding': 6, 'symbol-sort-key': ['get', 'rank'] },
-      paint: { 'text-color': palette.neighborhoodLabel, 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.5 },
+      paint: { 'text-color': palette.neighborhoodLabel, ...halo },
     },
     {
       id: 'place-village',
@@ -439,9 +429,20 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
       'source-layer': 'place',
       minzoom: 11,
       maxzoom: 16,
-      filter: ['match', ['get', 'class'], ['village', 'hamlet'], true, false],
+      filter: ['match', ['get', 'kind'], ['village', 'hamlet'], true, false],
       layout: { 'text-field': NAME, 'text-font': REGULAR, 'text-size': ['interpolate', ['linear'], ['zoom'], 11, 10.5, 15, 13.5], 'text-max-width': 7, 'text-padding': 8, 'symbol-sort-key': ['get', 'rank'] },
-      paint: { 'text-color': palette.label, 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.5 },
+      paint: { 'text-color': palette.label, ...halo },
+    },
+    {
+      id: 'place-borough',
+      type: 'symbol',
+      source: SOURCE,
+      'source-layer': 'place',
+      minzoom: 10,
+      maxzoom: 15,
+      filter: ['==', ['get', 'kind'], 'borough'],
+      layout: { 'text-field': NAME, 'text-font': SEMIBOLD, 'text-size': ['interpolate', ['linear'], ['zoom'], 10, 12, 14, 16], 'text-max-width': 8 },
+      paint: { 'text-color': palette.neighborhoodLabel, ...halo },
     },
     {
       id: 'place-town',
@@ -450,20 +451,20 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
       'source-layer': 'place',
       minzoom: 8,
       maxzoom: 15,
-      filter: ['==', ['get', 'class'], 'town'],
+      filter: ['==', ['get', 'kind'], 'town'],
       layout: { 'text-field': NAME, 'text-font': REGULAR, 'text-size': ['interpolate', ['linear'], ['zoom'], 8, 11, 14, 15], 'text-max-width': 8, 'symbol-sort-key': ['get', 'rank'] },
-      paint: { 'text-color': palette.placeLabel, 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.5 },
+      paint: { 'text-color': palette.placeLabel, ...halo },
     },
     {
       id: 'place-city',
       type: 'symbol',
       source: SOURCE,
       'source-layer': 'place',
-      minzoom: 5,
+      minzoom: 4,
       maxzoom: 14,
-      filter: ['==', ['get', 'class'], 'city'],
-      layout: { 'text-field': NAME, 'text-font': BOLD, 'text-size': ['interpolate', ['linear'], ['zoom'], 5, 11, 10, 16, 13, 19], 'text-max-width': 8, 'symbol-sort-key': ['get', 'rank'] },
-      paint: { 'text-color': palette.placeLabel, 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.8 },
+      filter: ['==', ['get', 'kind'], 'city'],
+      layout: { 'text-field': NAME, 'text-font': BOLD, 'text-size': ['interpolate', ['linear'], ['zoom'], 4, 11, 10, 16, 13, 19], 'text-max-width': 8, 'symbol-sort-key': ['get', 'rank'] },
+      paint: { 'text-color': palette.placeLabel, ...halo, 'text-halo-width': 1.8 },
     },
     {
       id: 'place-state',
@@ -472,9 +473,9 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
       'source-layer': 'place',
       minzoom: 4,
       maxzoom: 9,
-      filter: ['==', ['get', 'class'], 'state'],
+      filter: ['==', ['get', 'kind'], 'state'],
       layout: { 'text-field': NAME, 'text-font': REGULAR, 'text-size': ['interpolate', ['linear'], ['zoom'], 4, 10, 8, 14], 'text-transform': 'uppercase', 'text-letter-spacing': 0.15, 'text-max-width': 8 },
-      paint: { 'text-color': isDark ? '#6B7179' : '#9AA0A6', 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.2 },
+      paint: { 'text-color': isDark ? '#6B7179' : '#9AA0A6', ...halo, 'text-halo-width': 1.2 },
     },
   ];
 }
@@ -496,7 +497,7 @@ export function pathlyMapStyle(isDark: boolean): StyleSpecification {
     version: 8,
     name: isDark ? 'Pathly dark' : 'Pathly light',
     sources: {
-      [SOURCE]: { type: 'vector', url: MAP_TILES_URL, attribution: MAP_ATTRIBUTION },
+      [SOURCE]: { type: 'vector', tiles: [MAP_TILES_URL], minzoom: 0, maxzoom: TILES_MAX_ZOOM, bounds: TILE_BOUNDS },
     },
     glyphs: MAP_GLYPHS_URL,
     layers: [...baseLayers(palette, isDark), ...slots],

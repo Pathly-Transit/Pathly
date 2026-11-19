@@ -1,6 +1,6 @@
 import 'maplibre-gl/dist/maplibre-gl.css';
 import * as maplibregl from 'maplibre-gl';
-import { createContext, forwardRef, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { createContext, forwardRef, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { StyleSheet, View } from 'react-native';
 
@@ -21,9 +21,9 @@ import {
 } from './mapTypes';
 
 /**
- * The map kit in the browser (mapTypes.ts), drawn by MapLibre GL JS: the base map, lines and dots
- * as GeoJSON layers slotted above it (mapStyle.ts's overlay slots), and markers as the app's own
- * views placed over the map.
+ * The map kit in the browser (mapTypes.ts), drawn by MapLibre GL JS (open-source rendering code
+ * bundled with the app, showing nothing of its own): Pathly's base map (mapStyle.ts), lines and
+ * dots as GeoJSON layers slotted above it, and markers as the app's own views placed over the map.
  */
 
 /** Taps within this many px of a dot count as tapping it (fingers are wider than dots). */
@@ -65,7 +65,9 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   const [tapTargets] = useState(() => new Map<string, TapTarget>());
   // The latest props, for the map's own event handlers (bound once).
   const latest = useRef({ onCameraIdle, onLongPress, onPress, onUserGesture, maxBounds });
-  latest.current = { onCameraIdle, onLongPress, onPress, onUserGesture, maxBounds };
+  useLayoutEffect(() => {
+    latest.current = { onCameraIdle, onLongPress, onPress, onUserGesture, maxBounds };
+  });
   const themeAtCreation = useRef(isDark);
 
   useEffect(() => {
@@ -79,7 +81,8 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       bearing: initialCamera.bearing ?? 0,
       pitch: initialCamera.pitch ?? 0,
       ...(minZoom !== undefined ? { minZoom: toMapLibreZoom(minZoom) } : {}),
-      attributionControl: { compact: true },
+      // No attribution control of the renderer's own (the base map's data is public domain and needs no credit).
+      attributionControl: false,
       interactive,
       dragRotate: interactive && rotateEnabled,
       pitchWithRotate: interactive && rotateEnabled && pitchEnabled,
@@ -220,7 +223,9 @@ export function MapPolyline({ id, coordinates, color, width, opacity = 1, dotted
   const map = context?.map;
   const styleKey = context?.styleKey;
   const latestData = useRef(data);
-  latestData.current = data;
+  useLayoutEffect(() => {
+    latestData.current = data;
+  });
 
   useEffect(() => {
     if (!map) return undefined;
@@ -267,7 +272,9 @@ export function MapCircles({ id, circles, zIndex = 0, onPress }: MapCirclesProps
   const map = context?.map;
   const styleKey = context?.styleKey;
   const latestData = useRef(data);
-  latestData.current = data;
+  useLayoutEffect(() => {
+    latestData.current = data;
+  });
 
   useEffect(() => {
     if (!map) return undefined;
@@ -305,6 +312,16 @@ export function MapCircles({ id, circles, zIndex = 0, onPress }: MapCirclesProps
   return null;
 }
 
+/** A marker element's order, test id, label, and pointer, kept in step with its props. */
+function describeMarker(element: HTMLDivElement, { accessibilityLabel, pressable, testID, zIndex }: { accessibilityLabel?: string; pressable: boolean; testID?: string; zIndex: number }) {
+  element.style.zIndex = String(zIndex);
+  if (testID) element.dataset.testid = testID;
+  if (accessibilityLabel) element.setAttribute('aria-label', accessibilityLabel);
+  element.style.cursor = pressable ? 'pointer' : '';
+  if (pressable) element.setAttribute('role', 'button');
+  else element.removeAttribute('role');
+}
+
 /** A view standing on the map at a point, drawn over the map's lines and dots. */
 export function MapMarker({ accessibilityLabel, anchor = 'center', children, coordinate, offset, onPress, rotation, testID, zIndex = 0 }: MapMarkerProps) {
   const context = useContext(MapContext);
@@ -312,7 +329,9 @@ export function MapMarker({ accessibilityLabel, anchor = 'center', children, coo
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const map = context?.map;
   const latestPress = useRef(onPress);
-  latestPress.current = onPress;
+  useLayoutEffect(() => {
+    latestPress.current = onPress;
+  });
 
   useEffect(() => {
     if (!map) return undefined;
@@ -344,12 +363,7 @@ export function MapMarker({ accessibilityLabel, anchor = 'center', children, coo
   }, [offset?.[0], offset?.[1]]); // eslint-disable-line react-hooks/exhaustive-deps -- keyed by value
 
   useEffect(() => {
-    element.style.zIndex = String(zIndex);
-    if (testID) element.dataset.testid = testID;
-    if (accessibilityLabel) element.setAttribute('aria-label', accessibilityLabel);
-    element.style.cursor = onPress ? 'pointer' : '';
-    if (onPress) element.setAttribute('role', 'button');
-    else element.removeAttribute('role');
+    describeMarker(element, { accessibilityLabel, pressable: onPress !== undefined, testID, zIndex });
   }, [accessibilityLabel, element, onPress, testID, zIndex]);
 
   useEffect(() => {
