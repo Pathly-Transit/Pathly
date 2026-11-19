@@ -6,6 +6,8 @@ const test = require('node:test');
 const { consumeTokenBucket, resetCallableSecurityForTests, setSharedRateLimitConsumerForTests } = require('../lib/callableSecurity');
 const { planTrip, requiredPlanTripRequest, setTripAlertsLookupForTests, setTripLiveLookupForTests, setTripStopMatcherForTests } = require('../lib');
 const { SERVICE_AREA_BOUNDS } = require('../lib/serviceArea');
+const { resetGtfsSnapshotStateForTests, setGtfsSnapshotBucketForTests } = require('../lib/gtfsSnapshots');
+const { resetGtfsStaticDataForTests } = require('../lib/gtfsStaticData');
 
 const fixture = (name) => fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
 const validData = {
@@ -174,4 +176,123 @@ test('returns itineraries without stops when matching is slower than its budget'
   assert.ok(Date.now() - started < 4_000);
   assert.ok(itineraries.length > 0);
   assert.ok(itineraries.flatMap((itinerary) => itinerary.steps).every((step) => step.stops === undefined));
+});
+
+async function withStalledSnapshotReads(t, body) {
+  const originalOverride = process.env.GTFS_USE_CLOUD_STORAGE;
+  process.env.GTFS_USE_CLOUD_STORAGE = 'true';
+  resetGtfsSnapshotStateForTests();
+  resetGtfsStaticDataForTests();
+  const reads = [];
+  setGtfsSnapshotBucketForTests({
+    file: (name) => ({
+      getMetadata: () => {
+        reads.push(name);
+        return new Promise(() => undefined);
+      },
+    }),
+  });
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse('2026-11-19T12:00:00Z') });
+  try {
+    await body(reads);
+  } finally {
+    // Finish the shared hydration timers before resetting fake time. Request cancellation
+    // deliberately leaves those reads alive, and later tests use the same instance-level pool.
+    t.mock.timers.tick(30_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.reset();
+    resetGtfsSnapshotStateForTests();
+    resetGtfsStaticDataForTests();
+    if (originalOverride === undefined) delete process.env.GTFS_USE_CLOUD_STORAGE;
+    else process.env.GTFS_USE_CLOUD_STORAGE = originalOverride;
+  }
+}
+
+test('cold timetable reads share the stop enrichment budget instead of blocking ready routes', async (t) => {
+  await withStalledSnapshotReads(t, async (reads) => {
+    stubRoutes(fixture('routes-sbu-penn.json'));
+    let matches = 0;
+    setTripStopMatcherForTests(async () => { matches += 1; return undefined; });
+    let settled = false;
+    const pending = run(validData).then((answer) => { settled = true; return answer; });
+    await new Promise((resolve) => setImmediate(resolve));
+    const startedTogether = [...reads];
+    t.mock.timers.tick(3_001);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, true, 'ready Google routes return within the single 3s timetable/stop budget');
+    assert.ok(startedTogether.includes('gtfs/v1/lirr/current.json'));
+    assert.ok(startedTogether.includes('gtfs/v1/suffolk/current.json'), 'both agencies begin loading before either finishes');
+    assert.ok((await pending).itineraries.length > 0);
+    assert.equal(matches, 0, 'expired enrichment does not start additional matching work');
+  });
+});
+
+function cityBusRoutes() {
+  const body = JSON.parse(fixture('routes-sbu-penn.json'));
+  for (const route of body.routes) {
+    for (const leg of route.legs) {
+      for (const step of leg.steps) {
+        if (!step.transitDetails) continue;
+        step.transitDetails.transitLine = {
+          agencies: [{ name: 'MTA New York City Transit' }],
+          name: 'M7', nameShort: 'M7',
+          vehicle: { type: 'BUS', name: { text: 'Bus' } },
+        };
+      }
+    }
+  }
+  return body;
+}
+
+test('city-bus timetable loading keeps the three-download cap and stops dequeuing after expiry', async (t) => {
+  await withStalledSnapshotReads(t, async (reads) => {
+    stubRoutes(cityBusRoutes());
+    setTripStopMatcherForTests(async () => undefined);
+    const pending = run(validData);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads.length, 3, 'a city-bus leg can match six agencies, but at most three may hydrate at once');
+    t.mock.timers.tick(3_001);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok((await pending).itineraries.length > 0);
+    t.mock.timers.tick(25_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads.length, 3, 'finishing late reads must not start queued agencies for an expired request');
+  });
+});
+
+test('a later search cannot exceed the instance hydration cap while an earlier search finishes in the background', async (t) => {
+  await withStalledSnapshotReads(t, async (reads) => {
+    stubRoutes(cityBusRoutes());
+    setTripStopMatcherForTests(async () => undefined);
+    const first = run(validData);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads.length, 3);
+    t.mock.timers.tick(3_001);
+    await new Promise((resolve) => setImmediate(resolve));
+    await first;
+
+    // A different trip needs LIRR/Suffolk, while the first three bus reads are still pending.
+    stubRoutes(fixture('routes-sbu-penn.json'));
+    const second = run(validData);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads.length, 3, 'the next request must share the same instance-level download capacity');
+    t.mock.timers.tick(3_001);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok((await second).itineraries.length > 0, 'waiting for capacity is bounded by this request\'s budget too');
+    t.mock.timers.tick(25_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads.length, 3);
+  });
+});
+
+test('an empty route result does not load an unrelated LIRR fare timetable', async (t) => {
+  await withStalledSnapshotReads(t, async (reads) => {
+    stubRoutes({ routes: [] });
+    let settled = false;
+    const pending = run(validData).then((answer) => { settled = true; return answer; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, true, 'there is no optional transit data to wait for');
+    assert.deepEqual(await pending, { itineraries: [] });
+    assert.deepEqual(reads, []);
+  });
 });
