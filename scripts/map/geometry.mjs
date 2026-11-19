@@ -187,16 +187,130 @@ export function clipLine(line, box) {
   return parts.filter((part) => part.length >= 4);
 }
 
-/** Clips a polygon (outer ring, then holes) to a box; null when the outer ring is gone. */
-export function clipPolygon(rings, box) {
-  const outer = clipRing(rings[0], box);
-  if (!outer) return null;
-  const out = [outer];
-  for (let i = 1; i < rings.length; i += 1) {
-    const hole = clipRing(rings[i], box);
-    if (hole) out.push(hole);
+/** A point on the box's edge snapped exactly onto the nearest side. */
+function snapToEdge(x, y, box) {
+  const distances = [Math.abs(y - box.south), Math.abs(x - box.east), Math.abs(y - box.north), Math.abs(x - box.west)];
+  const side = distances.indexOf(Math.min(...distances));
+  if (side === 0) return [x, box.south];
+  if (side === 1) return [box.east, y];
+  if (side === 2) return [x, box.north];
+  return [box.west, y];
+}
+
+/** A point on the box's edge as a distance around it, counterclockwise from the southwest corner (0–4). */
+function aroundEdge(x, y, box) {
+  if (y === box.south && x !== box.east) return (x - box.west) / (box.east - box.west);
+  if (x === box.east && y !== box.north) return 1 + (y - box.south) / (box.north - box.south);
+  if (y === box.north && x !== box.west) return 2 + (box.east - x) / (box.east - box.west);
+  return 3 + (box.north - y) / (box.north - box.south);
+}
+
+/** The stretches of a closed ring inside the box, each from where it comes in to where it goes out. */
+function ringPiecesInside(ring, box) {
+  const n = ring.length / 2;
+  let start = 0;
+  while (start < n && insideBox(box, ring[2 * start], ring[2 * start + 1])) start += 1;
+  if (start === n) return null; // all inside (the caller keeps it whole)
+  const pieces = [];
+  let current = null;
+  for (let k = 0; k < n; k += 1) {
+    const i = (start + k) % n;
+    const j = (i + 1) % n;
+    const ax = ring[2 * i];
+    const ay = ring[2 * i + 1];
+    const dx = ring[2 * j] - ax;
+    const dy = ring[2 * j + 1] - ay;
+    let t0 = 0;
+    let t1 = 1;
+    let visible = true;
+    for (const [p, q] of [[-dx, ax - box.west], [dx, box.east - ax], [-dy, ay - box.south], [dy, box.north - ay]]) {
+      if (p === 0) {
+        if (q < 0) { visible = false; break; }
+      } else {
+        const r = q / p;
+        if (p < 0) { if (r > t1) { visible = false; break; } if (r > t0) t0 = r; }
+        else { if (r < t0) { visible = false; break; } if (r < t1) t1 = r; }
+      }
+    }
+    if (!visible) continue;
+    if (!current) current = snapToEdge(ax + dx * t0, ay + dy * t0, box);
+    if (t1 < 1) {
+      current.push(...snapToEdge(ax + dx * t1, ay + dy * t1, box));
+      if (current.length >= 4 && (current[0] !== current[current.length - 2] || current[1] !== current[current.length - 1] || current.length > 4)) pieces.push(current);
+      current = null;
+    } else {
+      current.push(ax + dx, ay + dy);
+    }
   }
-  return out;
+  return pieces;
+}
+
+/**
+ * Clips a polygon (outer ring counterclockwise, then holes clockwise) to a box. Rather than
+ * clipping ring by ring (which leaves zero-width slivers running along the box's edge, and a map
+ * outlines every edge, so each sliver shows as a hairline), the stretches of all the rings inside
+ * the box are joined by walking the box's edge the way the rings' own insides lie. Returns the
+ * polygons left ([outer, ...holes] each; none when the box misses it).
+ */
+export function clipPolygon(rings, box) {
+  const whole = [];
+  const pieces = [];
+  for (const ring of rings) {
+    const bounds = ringBounds(ring);
+    if (!boxesOverlap(box, bounds)) continue;
+    const inside = boxContainsBox(box, bounds) ? null : ringPiecesInside(ring, box);
+    if (inside === null) whole.push(ring);
+    else pieces.push(...inside);
+  }
+  const corners = [[box.west, box.south], [box.east, box.south], [box.east, box.north], [box.west, box.north]];
+  const joined = [];
+  if (pieces.length) {
+    const ends = pieces.map((piece) => ({ piece, enter: aroundEdge(piece[0], piece[1], box), leave: aroundEdge(piece[piece.length - 2], piece[piece.length - 1], box) }));
+    const unused = new Set(ends.keys());
+    while (unused.size) {
+      const first = unused.values().next().value;
+      unused.delete(first);
+      const ring = [...ends[first].piece];
+      let current = first;
+      for (let guard = 0; guard <= ends.length; guard += 1) {
+        const leave = ends[current].leave;
+        let best = first;
+        let bestGap = Infinity;
+        for (const candidate of [...unused, first]) {
+          let gap = ends[candidate].enter - leave;
+          if (gap < -1e-12) gap += 4;
+          if (gap < bestGap) {
+            bestGap = gap;
+            best = candidate;
+          }
+        }
+        // The box's corners passed on the way, counterclockwise.
+        for (let k = Math.floor(leave) + 1; k < leave + bestGap; k += 1) ring.push(...corners[k % 4]);
+        if (best === first) break;
+        for (const value of ends[best].piece) ring.push(value);
+        unused.delete(best);
+        current = best;
+      }
+      // Repeated points where a stretch meets the edge walk.
+      const clean = [];
+      for (let i = 0; i < ring.length; i += 2) {
+        if (clean.length && clean[clean.length - 2] === ring[i] && clean[clean.length - 1] === ring[i + 1]) continue;
+        clean.push(ring[i], ring[i + 1]);
+      }
+      if (clean.length >= 4 && clean[0] === clean[clean.length - 2] && clean[1] === clean[clean.length - 1]) clean.length -= 2;
+      if (clean.length >= 6 && ringArea2(clean) !== 0) joined.push(clean);
+    }
+  } else if (pointInRing(rings[0], box.west, box.south) && !rings.slice(1).some((hole) => pointInRing(hole, box.west, box.south))) {
+    // No ring crosses the box's edge, and the edge is inside the polygon: the whole box is.
+    joined.push([box.west, box.south, box.east, box.south, box.east, box.north, box.west, box.north]);
+  }
+  const all = [...joined, ...whole];
+  const outers = all.filter((ring) => ringArea2(ring) > 0).map((ring) => ({ rings: [ring], box: ringBounds(ring), area: ringArea2(ring) })).sort((a, b) => a.area - b.area);
+  for (const hole of all.filter((ring) => ringArea2(ring) < 0)) {
+    const owner = outers.find((outer) => insideBox(outer.box, hole[0], hole[1]) && pointInRing(outer.rings[0], hole[0], hole[1]));
+    if (owner) owner.rings.push(hole);
+  }
+  return outers.map((outer) => outer.rings);
 }
 
 /**

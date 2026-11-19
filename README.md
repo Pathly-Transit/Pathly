@@ -42,10 +42,10 @@ If you don't use `nvm`, install the Node version listed in `.nvmrc` some other w
 
 ## Local configuration
 
-The app needs Firebase and Google Maps client settings before it can load live data:
+The app needs Firebase and Google Places client settings before it can load live data:
 
 1. Obtain the current approved configuration from a project maintainer and save it as ignored `mobile/.env`. The repository does not contain a `.env.example`; [mobile configuration](docs/mobile-configuration.md) lists the key names and platform prerequisites without private values.
-2. Configure Firebase (`EXPO_PUBLIC_FIREBASE_*`) and the platform-restricted Maps keys (`GOOGLE_MAPS_ANDROID_API_KEY`, `GOOGLE_MAPS_IOS_API_KEY`, `EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY`). Native Google sign-in also needs the relevant OAuth client IDs; a working web session does not verify native sign-in.
+2. Configure Firebase (`EXPO_PUBLIC_FIREBASE_*`) and the Places key (`EXPO_PUBLIC_GOOGLE_PLACES_API_KEY`, see below). The maps need no keys: they draw Pathly's own map (see [Base map](#base-map)). Native Google sign-in also needs the relevant OAuth client IDs; a working web session does not verify native sign-in.
 3. Set `ADMIN_EMAILS` (comma-separated) in `firebase/functions/.env.<project-id>`. It's the only admin list: the backend uses it to allow admin-only calls, and `mobile/app.config.js` passes it to the app to decide who sees the admin tools. The default is `admin@gmail.com`. The file stays on your machine, and each deploy builds in the deploying machine's copy, so `npm run deploy:web`, `deploy:backend`, and `deploy:functions` stop if the list is missing or only the default. EAS cloud builds don't have the file; set `ADMIN_EMAILS` as an EAS environment variable for those.
 4. Restart the Expo dev server after editing `.env`.
 
@@ -65,6 +65,27 @@ Destination search uses Google Places Autocomplete (Places API (New)). Without a
 
    If this variable isn't set, the app falls back to `EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY`.
 
+### Base map
+
+Every map in the app (web, iOS, and Android) draws Pathly's own base map: vector tiles of New York City, Long Island, and the region around them, plus label fonts made from Nunito, the app's typeface. MapLibre, an open-source map renderer built into the app, draws them; it shows no logo or credit line. The tiles come from public-domain data, so the map needs no credit either:
+
+- US Census Bureau TIGER/Line: streets, rail, water, parks and landmarks, towns, and state lines.
+- US Census Bureau population estimates: which town names show first.
+- USGS Geographic Names (GNIS): neighborhoods, bays, and islands.
+- NYC Open Data: New York City's building footprints.
+- Natural Earth: coastlines, highways, and cities around the detailed area, for zoomed-out maps.
+- The transit agencies' GTFS feeds (the ones Pathly routes on): stations and ferry routes.
+
+The map is published with the site at `pathly.web.app/map`, so `npm run deploy:web` publishes it along with the web app. The built files stay out of Git (`maptiles/`). To build them, set aside about 1 GB of disk and 8 GB of memory:
+
+```sh
+npm run map:download -- ../map-data   # fetch the sources into a folder outside the repo
+npm run map:build -- ../map-data      # build maptiles/tiles (about 7 minutes)
+npm run map:fonts                     # build maptiles/fonts
+```
+
+Rebuild every few months as the sources update. When `maptiles/` has a map, `npm start` serves it from your computer, and the app uses that copy instead of the published one. This means you can try a new build before publishing it, and work before the map is published at all. To use the published copy instead, delete `maptiles/`. For a native build started some other way, run `npm run map:serve` and follow what it prints.
+
 ## Running the app
 
 > [!TIP]
@@ -81,12 +102,13 @@ Run every command from the repository root. Stop the dev server with `Ctrl+C`.
 
 Don't run `npx expo start` from the root. The Expo app lives in `mobile/`, so Expo fails at the root with `Unable to resolve "../../App"` and leaves a stray root `tsconfig.json`. Use `npm start` instead.
 
-`npm start`, `npm run dev`, `npm run dev:ios`, and `npm run dev:android` all run [`scripts/start.mjs`](scripts/start.mjs). Before starting Expo, it:
+`npm start`, `npm run dev`, `npm run dev:web`, `npm run dev:ios`, and `npm run dev:android` all run [`scripts/start.mjs`](scripts/start.mjs). Before starting Expo, it:
 
 1. Deletes a stray root `tsconfig.json`, if there is one.
 2. Runs `npm install` if `node_modules` is missing or older than any `package.json` or `package-lock.json`.
 3. Runs `expo install --check` and warns about packages that don't match the Expo SDK. It doesn't change `package.json`. To fix the versions, run `cd mobile && npx expo install --fix`.
-4. Starts Expo from `mobile/` in Expo Go mode. The workspace depends on `expo-dev-client`, which would otherwise make Expo default to development-build mode.
+4. Serves the base map from `maptiles/` on your computer when one is built there (see [Base map](#base-map)).
+5. Starts Expo from `mobile/` in Expo Go mode. The workspace depends on `expo-dev-client`, which would otherwise make Expo default to development-build mode. Expo Go can't draw maps (its app doesn't include the map renderer), so to see maps on a phone or simulator, use a development build and `npm start -- --dev-client`.
 
 Options after `--` are passed to `expo start`, for example `npm start -- --clear` to clear the Metro cache. If you've installed a custom development build, use `npm start -- --dev-client`.
 

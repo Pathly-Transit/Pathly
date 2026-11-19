@@ -292,7 +292,7 @@ function encodeAt(store, features, z, x, y) {
   const minArea = z === MAX_ZOOM ? 0 : 2 * TOLERANCE * TOLERANCE;
   const layers = LAYERS.map((name) => ({ name, features: [] }));
   for (const feature of features) {
-    if (store.minzoom.array[feature.id] > z) continue;
+    if (store.minzoom.array[feature.id] > z || store.maxzoom.array[feature.id] < z) continue;
     let type;
     let geometry = null;
     if (feature.type === POINT) {
@@ -387,6 +387,7 @@ export function writeTiles(store, outDir, log = console.log) {
   const n = 2 ** CHUNK_ZOOM;
   const margin = BUFFER / EXTENT;
   for (const id of live) {
+    if (store.maxzoom.array[id] < CHUNK_ZOOM) continue;
     const b = store.bounds.array;
     const west = b[4 * id] / SCALE;
     const south = b[4 * id + 1] / SCALE;

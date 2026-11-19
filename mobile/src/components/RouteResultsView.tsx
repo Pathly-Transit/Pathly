@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { SearchPlace } from '../data/placesSearch';
@@ -501,7 +501,9 @@ export function RouteResultsView({
                 <PressableScale
                   accessibilityHint="Opens the complete trip plan"
                   accessibilityLabel={`View trip details to ${destination}, ${duration.accessibility}, ${fare}, ${timing}`}
-                  accessibilityRole="button"
+                  // On the web a button is a <button>, which can't hold the fare's own button: the
+                  // card opens the trip's page, so there it's a link (a div that can).
+                  accessibilityRole={Platform.OS === 'web' ? 'link' : 'button'}
                   onPress={() => {
                     if (!resumeRequest) return;
                     // Back from the trip, the rebuilt map reopens where the rider left it.

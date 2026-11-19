@@ -10,7 +10,7 @@ import { createReadStream, existsSync, readdirSync, readFileSync } from 'node:fs
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
-import { DETAIL, MAX_ZOOM, OVERVIEW, OVERVIEW_STRIPS, tileBounds, tilesIn } from './bounds.mjs';
+import { DETAIL, MAX_ZOOM, OVERVIEW, OVERVIEW_STRIPS } from './bounds.mjs';
 import { dissolve, sharedEdges } from './dissolve.mjs';
 import { boxContainsBox, boxesOverlap, clipLine, clipPolygon, insideBox, labelPoint, orient, pointInRing, ringArea2, ringAreaMeters, ringBounds, zoomForArea } from './geometry.mjs';
 import { nameKey, spellOut } from './schema.mjs';
@@ -83,33 +83,20 @@ function polygonsArea(polygons) {
 function clipPolygons(polygons, box) {
   const out = [];
   for (const polygon of polygons) {
-    const clipped = boxContainsBox(box, ringBounds(polygon[0])) ? polygon : clipPolygon(polygon, box);
-    if (clipped) out.push(clipped);
+    if (boxContainsBox(box, ringBounds(polygon[0]))) out.push(polygon);
+    else out.push(...clipPolygon(polygon, box));
   }
   return out;
 }
 
 /**
- * A polygon split along tile edges into pieces of at most ~4,000 points. One polygon spanning
- * several states, with thousands of lakes cut out of it, is more than a renderer can reliably fill
- * once it's simplified for a zoomed-out tile; neighboring pieces of one color show no seam.
+ * The detailed land and water start at this zoom. One polygon spanning several states, its shore
+ * and thousands of lakes simplified for a zoomed-out tile, is more than renderers reliably fill;
+ * zoomed out that far, Natural Earth's coastline (addOverview) draws the region instead.
  */
-function splitLarge(polygon, z = 4) {
-  const points = polygon.reduce((sum, ring) => sum + ring.length / 2, 0);
-  if (points <= 4000 || z > 12) return [polygon];
-  const box = ringBounds(polygon[0]);
-  const range = tilesIn(box, z);
-  const out = [];
-  for (let x = range.minX; x <= range.maxX; x += 1) {
-    for (let y = range.minY; y <= range.maxY; y += 1) {
-      const clipped = clipPolygon(polygon, tileBounds(z, x, y));
-      if (clipped) out.push(...splitLarge(clipped, z + 1));
-    }
-  }
-  return out;
-}
+const DETAILED_SURFACES_ZOOM = 9;
 
-function addPolygons(store, layer, minzoom, props, polygons) {
+function addPolygons(store, layer, minzoom, props, polygons, maxzoom) {
   if (polygons.length === 0 || minzoom > MAX_ZOOM) return -1;
   const parts = [];
   const outer = [];
@@ -119,7 +106,7 @@ function addPolygons(store, layer, minzoom, props, polygons) {
       outer.push(i === 0);
     });
   }
-  return store.add(layer, POLYGON, minzoom, props, parts, outer);
+  return store.add(layer, POLYGON, minzoom, props, parts, outer, maxzoom);
 }
 
 function addLines(store, layer, minzoom, props, lines, box) {
@@ -284,8 +271,8 @@ export function addLandAndStates(store, tigerDir, water, log) {
   const land = dissolve(detailed, water.pieces);
   let pieces = 0;
   for (const polygon of clipPolygons(land.polygons, DETAIL)) {
-    const minzoom = Math.min(zoomForArea(polygonsArea([polygon]), 2), MAX_ZOOM + 1);
-    for (const piece of splitLarge(polygon)) if (addPolygons(store, 'land', minzoom, {}, [piece]) >= 0) pieces += 1;
+    const minzoom = Math.max(DETAILED_SURFACES_ZOOM, zoomForArea(polygonsArea([polygon]), 2));
+    if (addPolygons(store, 'land', minzoom, {}, [polygon]) >= 0) pieces += 1;
   }
   log(`  land: ${states.length} states, ${pieces} pieces${land.open ? `, ${land.open} open rings` : ''}`);
 
@@ -405,8 +392,8 @@ export function addWater(store, { pieces, named }, log) {
   const merged = dissolve(pieces);
   let surfaces = 0;
   for (const polygon of clipPolygons(merged.polygons, DETAIL)) {
-    const minzoom = zoomForArea(polygonsArea([polygon]), 2);
-    for (const piece of splitLarge(polygon)) if (addPolygons(store, 'water', minzoom, {}, [piece]) >= 0) surfaces += 1;
+    const minzoom = Math.max(DETAILED_SURFACES_ZOOM, zoomForArea(polygonsArea([polygon]), 2));
+    if (addPolygons(store, 'water', minzoom, {}, [polygon]) >= 0) surfaces += 1;
   }
   const labels = addClusteredLabels(store, named.filter((item) => insideBox(DETAIL, ...labelPoint(item.polygons[0]))), 3);
   log(`  water: ${pieces.length} pieces merged into ${surfaces} surfaces${merged.open ? ` (${merged.open} open rings)` : ''}, ${labels.length} names`);
@@ -859,16 +846,17 @@ export function addOverview(store, neDir, log) {
   for (const feature of read('ne_10m_land')) {
     for (const polygon of geojsonPolygons(feature.geometry)) {
       if (!boxesOverlap(ringBounds(polygon[0]), OVERVIEW)) continue;
-      for (const strip of areaStrips) {
-        for (const clipped of clipPolygons([polygon], strip)) for (const piece of splitLarge(clipped)) if (addPolygons(store, 'land', 0, {}, [piece]) >= 0) counts.land += 1;
-      }
+      // Zoomed out, the whole region; closer in, only around the detailed area.
+      if (addPolygons(store, 'land', 0, {}, clipPolygons([polygon], OVERVIEW), DETAILED_SURFACES_ZOOM - 1) >= 0) counts.land += 1;
+      for (const strip of areaStrips) if (addPolygons(store, 'land', DETAILED_SURFACES_ZOOM, {}, clipPolygons([polygon], strip)) >= 0) counts.land += 1;
     }
   }
   for (const feature of read('ne_10m_lakes')) {
     for (const polygon of geojsonPolygons(feature.geometry)) {
       if (!boxesOverlap(ringBounds(polygon[0]), OVERVIEW)) continue;
       const minzoom = Math.max(4, zoomForArea(polygonsArea([polygon]), 2));
-      for (const strip of areaStrips) if (addPolygons(store, 'water', minzoom, {}, clipPolygons([polygon], strip)) >= 0) counts.lakes += 1;
+      if (addPolygons(store, 'water', minzoom, {}, clipPolygons([polygon], OVERVIEW), DETAILED_SURFACES_ZOOM - 1) >= 0) counts.lakes += 1;
+      for (const strip of areaStrips) if (addPolygons(store, 'water', Math.max(DETAILED_SURFACES_ZOOM, minzoom), {}, clipPolygons([polygon], strip)) >= 0) counts.lakes += 1;
     }
   }
   for (const feature of read('ne_10m_roads')) {

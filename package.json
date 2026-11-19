@@ -16,7 +16,7 @@
   "scripts": {
     "start": "node scripts/start.mjs",
     "dev": "node scripts/start.mjs",
-    "dev:web": "npm run web --workspace @pathly/mobile",
+    "dev:web": "node scripts/start.mjs --web",
     "dev:ios": "node scripts/start.mjs --ios",
     "dev:android": "node scripts/start.mjs --android",
     "lint": "npm run lint --workspace @pathly/mobile",

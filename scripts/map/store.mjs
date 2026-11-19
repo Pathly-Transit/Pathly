@@ -45,6 +45,8 @@ export class FeatureStore {
     this.layer = new Grow(Uint8Array);
     this.type = new Grow(Uint8Array);
     this.minzoom = new Grow(Uint8Array);
+    // The last zoom a feature shows at (255: every zoom from its first).
+    this.maxzoom = new Grow(Uint8Array);
     this.deleted = new Grow(Uint8Array);
     this.firstPart = new Grow(Uint32Array);
     this.partCount = new Grow(Uint32Array);
@@ -79,13 +81,14 @@ export class FeatureStore {
    * Adds a feature. `parts` are flat degree arrays: one per point or line, or for polygons, each
    * polygon's outer ring followed by its holes (`outer[i]` true where a polygon starts).
    */
-  add(layerName, type, minzoom, props, parts, outer) {
+  add(layerName, type, minzoom, props, parts, outer, maxzoom = 255) {
     const layer = LAYER_INDEX[layerName];
     if (layer === undefined) throw new Error(`Unknown layer ${layerName}`);
     const index = this.count;
     this.layer.push(layer);
     this.type.push(type);
     this.minzoom.push(minzoom);
+    this.maxzoom.push(maxzoom);
     this.deleted.push(0);
     this.firstPart.push(this.partStart.length);
     this.partCount.push(parts.length);
@@ -176,14 +179,14 @@ export class FeatureStore {
 
   save(dir) {
     mkdirSync(dir, { recursive: true });
-    const arrays = ['layer', 'type', 'minzoom', 'deleted', 'firstPart', 'partCount', 'bounds', 'propsIndex', 'partStart', 'partOuter', 'coords'];
+    const arrays = ['layer', 'type', 'minzoom', 'maxzoom', 'deleted', 'firstPart', 'partCount', 'bounds', 'propsIndex', 'partStart', 'partOuter', 'coords'];
     for (const name of arrays) writeFileSync(join(dir, `${name}.bin`), this[name].view());
     writeFileSync(join(dir, 'props.json'), JSON.stringify(this.props));
   }
 
   static load(dir) {
     const store = new FeatureStore();
-    const arrays = { layer: Uint8Array, type: Uint8Array, minzoom: Uint8Array, deleted: Uint8Array, firstPart: Uint32Array, partCount: Uint32Array, bounds: Int32Array, propsIndex: Uint32Array, partStart: Uint32Array, partOuter: Uint8Array, coords: Int32Array };
+    const arrays = { layer: Uint8Array, type: Uint8Array, minzoom: Uint8Array, maxzoom: Uint8Array, deleted: Uint8Array, firstPart: Uint32Array, partCount: Uint32Array, bounds: Int32Array, propsIndex: Uint32Array, partStart: Uint32Array, partOuter: Uint8Array, coords: Int32Array };
     for (const [name, Type] of Object.entries(arrays)) {
       const buffer = readFileSync(join(dir, `${name}.bin`));
       const array = new Type(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
