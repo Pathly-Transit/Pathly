@@ -775,6 +775,10 @@ export function requiredPlanTripRequest(data: unknown, nowMs = Date.now()): Plan
   };
 }
 
+// Keep capacity occupied until preparation actually settles, even if its request has moved on.
+// Otherwise the next search could start more ZIP downloads beside the previous cold reads.
+const tripStaticPreparations = new Set<Promise<void>>();
+
 /** Prepare optional agencies together, without activating a late snapshot after this request moves on. */
 async function prepareTripStaticData(agencies: ReadonlySet<AgencyId>, deadlineMs: number): Promise<void> {
   const remainingMs = deadlineMs - Date.now();
@@ -791,17 +795,36 @@ async function prepareTripStaticData(agencies: ReadonlySet<AgencyId>, deadlineMs
       resolve();
     }, remainingMs);
   });
-  const preparing = Promise.all([...agencies].map(async (agencyId) => {
-    try {
-      await prepareAgencyStaticData(agencyId, Date.now(), { signal: controller.signal, deadlineMs });
-    } catch (error) {
-      logger.warn('Could not prepare optional trip timetable', {
-        event: 'trip_static_data_unavailable',
-        agencyId,
-        reason: error instanceof Error ? error.message : String(error),
-      });
+  const queue = [...agencies];
+  const expired = () => controller.signal.aborted || Date.now() >= deadlineMs;
+  const worker = async () => {
+    while (queue.length > 0 && !expired()) {
+      if (tripStaticPreparations.size >= AGENCY_PREPARE_CONCURRENCY) {
+        await Promise.race([...tripStaticPreparations, deadline]);
+        continue;
+      }
+      const agencyId = queue.shift();
+      if (!agencyId) return;
+      const preparation = (async () => {
+        try {
+          await prepareAgencyStaticData(agencyId, Date.now(), { signal: controller.signal, deadlineMs });
+        } catch (error) {
+          logger.warn('Could not prepare optional trip timetable', {
+            event: 'trip_static_data_unavailable',
+            agencyId,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })();
+      tripStaticPreparations.add(preparation);
+      try {
+        await preparation;
+      } finally {
+        tripStaticPreparations.delete(preparation);
+      }
     }
-  }));
+  };
+  const preparing = Promise.all(Array.from({ length: Math.min(AGENCY_PREPARE_CONCURRENCY, agencies.size) }, worker));
   try {
     await Promise.race([preparing, deadline]);
   } finally {

@@ -196,6 +196,10 @@ async function withStalledSnapshotReads(t, body) {
   try {
     await body(reads);
   } finally {
+    // Finish the shared hydration timers before resetting fake time. Request cancellation
+    // deliberately leaves those reads alive, and later tests use the same instance-level pool.
+    t.mock.timers.tick(30_000);
+    await new Promise((resolve) => setImmediate(resolve));
     t.mock.timers.reset();
     resetGtfsSnapshotStateForTests();
     resetGtfsStaticDataForTests();
@@ -220,6 +224,64 @@ test('cold timetable reads share the stop enrichment budget instead of blocking 
     assert.ok(startedTogether.includes('gtfs/v1/suffolk/current.json'), 'both agencies begin loading before either finishes');
     assert.ok((await pending).itineraries.length > 0);
     assert.equal(matches, 0, 'expired enrichment does not start additional matching work');
+  });
+});
+
+function cityBusRoutes() {
+  const body = JSON.parse(fixture('routes-sbu-penn.json'));
+  for (const route of body.routes) {
+    for (const leg of route.legs) {
+      for (const step of leg.steps) {
+        if (!step.transitDetails) continue;
+        step.transitDetails.transitLine = {
+          agencies: [{ name: 'MTA New York City Transit' }],
+          name: 'M7', nameShort: 'M7',
+          vehicle: { type: 'BUS', name: { text: 'Bus' } },
+        };
+      }
+    }
+  }
+  return body;
+}
+
+test('city-bus timetable loading keeps the three-download cap and stops dequeuing after expiry', async (t) => {
+  await withStalledSnapshotReads(t, async (reads) => {
+    stubRoutes(cityBusRoutes());
+    setTripStopMatcherForTests(async () => undefined);
+    const pending = run(validData);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads.length, 3, 'a city-bus leg can match six agencies, but at most three may hydrate at once');
+    t.mock.timers.tick(3_001);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok((await pending).itineraries.length > 0);
+    t.mock.timers.tick(25_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads.length, 3, 'finishing late reads must not start queued agencies for an expired request');
+  });
+});
+
+test('a later search cannot exceed the instance hydration cap while an earlier search finishes in the background', async (t) => {
+  await withStalledSnapshotReads(t, async (reads) => {
+    stubRoutes(cityBusRoutes());
+    setTripStopMatcherForTests(async () => undefined);
+    const first = run(validData);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads.length, 3);
+    t.mock.timers.tick(3_001);
+    await new Promise((resolve) => setImmediate(resolve));
+    await first;
+
+    // A different trip needs LIRR/Suffolk, while the first three bus reads are still pending.
+    stubRoutes(fixture('routes-sbu-penn.json'));
+    const second = run(validData);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads.length, 3, 'the next request must share the same instance-level download capacity');
+    t.mock.timers.tick(3_001);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok((await second).itineraries.length > 0, 'waiting for capacity is bounded by this request\'s budget too');
+    t.mock.timers.tick(25_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads.length, 3);
   });
 });
 
