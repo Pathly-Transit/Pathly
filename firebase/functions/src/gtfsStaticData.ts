@@ -465,8 +465,17 @@ function clearAgencyCaches(agencyId: AgencyId): void {
  * into this instance's /tmp cache. Missing/unavailable storage deliberately keeps the bundled
  * deploy snapshot, so publishing the scheduler cannot create a cold-start outage.
  */
-export async function prepareAgencyStaticData(agencyId: AgencyId, nowMs = Date.now()): Promise<void> {
+export async function prepareAgencyStaticData(
+  agencyId: AgencyId,
+  nowMs = Date.now(),
+  options: { signal?: AbortSignal; deadlineMs?: number } = {},
+): Promise<void> {
+  // A caller may stop waiting for optional enrichment. Shared hydration can still warm its
+  // immutable snapshot cache, but this request must not activate it after its data-reading phase.
+  const expired = () => options.signal?.aborted || (options.deadlineMs !== undefined && Date.now() >= options.deadlineMs);
+  if (expired()) return;
   const snapshot = await hydrateCurrentGtfsSnapshot(agencyId, nowMs);
+  if (expired()) return;
   // An on-demand agency has no committed copy to fall back to: without a snapshot it stays
   // unavailable (isAgencyAvailable), and callers skip it.
   if (!snapshot && agencyConfig(agencyId).onDemandRouteFiles) return;

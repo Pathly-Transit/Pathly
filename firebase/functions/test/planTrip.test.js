@@ -6,6 +6,8 @@ const test = require('node:test');
 const { consumeTokenBucket, resetCallableSecurityForTests, setSharedRateLimitConsumerForTests } = require('../lib/callableSecurity');
 const { planTrip, requiredPlanTripRequest, setTripAlertsLookupForTests, setTripLiveLookupForTests, setTripStopMatcherForTests } = require('../lib');
 const { SERVICE_AREA_BOUNDS } = require('../lib/serviceArea');
+const { resetGtfsSnapshotStateForTests, setGtfsSnapshotBucketForTests } = require('../lib/gtfsSnapshots');
+const { resetGtfsStaticDataForTests } = require('../lib/gtfsStaticData');
 
 const fixture = (name) => fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
 const validData = {
@@ -174,4 +176,61 @@ test('returns itineraries without stops when matching is slower than its budget'
   assert.ok(Date.now() - started < 4_000);
   assert.ok(itineraries.length > 0);
   assert.ok(itineraries.flatMap((itinerary) => itinerary.steps).every((step) => step.stops === undefined));
+});
+
+async function withStalledSnapshotReads(t, body) {
+  const originalOverride = process.env.GTFS_USE_CLOUD_STORAGE;
+  process.env.GTFS_USE_CLOUD_STORAGE = 'true';
+  resetGtfsSnapshotStateForTests();
+  resetGtfsStaticDataForTests();
+  const reads = [];
+  setGtfsSnapshotBucketForTests({
+    file: (name) => ({
+      getMetadata: () => {
+        reads.push(name);
+        return new Promise(() => undefined);
+      },
+    }),
+  });
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse('2026-11-19T12:00:00Z') });
+  try {
+    await body(reads);
+  } finally {
+    t.mock.timers.reset();
+    resetGtfsSnapshotStateForTests();
+    resetGtfsStaticDataForTests();
+    if (originalOverride === undefined) delete process.env.GTFS_USE_CLOUD_STORAGE;
+    else process.env.GTFS_USE_CLOUD_STORAGE = originalOverride;
+  }
+}
+
+test('cold timetable reads share the stop enrichment budget instead of blocking ready routes', async (t) => {
+  await withStalledSnapshotReads(t, async (reads) => {
+    stubRoutes(fixture('routes-sbu-penn.json'));
+    let matches = 0;
+    setTripStopMatcherForTests(async () => { matches += 1; return undefined; });
+    let settled = false;
+    const pending = run(validData).then((answer) => { settled = true; return answer; });
+    await new Promise((resolve) => setImmediate(resolve));
+    const startedTogether = [...reads];
+    t.mock.timers.tick(3_001);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, true, 'ready Google routes return within the single 3s timetable/stop budget');
+    assert.ok(startedTogether.includes('gtfs/v1/lirr/current.json'));
+    assert.ok(startedTogether.includes('gtfs/v1/suffolk/current.json'), 'both agencies begin loading before either finishes');
+    assert.ok((await pending).itineraries.length > 0);
+    assert.equal(matches, 0, 'expired enrichment does not start additional matching work');
+  });
+});
+
+test('an empty route result does not load an unrelated LIRR fare timetable', async (t) => {
+  await withStalledSnapshotReads(t, async (reads) => {
+    stubRoutes({ routes: [] });
+    let settled = false;
+    const pending = run(validData).then((answer) => { settled = true; return answer; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, true, 'there is no optional transit data to wait for');
+    assert.deepEqual(await pending, { itineraries: [] });
+    assert.deepEqual(reads, []);
+  });
 });

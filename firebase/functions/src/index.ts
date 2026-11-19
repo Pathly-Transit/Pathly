@@ -122,7 +122,8 @@ const RATE_LIMITS = {
   getBackendStatus: { userPerMinute: 6 },
 } satisfies Record<string, CallableRateLimit>;
 
-// City bus timetables load from Cloud Storage on first use, which the budget leaves room for.
+// One shared budget for loading optional timetables and matching their intermediate stops.
+// A cold snapshot can take longer, but must not hold up Google's already available routes.
 const TRIP_STOPS_BUDGET_MS = 3_000;
 let tripStopMatcher = matchTripStops;
 // Live feeds are usually already cached by route status polling; a slow one isn't waited on long.
@@ -774,6 +775,41 @@ export function requiredPlanTripRequest(data: unknown, nowMs = Date.now()): Plan
   };
 }
 
+/** Prepare optional agencies together, without activating a late snapshot after this request moves on. */
+async function prepareTripStaticData(agencies: ReadonlySet<AgencyId>, deadlineMs: number): Promise<void> {
+  const remainingMs = deadlineMs - Date.now();
+  if (agencies.size === 0 || remainingMs <= 0) return;
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      logger.warn('Returning routes without waiting longer for optional timetables', {
+        event: 'trip_static_data_budget_exceeded',
+        agencies: [...agencies],
+      });
+      resolve();
+    }, remainingMs);
+  });
+  const preparing = Promise.all([...agencies].map(async (agencyId) => {
+    try {
+      await prepareAgencyStaticData(agencyId, Date.now(), { signal: controller.signal, deadlineMs });
+    } catch (error) {
+      logger.warn('Could not prepare optional trip timetable', {
+        event: 'trip_static_data_unavailable',
+        agencyId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }));
+  try {
+    await Promise.race([preparing, deadline]);
+  } finally {
+    controller.abort();
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * Real transit itineraries between two places, from the Google Routes API (computeRoutes,
  * TRANSIT, with alternatives), reshaped into the app's itinerary format (tripPlanning.ts).
@@ -815,17 +851,23 @@ export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary
     if (ends.some((point) => point?.latitude !== undefined && point.longitude !== undefined && !isInServiceArea(point.latitude, point.longitude))) throw outOfArea();
 
     const requestTime = trip.time.mode === 'now' ? new Date(nowMs).toISOString() : trip.time.at;
+    // Identify the agencies before loading fares, so a bus/subway-only search never waits for
+    // an unrelated LIRR snapshot. Preparation and stop matching share the same deadline.
+    const unpriced = normalizeRoutesResponse(body, requestTime, trip.destination.label);
+    const agencies = new Set(unpriced.flatMap((itinerary) => itinerary.steps.flatMap((step) => (step.kind === 'transit' ? agencyIdsForStep(step) : []))));
+    const stopsDeadlineMs = Date.now() + TRIP_STOPS_BUDGET_MS;
+    await prepareTripStaticData(agencies, stopsDeadlineMs);
     // Google has no fares for the LIRR, NICE, or Suffolk; estimate those from published fares.
-    await prepareAgencyStaticData('lirr');
-    const estimateFare = createFareEstimator(loadAgencyStaticData('lirr').stopsById.values());
+    // A timed-out preparation retains the active/bundled station data rather than dropping fares.
+    const lirrStops = agencies.has('lirr') && isAgencyAvailable('lirr') ? loadAgencyStaticData('lirr').stopsById.values() : [];
+    const estimateFare = createFareEstimator(lirrStops);
     const itineraries = normalizeRoutesResponse(body, requestTime, trip.destination.label, estimateFare);
     const walkOnly = walkOnlyOption(trip, ends, nowMs, itineraries);
     if (walkOnly) itineraries.push(walkOnly);
     // Stops in between come from Pathly's own timetables (Google gives only a count); any leg not
     // matched within the budget simply goes without.
-    const agencies = new Set(itineraries.flatMap((itinerary) => itinerary.steps.flatMap((step) => (step.kind === 'transit' ? agencyIdsForStep(step) : []))));
-    for (const agencyId of agencies) await prepareAgencyStaticData(agencyId);
-    const withStops = await addTripStops(itineraries, TRIP_STOPS_BUDGET_MS, tripStopMatcher);
+    const stopBudgetMs = stopsDeadlineMs - Date.now();
+    const withStops = stopBudgetMs > 0 ? await addTripStops(itineraries, stopBudgetMs, tripStopMatcher) : itineraries;
     // Then each leg against the agencies' live feeds: cancelled trips, live times, missed connections.
     return { itineraries: await addLiveStatus(withStops, TRIP_LIVE_BUDGET_MS, nowMs, tripLiveLookup, undefined, tripAlertsLookup) };
   },

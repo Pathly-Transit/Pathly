@@ -28,6 +28,7 @@ const {
   validateAgencySnapshotContract,
 } = require('../lib/gtfsSnapshots');
 const {
+  agencySnapshotVersion,
   loadAgencyShapes,
   loadAgencyStaticData,
   loadGlobalStopRouteIndex,
@@ -668,6 +669,131 @@ test('activates new remote snapshots through the static-data readers and keeps t
     if (originalOverride === undefined) delete process.env.GTFS_USE_CLOUD_STORAGE;
     else process.env.GTFS_USE_CLOUD_STORAGE = originalOverride;
   }
+});
+
+/** Two published versions, with the second archive held until the test releases Storage. */
+async function withPendingPreparation(body) {
+  const fakeBucket = new FakeBucket();
+  setGtfsSnapshotBucketForTests(fakeBucket);
+  const originalOverride = process.env.GTFS_USE_CLOUD_STORAGE;
+  process.env.GTFS_USE_CLOUD_STORAGE = 'true';
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let entered;
+  const blocked = new Promise((resolve) => { entered = resolve; });
+  const preparing = [];
+  const files = (name, latitude) => ({
+    ...currentLirrFiles(name),
+    'shapes.txt': strToU8(`shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\nrequest-shape,${latitude},-73.1,1\n`),
+  });
+  try {
+    await withLirrFeed(() => refreshGtfsSnapshot('lirr'), files('Request boundary old feed', 40.1));
+    await prepareAgencyStaticData('lirr', 1_000_000);
+    const oldVersion = agencySnapshotVersion('lirr');
+    const oldDir = path.join(os.tmpdir(), 'pathly-gtfs', 'lirr', oldVersion);
+    const oldData = loadAgencyStaticData('lirr');
+    const oldShapes = loadAgencyShapes('lirr');
+    await withLirrFeed(() => refreshGtfsSnapshot('lirr'), files('Request boundary new feed', 40.2));
+    const nextManifest = currentManifest(fakeBucket);
+    const file = fakeBucket.file.bind(fakeBucket);
+    let downloads = 0;
+    fakeBucket.file = (name, options) => {
+      const object = file(name, options);
+      if (name !== nextManifest.archiveObject) return object;
+      return { ...object, download: async () => {
+        downloads += 1;
+        entered();
+        await gate;
+        return object.download();
+      } };
+    };
+    await body({
+      oldVersion, oldDir, oldData, oldShapes, nextVersion: nextManifest.version,
+      blocked, release, downloads: () => downloads,
+      prepare: (options) => {
+        const result = prepareAgencyStaticData('lirr', 1_300_001, options);
+        preparing.push(result);
+        return result;
+      },
+    });
+  } finally {
+    release();
+    await Promise.allSettled(preparing);
+    if (originalOverride === undefined) delete process.env.GTFS_USE_CLOUD_STORAGE;
+    else process.env.GTFS_USE_CLOUD_STORAGE = originalOverride;
+  }
+}
+
+test('bounded preparation does not activate, clear caches or prune after its request is aborted', async () => {
+  await withPendingPreparation(async (state) => {
+    const controller = new AbortController();
+    const preparing = state.prepare({ signal: controller.signal, deadlineMs: Date.now() + 60_000 });
+    await state.blocked;
+    controller.abort();
+    state.release();
+    await preparing;
+
+    assert.equal(agencySnapshotVersion('lirr'), state.oldVersion, 'canceled preparation must leave the active version unchanged');
+    assert.equal(loadAgencyStaticData('lirr'), state.oldData, 'the active static-data cache must not be cleared');
+    assert.equal(loadAgencyShapes('lirr'), state.oldShapes, 'the active shape cache must not be cleared');
+    assert.equal(fs.existsSync(state.oldDir), true, 'the active directory must not be pruned');
+
+    await state.prepare({ deadlineMs: Date.now() + 60_000 });
+    assert.equal(agencySnapshotVersion('lirr'), state.nextVersion, 'a later request may activate the hydrated snapshot');
+    assert.equal(loadAgencyStaticData('lirr').routesById.get('10').name, 'Request boundary new feed');
+    assert.deepEqual(loadAgencyShapes('lirr').get('request-shape'), [{ lat: 40.2, lon: -73.1 }]);
+    assert.equal(state.downloads(), 1, 'the later request reuses the completed hydration');
+    assert.equal(fs.existsSync(state.oldDir), false, 'only the later live request prunes the retired directory');
+  });
+});
+
+test('bounded preparation skips hydration and activation for an already expired deadline', async () => {
+  await withPendingPreparation(async (state) => {
+    state.release();
+    await state.prepare({ deadlineMs: Date.now() - 1 });
+    assert.equal(agencySnapshotVersion('lirr'), state.oldVersion, 'an expired request cannot replace the active snapshot');
+    assert.equal(loadAgencyStaticData('lirr'), state.oldData);
+    assert.equal(fs.existsSync(state.oldDir), true);
+    assert.equal(state.downloads(), 0, 'an expired request must not start a new Storage read');
+  });
+});
+
+test('bounded preparation does not activate when its deadline expires during hydration', async (t) => {
+  await withPendingPreparation(async (state) => {
+    const deadlineMs = Date.now() + 1_000;
+    const preparing = state.prepare({ deadlineMs });
+    await state.blocked;
+    // Simulate elapsed request time without waiting on a real timer or aborting shared Storage.
+    t.mock.method(Date, 'now', () => deadlineMs + 1);
+    state.release();
+    await preparing;
+
+    assert.equal(agencySnapshotVersion('lirr'), state.oldVersion, 'expiry during hydration must prevent activation');
+    assert.equal(loadAgencyStaticData('lirr'), state.oldData);
+    assert.equal(fs.existsSync(state.oldDir), true);
+    await state.prepare({ deadlineMs: deadlineMs + 60_000 });
+    assert.equal(agencySnapshotVersion('lirr'), state.nextVersion);
+    assert.equal(state.downloads(), 1);
+  });
+});
+
+test('bounded preparation cancellation does not invalidate a newer request sharing hydration', async () => {
+  await withPendingPreparation(async (state) => {
+    const older = new AbortController();
+    const newer = new AbortController();
+    const oldRequest = state.prepare({ signal: older.signal, deadlineMs: Date.now() + 60_000 });
+    await state.blocked;
+    const newRequest = state.prepare({ signal: newer.signal, deadlineMs: Date.now() + 60_000 });
+    older.abort();
+    state.release();
+    await Promise.all([oldRequest, newRequest]);
+
+    assert.equal(newer.signal.aborted, false);
+    assert.equal(agencySnapshotVersion('lirr'), state.nextVersion);
+    assert.equal(loadAgencyStaticData('lirr').routesById.get('10').name, 'Request boundary new feed');
+    assert.equal(state.downloads(), 1, 'requests share hydration without sharing cancellation ownership');
+    assert.equal(fs.existsSync(state.oldDir), false);
+  });
 });
 
 /** Runs `body` with every GTFS download answered by `files` (LIRR's fixture by default). */
