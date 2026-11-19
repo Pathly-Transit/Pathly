@@ -2,7 +2,7 @@
 
 This runbook prepares a signed iOS build for TestFlight. It does not certify public-release readiness. The [November 12 QA assessment](release-qa/2026-11-12/assessment.md) records passing JavaScript checks and an Android debug build, but no completed iOS build or physical-device navigation test. Record new results against the exact commit and build tested.
 
-As of November 18, the existing App Store Connect record has been verified: Apple ID `6836052767`, bundle ID `com.mpaxos.pathly`. Expo project access now works as `elemels`. Production configuration has been checked and corrected, beta information is saved, and the existing internal group is `FR friends`. The supplied API key is stored locally with its path and Key ID; its Issuer ID is the remaining missing input in store preflight. Initial Apple signing setup, a signed production `.ipa`, upload and physical-device testing still follow. See the [production readiness record](release-qa/2026-11-18/production-readiness.md).
+As of November 19, the first production iOS build, version `0.1.0` build `2`, has been signed, built, uploaded and processed successfully for the existing App Store Connect app `6836052767`, bundle `com.mpaxos.pathly`. Apple API authentication and store preflight pass; Expo access works as `elemels`. The build is available to the existing internal group, with Ellie and Sammi showing invited. Testing notes are saved. Physical-device checks and external beta review still follow. See the [internal-build record](release-qa/2026-11-19/testflight-internal.md) for exact delivery and device-test status and the [production configuration audit](release-qa/2026-11-18/production-readiness.md) for earlier checks.
 
 ## App identity
 
@@ -26,17 +26,17 @@ Use the existing Apple Developer membership and the account holder's App Store C
 | Input | Where to verify it / action |
 | --- | --- |
 | Supplied `.p8` API private key and Key ID | Already prepared on this workstation in ignored `mobile/.credentials/`, with the path and Key ID in ignored `mobile/.env.testflight.local`. On another machine, retrieve the shared file through the approved private channel. Confirm the key is still active and its role permits uploading builds. Keep its contents out of Git, screenshots, chat, and logs. |
-| API Issuer ID | For the supplied team key, ask the account holder to copy this from **App Store Connect → Users and Access → Integrations → App Store Connect API → Team Keys**. A Team ID is not an Issuer ID. |
+| API Issuer ID | Supplied and stored in the ignored local release file. On another workstation, obtain the matching value through the approved private channel or from **App Store Connect → Users and Access → Integrations → App Store Connect API → Team Keys**. A Team ID is not an Issuer ID. |
 | Apple Team ID | Confirm the previously supplied Team ID matches the developer membership used to sign `com.mpaxos.pathly`. It identifies the signing team, not the app record. |
 | Numeric App Store Connect app ID (`ascAppId`) | Verified as `6836052767` in [Pathly App Information](https://appstoreconnect.apple.com/apps/6836052767/distribution/info) and set in the submission profile. Anyone with the relevant app-information access can retrieve it; it is not specific to the teammate entering metadata. This is not the bundle identifier or the Apple account email. |
-| Signing materials | Confirm an Apple Distribution certificate and App Store provisioning profile for the bundle ID are available to EAS, or arrange their initial setup with the account holder. The `.p8` upload key alone does not establish that signing is configured. |
+| Signing materials | An Apple Distribution certificate and active App Store provisioning profile for the bundle ID are now stored in EAS. Verify they are available and valid for the selected build; the `.p8` upload key alone does not establish signing readiness. |
 | Expo access | Sign in with an account that can access `@pathlyapp/pathly` and its production environment. |
 
-The initial Expo access denial has been resolved. Project information, production variables, build history and credential metadata are readable with the current account. EAS currently has no iOS distribution signing credentials or managed App Store Connect API keys. Its completed iOS cloud build is simulator-only and cannot be submitted to TestFlight. Keep the existing project ID and arrange first-time signing using the supplied team key once the Issuer ID is available.
+The initial Expo access denial has been resolved. Project information, production variables, build history and credential metadata are readable with the current account. Initial Apple distribution signing is now configured in EAS, and the production device build is recorded in the [November 19 delivery record](release-qa/2026-11-19/testflight-internal.md). The older completed `ios-simulator` build cannot be submitted to TestFlight. Keep the existing project ID and select the exact successful production build.
 
 Use the existing Pathly App Store Connect record; do not create another record to work around missing access. The submission profile pins its confirmed `ascAppId` to `6836052767`, matching `com.mpaxos.pathly`. Both the store check and submission wrapper require a numeric ID: the wrapper stops before launching EAS if it is removed or malformed. [Expo explains where to find `ascAppId`](https://docs.expo.dev/submit/ios/#how-to-find-ascappid).
 
-The account holder should supply the Issuer ID if invited users cannot access **Integrations**. A redirect from that restricted section does not establish that the app or backend is down.
+For another workstation, ask the account holder to supply the matching Issuer ID if invited users cannot access **Integrations**. A redirect from that restricted section does not establish that the app or backend is down.
 
 The local `.credentials` directory is restricted to its owner, with owner-only read/write access on the key and release environment file. Preserve those permissions. On another machine, use a private directory outside the checkout, the ignored credential directory, or the authorized EAS credential flow. Never put a private credential in an `EXPO_PUBLIC_` variable; those values are compiled into the app. Back up signing materials through the team's approved secret storage. Apple API keys can only be downloaded once; [Apple's API-key guidance](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api/) explains generation, roles, and revocation.
 
@@ -50,7 +50,7 @@ The repository's preflight, build and submit commands load ignored `mobile/.env.
 | `EXPO_APPLE_TEAM_ID` | Confirmed Apple signing-team ID; must agree with the submission profile |
 | `EXPO_APPLE_TEAM_TYPE` | `INDIVIDUAL` for the existing developer membership; this does not make the supplied team API key an individual API key |
 
-The existing local file contains the key path, Key ID and team metadata; add the Issuer ID when the account holder supplies it. Keep every value paired with the correct account/key; never substitute the Team ID for the Issuer ID. Edit the ignored local file through approved local secret tooling, without printing the `.p8` contents or pasting them into a terminal command. The submission profile's `appleTeamId` identifies the intended team.
+The existing local file contains the complete API-key inputs and team metadata. Keep every value paired with the correct account/key; never substitute the Team ID for the Issuer ID. Edit the ignored local file through approved local secret tooling, without printing the `.p8` contents or pasting them into a terminal command. The submission profile's `appleTeamId` identifies the intended team.
 
 ## Verify the build environment
 
@@ -62,7 +62,7 @@ npm run ios:preflight
 
 This checks local app metadata and client-configuration readiness. It does not log in to Apple, inspect live EAS production values, validate key permissions, or prove that a signed build runs.
 
-The canonical `ADMIN_EMAILS` production variable and ignored local configuration now match the verified deployed five-person backend list, following explicit user approval. Local preflight passes. Store preflight additionally checks the API key and app record; its remaining failure is the missing Issuer ID. Do not substitute a Team ID or another UUID for it.
+The canonical `ADMIN_EMAILS` production variable and ignored local configuration match the verified deployed five-person backend list, following explicit user approval. Local and store preflight now have zero blocking checks. Apple API authentication was independently verified against the existing app record. Keep the supplied Issuer ID paired with its team key; do not substitute a Team ID or another UUID.
 
 Verify **the EAS production environment**, using the [configuration reference](mobile-configuration.md), before queuing a cloud build:
 
@@ -105,7 +105,7 @@ npm run ios:preflight -- --store
 Resolve the store check's failures before continuing. It validates local inputs; Apple account access, active credentials and the destination app record still require verification. Upload the intended successful production build, checking its build ID rather than assuming the newest build belongs to this release:
 
 ```sh
-npm run submit:ios -- --id <EAS-build-id>
+npm run submit:ios -- --id <EAS-build-id> --no-auto-testflight-setup
 ```
 
 Replace the placeholder with the exact successful production build ID. The wrapper also accepts an explicit `--path` or `--url` to an intended `.ipa`; it rejects an unspecified source and `--latest`. Before launching EAS, submission requires the confirmed numeric `ascAppId` and all three API inputs, including the Issuer ID. Keep using the existing App Store Connect app record.
@@ -116,7 +116,7 @@ Submission uploads the binary to App Store Connect. After processing, inspect **
 
 Start with an internal TestFlight group containing the approved App Store Connect users who have access to Pathly. Add the processed build and testing notes. [Apple's internal-testing guide](https://developer.apple.com/help/app-store-connect/test-a-beta-version/add-internal-testers/) describes eligibility and group setup.
 
-An internal group named **FR friends** already exists. Reuse the team's intended group; the preparation work did not create another group, change memberships, or send invitations. Test Information now contains the beta description, existing public support email, and marketing/privacy URLs. Beta-review contacts, sign-in information and EULA choices remain team-owned inputs for external testing.
+The existing internal group is named **friends**, shown as **FR friends** in the sidebar. Ellie was added for phone testing, preserving Sammi's existing membership. No additional group or public link was created. Check the [delivery record](release-qa/2026-11-19/testflight-internal.md) for the processed build and invitation status. Test Information contains the beta description, existing public support email, and marketing/privacy URLs. TestFlight's separate beta-review contact/access fields are empty, but the existing iOS `1.0` App Store review record already contains Sammi's complete contact details, demo credentials and notes. The saved reviewer account matches an approved backend admin: do not copy those credentials into beta review. Validate guest coverage or arrange a dedicated non-admin reviewer account, then check the existing instructions against this build. No new demo account was created. Wait for Ellie's successful phone check before setting up the external beta and public link.
 
 For people outside App Store Connect, use an external TestFlight group and supply beta-review information and working reviewer access. The first external build requires TestFlight App Review; subsequent builds may also need review. Login, privacy and app-completeness issues can affect beta review too, so resolve those review risks before expanding externally. A TestFlight invitation/public testing link does not make the app a public App Store release. [Apple's external-testing guide](https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers/) covers review and distribution.
 
