@@ -468,11 +468,26 @@ describe('Settings', () => {
       const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
       const screen = renderSettings();
       await openPage(screen, 'about');
-      expect(screen.getByText('Map data © OpenStreetMap')).toBeTruthy();
+      expect(screen.getByText('Walking routes © OpenStreetMap contributors')).toBeTruthy();
       await act(async () => {
         fireEvent.press(screen.getByTestId('about-osm'));
       });
       expect(openURL).toHaveBeenCalledWith('https://www.openstreetmap.org/copyright');
+    });
+
+    it('credits the map’s data, renderer, and font sources, each linking to its source or license', async () => {
+      const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+      const screen = renderSettings();
+      await openPage(screen, 'about');
+      for (const label of ['Map data: U.S. Census Bureau', 'Place names: U.S. Geological Survey', 'Buildings: City of New York', 'Made with Natural Earth', 'Map display: MapLibre', 'Map labels: Nunito', 'Place search: Google']) {
+        expect(screen.getByText(label)).toBeTruthy();
+      }
+      expect(screen.getByText('© MapLibre contributors, © Mapbox · BSD license')).toBeTruthy();
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('about-credit-census'));
+      });
+      expect(openURL).toHaveBeenCalledWith('https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html');
+      openURL.mockRestore();
     });
   });
 });
