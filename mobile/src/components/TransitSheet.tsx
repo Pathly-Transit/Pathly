@@ -249,10 +249,8 @@ export function TransitSheet({
   // Tabs swipe like pages: the list follows the finger a little, then the next tab comes in. Bubble
   // phase only, so a two-direction route card (which claims sideways drags first) keeps its swipe.
   const [tabSlide] = useState(() => new Animated.Value(0));
-  const tabRef = useRef({ activeTab, onTabChange, reducedMotionActive });
-  useEffect(() => {
-    tabRef.current = { activeTab, onTabChange, reducedMotionActive };
-  });
+  // Rebuilt when the tab changes (as TransitCard rebuilds its swipe per page), so it reads the
+  // current tab without a ref.
   const tabSwipe = useMemo(() => {
     const settle = () => Animated.spring(tabSlide, { toValue: 0, speed: 20, bounciness: 0, useNativeDriver }).start();
     return PanResponder.create({
@@ -261,17 +259,17 @@ export function TransitSheet({
       // A third of the drag, so it reads as "this moves" without pulling the whole list across.
       onPanResponderMove: (_event, gesture) => tabSlide.setValue(gesture.dx / 3),
       onPanResponderRelease: (_event, gesture) => {
-        const next = swipedTab(tabRef.current.activeTab, gesture.dx, gesture.vx, tabs.map((tab) => tab.id));
+        const next = swipedTab(activeTab, gesture.dx, gesture.vx, tabs.map((tab) => tab.id));
         if (next) {
-          tabRef.current.onTabChange(next);
+          onTabChange(next);
           // The new tab slides in from the side it was swiped toward (or just appears, with less motion).
-          tabSlide.setValue(tabRef.current.reducedMotionActive ? 0 : gesture.dx < 0 ? 40 : -40);
+          tabSlide.setValue(reducedMotionActive ? 0 : gesture.dx < 0 ? 40 : -40);
         }
         settle();
       },
       onPanResponderTerminate: settle,
     });
-  }, [tabSlide]);
+  }, [activeTab, onTabChange, reducedMotionActive, tabSlide]);
   const shownCardIds = useRef<readonly string[]>([]);
   const recheckCardIds = useRef<readonly string[]>([]);
   const reportedVisibleKey = useRef<string | null>(null);
