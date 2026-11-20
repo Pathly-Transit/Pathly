@@ -12,6 +12,9 @@ import {
   fromMapLibreZoom,
   mapColor,
   toMapLibreZoom,
+  walkDotRadius,
+  walkDotZoom,
+  walkingDots,
   type MapCanvasProps,
   type MapCanvasRef,
   type MapCirclesProps,
@@ -58,7 +61,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
   ref,
 ) {
-  const { isDark } = useTheme();
+  const { isDark, mapTheme } = useTheme();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [map, setMap] = useState<maplibregl.Map | null>(null);
   const [styleKey, setStyleKey] = useState(0);
@@ -68,14 +71,14 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   useLayoutEffect(() => {
     latest.current = { onCameraIdle, onLongPress, onPress, onUserGesture, maxBounds };
   });
-  const themeAtCreation = useRef(isDark);
+  const themeAtCreation = useRef({ isDark, mapTheme });
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return undefined;
     const instance = new maplibregl.Map({
       container,
-      style: pathlyMapStyle(themeAtCreation.current) as maplibregl.StyleSpecification,
+      style: pathlyMapStyle(themeAtCreation.current.isDark, themeAtCreation.current.mapTheme) as maplibregl.StyleSpecification,
       center: lngLatOf(initialCamera.center),
       zoom: toMapLibreZoom(initialCamera.zoom),
       bearing: initialCamera.bearing ?? 0,
@@ -161,10 +164,10 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
 
   // The theme's style; lines and dots re-add themselves once it has loaded (styleKey).
   useEffect(() => {
-    if (!map || isDark === themeAtCreation.current) return;
-    themeAtCreation.current = isDark;
-    map.setStyle(pathlyMapStyle(isDark) as maplibregl.StyleSpecification, { diff: false });
-  }, [isDark, map]);
+    if (!map || (isDark === themeAtCreation.current.isDark && mapTheme === themeAtCreation.current.mapTheme)) return;
+    themeAtCreation.current = { isDark, mapTheme };
+    map.setStyle(pathlyMapStyle(isDark, mapTheme) as maplibregl.StyleSpecification, { diff: false });
+  }, [isDark, map, mapTheme]);
 
   const paddingKey = `${padding?.top ?? 0},${padding?.right ?? 0},${padding?.bottom ?? 0},${padding?.left ?? 0}`;
   useEffect(() => {
@@ -204,15 +207,19 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
 
   const context = useMemo(() => (map ? { map, styleKey, tapTargets } : null), [map, styleKey, tapTargets]);
   return (
-    <View style={[StyleSheet.absoluteFill, { backgroundColor: mapLandColor(isDark) }]} testID={testID}>
+    <View style={[StyleSheet.absoluteFill, { backgroundColor: mapLandColor(isDark, mapTheme) }]} testID={testID}>
       <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
       {context ? <MapContext.Provider value={context}>{children}</MapContext.Provider> : null}
     </View>
   );
 });
 
-/** A line in Pathly's own colors over the base map. */
-export function MapPolyline({ id, coordinates, color, width, opacity = 1, dotted = false, zIndex = 0 }: MapPolylineProps) {
+/** A line in Pathly's own colors over the base map; a dotted one (a walk) is drawn as round dots. */
+export function MapPolyline(props: MapPolylineProps) {
+  return props.dotted ? <WalkDots {...props} /> : <SolidLine {...props} />;
+}
+
+function SolidLine({ id, coordinates, color, width, opacity = 1, zIndex = 0 }: MapPolylineProps) {
   const context = useContext(MapContext);
   const sourceId = `${id}-source`;
   const data = useMemo<GeoJSON.Feature>(() => ({
@@ -243,9 +250,51 @@ export function MapPolyline({ id, coordinates, color, width, opacity = 1, dotted
     map.setPaintProperty(id, 'line-color', mapColor(color));
     map.setPaintProperty(id, 'line-width', width);
     map.setPaintProperty(id, 'line-opacity', opacity);
-    // Dots: zero-length dashes with round caps, a dot's width apart.
-    map.setPaintProperty(id, 'line-dasharray', dotted ? [0, 2] : undefined);
-  }, [color, dotted, id, map, opacity, styleKey, width, zIndex]);
+  }, [color, id, map, opacity, styleKey, width, zIndex]);
+  return null;
+}
+
+/** A walk: round dots a fixed size and distance apart on screen (mapTypes.ts walkingDots), laid out again as the map zooms. */
+function WalkDots({ id, coordinates, color, width, opacity = 1, zIndex = 0 }: MapPolylineProps) {
+  const context = useContext(MapContext);
+  const sourceId = `${id}-source`;
+  const map = context?.map;
+  const styleKey = context?.styleKey;
+  const [zoom, setZoom] = useState(() => (map ? walkDotZoom(fromMapLibreZoom(map.getZoom())) : 14));
+  const data = useMemo(() => walkingDots(coordinates, zoom), [coordinates, zoom]);
+  const latestData = useRef(data);
+  useLayoutEffect(() => {
+    latestData.current = data;
+  });
+
+  // Every frame of a zoom, like Google's repeated dots.
+  useEffect(() => {
+    if (!map) return undefined;
+    const onZoom = () => setZoom(walkDotZoom(fromMapLibreZoom(map.getZoom())));
+    onZoom();
+    map.on('zoom', onZoom);
+    return () => {
+      map.off('zoom', onZoom);
+    };
+  }, [map]);
+
+  useEffect(() => {
+    if (!map) return undefined;
+    map.addSource(sourceId, { type: 'geojson', data: latestData.current });
+    map.addLayer({ id, type: 'circle', source: sourceId, paint: {} }, overlaySlotId(zIndex + 1));
+    return () => removeOverlay(map, id, sourceId);
+  }, [id, map, sourceId, styleKey, zIndex]);
+
+  useEffect(() => {
+    (map?.getSource(sourceId) as maplibregl.GeoJSONSource | undefined)?.setData(data);
+  }, [data, map, sourceId, styleKey]);
+
+  useEffect(() => {
+    if (!map?.getLayer(id)) return;
+    map.setPaintProperty(id, 'circle-color', mapColor(color));
+    map.setPaintProperty(id, 'circle-radius', walkDotRadius(width));
+    map.setPaintProperty(id, 'circle-opacity', opacity);
+  }, [color, id, map, opacity, styleKey, width, zIndex]);
   return null;
 }
 

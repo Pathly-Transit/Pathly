@@ -6,7 +6,8 @@ import { withAlpha } from '../data/routeDirection';
 import { stopIndexAt, tripMapPoints, ENTRANCE_REVEAL_ZOOM, viaRevealZooms, type TripMapProps, type TripMapStop } from '../data/tripMap';
 import { zoomForRegion } from '../data/stopDeclutter';
 import { MapCanvas, MapCircles, MapMarker, MapPolyline } from '../map/MapCanvas';
-import type { MapCameraChange, MapCanvasRef, MapCircle, MapPoint } from '../map/mapTypes';
+import { mapLandColor } from '../map/mapStyle';
+import { fadedOver, type MapCameraChange, type MapCanvasRef, type MapCircle, type MapPoint } from '../map/mapTypes';
 import { useAppSettings, useTheme, useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
 import { fontFamilies } from '../theme/typography';
@@ -14,6 +15,7 @@ import { CurrentLocationMarker } from './CurrentLocationMarker';
 import { DestinationPinMarker } from './DestinationPinMarker';
 import { HeadingBeamMarker } from './HeadingBeamMarker';
 import { Icon } from './Icon';
+import { SavedPlaceMarkers } from './SavedPlaceMarkers';
 import { LiveVehicleMarker } from './RouteMap';
 
 const FIT_PADDING = { top: 90, right: 40, bottom: 60, left: 40 };
@@ -65,7 +67,8 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
   // Set once the rider moves the map (a held camera was theirs too), so automatic framing isn't reported.
   const userMovedCamera = useRef(holding);
   const styles = useThemedStyles(createStyles);
-  const { colors, isDark } = useTheme();
+  const { colors, isDark, mapTheme } = useTheme();
+  const land = mapLandColor(isDark, mapTheme);
   const { destinationPin } = useAppSettings();
   const trip = useMemo(() => tripMapPoints(itinerary, origin, destination), [destination, itinerary, origin]);
   const legs = navigationProgress?.segments ?? trip.legs;
@@ -189,21 +192,22 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
     const lineColor = themedRouteColor(stop.color ?? colors.primary, isDark);
     const base = { key: String(index), coordinate: toPoint(stop.point), testID: `trip-map-${stop.kind}-${index}` };
     if (stop.kind === 'start' || stop.kind === 'end') {
-      return [{ ...base, radius: 9, color: ENDPOINT_FILL, strokeColor: ENDPOINT_RING, strokeWidth: 3, sortKey: 4, ...(completed ? { opacity: 0.48 } : {}) }];
+      // A passed endpoint fades like the line behind the rider, in solid colors (see-through ones stack darker over the line).
+      return [{ ...base, radius: 9, color: completed ? fadedOver(ENDPOINT_FILL, land, COMPLETED_OPACITY) : ENDPOINT_FILL, strokeColor: completed ? fadedOver(ENDPOINT_RING, land, COMPLETED_OPACITY) : ENDPOINT_RING, strokeWidth: 3, sortKey: 4 }];
     }
     const via = stop.kind === 'via';
     return [{
       ...base,
       radius: via ? 4.5 : 7,
-      color: colors.white,
-      // A stop already passed is ringed in the gray of the line behind the rider.
-      strokeColor: completed ? colors.mutedInk : lineColor,
+      color: completed ? fadedOver(colors.white, land, COMPLETED_OPACITY) : colors.white,
+      // A stop already passed is ringed in the faded gray of the line behind the rider: one solid
+      // color, since a see-through ring over the see-through line would stack darker.
+      strokeColor: completed ? fadedOver(colors.mutedInk, land, COMPLETED_OPACITY) : lineColor,
       strokeWidth: via ? 2 : 3,
       sortKey: via ? 2 : 3,
-      ...(completed ? { opacity: 0.48 } : {}),
     }];
     // eslint-disable-next-line react-hooks/exhaustive-deps -- viaShown reads zoom and revealZooms
-  }), [colors.mutedInk, colors.primary, colors.white, isDark, revealZooms, selected, stops, zoom]);
+  }), [colors.mutedInk, colors.primary, colors.white, isDark, land, revealZooms, selected, stops, zoom]);
   const entrances = stops.flatMap((stop, index) => (stop.kind === 'entrance' && (entrancesShown || index === selected) ? [{ stop, index }] : []));
 
   return (
@@ -262,6 +266,8 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
           testID="trip-map-stops"
           zIndex={4}
         />
+        {/* The rider's saved places, under the trip's own markers. */}
+        <SavedPlaceMarkers zIndex={0} zoom={zoom} />
         {entrances.map(({ stop, index }) => (
           // A square in the line's color with a white arrow, for a station's way in or out.
           <MapMarker coordinate={toPoint(stop.point)} key={`entrance-${index}`} onPress={interactive ? () => setSelected(index) : undefined} testID={`trip-map-entrance-${index}`} zIndex={2}>

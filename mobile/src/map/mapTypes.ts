@@ -168,3 +168,73 @@ export function boundsForMaxZoom(
   const latSpan = Math.max(north - south, height * degreesPerPx * Math.cos((middleLat * Math.PI) / 180));
   return [middleLon - lonSpan / 2, middleLat - latSpan / 2, middleLon + lonSpan / 2, middleLat + latSpan / 2];
 }
+
+/**
+ * Walking dots, as on the Google map Pathly used before: round dots a fixed size, a fixed 13 px
+ * apart on screen, starting at the walk's start (Google's circle symbol repeated every 13px). The
+ * canvases lay them out again as the zoom changes, so they keep that look at every zoom. (A dashed
+ * line's dots would stretch into ovals between zoom levels in MapLibre.)
+ */
+export const WALK_DOT_SPACING_PX = 13;
+/** Zoom changes smaller than this keep the dots where they are. */
+const WALK_DOT_ZOOM_STEP = 0.01;
+const WALK_DOT_LIMIT = 20_000;
+
+/** A walk drawn `width` wide gets dots this wide in radius (Google's: 3.5 for the 6-wide walk). */
+export const walkDotRadius = (width: number) => width / 2 + 0.5;
+
+/** Ground meters a screen pixel covers at an app zoom. */
+const metersPerPx = (zoom: number, latitude: number) => (156_543.03392 * Math.cos((latitude * Math.PI) / 180)) / 2 ** zoom;
+
+function distanceMeters(a: MapPoint, b: MapPoint): number {
+  const dy = (b.latitude - a.latitude) * 111_320;
+  const dx = (b.longitude - a.longitude) * 111_320 * Math.cos((((a.latitude + b.latitude) / 2) * Math.PI) / 180);
+  return Math.hypot(dx, dy);
+}
+
+/** A zoom rounded to WALK_DOT_ZOOM_STEP, so the dots are laid out again only when it shows. */
+export const walkDotZoom = (zoom: number) => Math.round(zoom / WALK_DOT_ZOOM_STEP) * WALK_DOT_ZOOM_STEP;
+
+/** The dots along a walk on a map at `zoom` (the app's scale), WALK_DOT_SPACING_PX apart from its start. */
+export function walkingDots(coordinates: readonly MapPoint[], zoom: number): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  if (coordinates.length === 0) return { type: 'FeatureCollection', features };
+  const add = (point: MapPoint) => features.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [point.longitude, point.latitude] } });
+  let total = 0;
+  for (let i = 1; i < coordinates.length; i += 1) total += distanceMeters(coordinates[i - 1]!, coordinates[i]!);
+  const spacing = Math.max(WALK_DOT_SPACING_PX * metersPerPx(zoom, coordinates[0]!.latitude), total / WALK_DOT_LIMIT, 0.01);
+  let nextAt = 0;
+  let walked = 0;
+  for (let i = 1; i < coordinates.length; i += 1) {
+    const a = coordinates[i - 1]!;
+    const b = coordinates[i]!;
+    const length = distanceMeters(a, b);
+    while (length > 0 && nextAt <= walked + length) {
+      const t = (nextAt - walked) / length;
+      add({ latitude: a.latitude + (b.latitude - a.latitude) * t, longitude: a.longitude + (b.longitude - a.longitude) * t });
+      nextAt += spacing;
+    }
+    walked += length;
+  }
+  if (coordinates.length === 1) add(coordinates[0]!);
+  return { type: 'FeatureCollection', features };
+}
+
+function parseHex(color: string): [number, number, number] | null {
+  let hex = color.trim().replace(/^#/, '');
+  if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');
+  if (!/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(hex)) return null;
+  return [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)) as [number, number, number];
+}
+
+/**
+ * `color` at `alpha` over `background`, as one solid color. A faded ring on a faded line would
+ * stack the two (darker where they overlap); a solid blend looks like the faded line throughout.
+ */
+export function fadedOver(color: string, background: string, alpha: number): string {
+  const top = parseHex(color);
+  const bottom = parseHex(background);
+  if (!top || !bottom) return color;
+  const mixed = top.map((value, i) => Math.round(value * alpha + bottom[i]! * (1 - alpha)));
+  return `#${mixed.map((value) => value.toString(16).padStart(2, '0')).join('')}`;
+}

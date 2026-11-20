@@ -10,13 +10,15 @@ import type { Coordinates } from '../hooks/useCurrentLocation';
 import { Glide } from '../hooks/useGlide';
 import { useNow } from '../hooks/useNow';
 import { MapCanvas, MapCircles, MapMarker, MapPolyline } from '../map/MapCanvas';
-import type { MapCameraChange, MapCanvasRef, MapCircle, MapPoint } from '../map/mapTypes';
+import { mapLandColor } from '../map/mapStyle';
+import { fadedOver, type MapCameraChange, type MapCanvasRef, type MapCircle, type MapPoint } from '../map/mapTypes';
 import { useTheme } from '../theme/AppSettings';
 import { fontFamilies } from '../theme/typography';
 import { CurrentLocationMarker } from './CurrentLocationMarker';
 import { DIRECTION_ARROW_BOX, DirectionArrow } from './DirectionArrow';
 import { HeadingBeamMarker } from './HeadingBeamMarker';
 import { Icon } from './Icon';
+import { SavedPlaceMarkers } from './SavedPlaceMarkers';
 import type { TransitMode } from './RouteBadge';
 
 type GeometryStop = { stopId?: string; name: string; lat: number; lon: number };
@@ -151,7 +153,8 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
   const mapRef = useRef<MapCanvasRef>(null);
   // Where the walk starts: the purple dot when exploring, else the rider.
   const walkOrigin = exploreFrom ?? userLocation;
-  const { colors, isDark } = useTheme();
+  const { colors, isDark, mapTheme } = useTheme();
+  const land = mapLandColor(isDark, mapTheme);
   const riderMovedMap = useRef(false);
   // True from a location-button press until the rider pans (or asks for the whole route): keeps
   // following fresh GPS fixes.
@@ -277,12 +280,13 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
       coordinate: toPoint(stop),
       radius: focused ? FOCUSED_STOP_RADIUS : LINE_WIDTH / 2,
       color: '#FFFFFF',
-      strokeColor: focused || !passed ? color : withAlpha(color, BEHIND_LINE_ALPHA),
+      // Solid, the faded line's own color: a see-through ring over the see-through line would look darker.
+      strokeColor: focused || !passed ? color : fadedOver(color, land, BEHIND_LINE_ALPHA),
       strokeWidth: focused ? FOCUSED_STOP_RING : STOP_RING,
       sortKey: focused ? 1 : 0,
       testID: `route-stop-${stop.name}`,
     }];
-  }), [color, focusStop, line.focusIndex, revealZoom, selectedStop, stops, zoom]);
+  }), [color, focusStop, land, line.focusIndex, revealZoom, selectedStop, stops, zoom]);
 
   return (
     <MapCanvas
@@ -311,6 +315,8 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
         testID="route-stops"
         zIndex={3}
       />
+      {/* The rider's saved places, under the trip's own markers. */}
+      <SavedPlaceMarkers zIndex={0} zoom={zoom} />
       {userLocation ? <HeadingBeamMarker coordinate={userLocation} /> : null}
       {arrow && zoom >= arrowZoom - ARROW_ZOOM_SLACK ? (
         // Which way the line runs, beside it just past the rider's stop; it turns with the map.

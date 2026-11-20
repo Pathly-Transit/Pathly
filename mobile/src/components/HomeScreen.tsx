@@ -53,6 +53,7 @@ import { ThemedStatusBar, useThemedStyles } from '../theme/AppSettings';
 import { ScreenTransition } from '../theme/motion';
 import type { Palette } from '../theme/colors';
 import { fontFamilies } from '../theme/typography';
+import { SavedPlacesProvider } from './SavedPlaceMarkers';
 import { ConfirmDialog } from './ConfirmDialog';
 import { CurrentLocationButton } from './CurrentLocationButton';
 import { DeparturesView } from './DeparturesView';
@@ -832,7 +833,9 @@ export function HomeScreen() {
   const activeLiveRouteIds = activeView.name === 'home' ? visibleRouteIds : openedRoute ? [openedRoute.id] : [];
   const screen = (node: ReactNode) => (
     <TransitLiveProvider activeRouteIds={activeLiveRouteIds} extraRoutes={liveRoutes} location={livePoint}>
+      <SavedPlacesProvider locations={savedLocations}>
       <ScreenTransition depth={activeView.name === 'home' ? 0 : activeView.name === 'search' ? 1 : 2} group="home" key={transitionKey}>{node}</ScreenTransition>
+      </SavedPlacesProvider>
       {savePlaceSheet}
       <ConfirmDialog
         body="Your guest session ends and you can sign in or sign up."

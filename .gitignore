@@ -53,3 +53,4 @@ firebase/functions/static_data/walking/
 
 # Base map tiles and fonts: build with `npm run map:build` and `npm run map:fonts` (scripts/build-map.mjs).
 maptiles/
+maptiles.zip

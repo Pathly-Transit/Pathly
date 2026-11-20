@@ -1,38 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { MapLine } from '../data/lineLayers';
-import { addressAfterName } from '../data/placesSearch';
 import { themedRouteColor } from '../data/routeColors';
-import { metersPerPixelAtZoom, SAVED_PIN, savedPlaceColor, stackSavedPins } from '../data/savedPlacePin';
 import { MAP_EXPLORATION_BOUNDS } from '../data/serviceArea';
 import { zoomForRegion } from '../data/stopDeclutter';
-import { locationPoint, savedPlaceName, type SavedLocation } from '../data/userData';
+import type { SavedLocation } from '../data/userData';
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { MapCanvas, MapMarker, MapPolyline } from '../map/MapCanvas';
 import type { MapCameraChange, MapCanvasRef } from '../map/mapTypes';
 import { useTheme } from '../theme/AppSettings';
 import { CurrentLocationMarker } from './CurrentLocationMarker';
 import { HeadingBeamMarker } from './HeadingBeamMarker';
-import { Icon, type IconName } from './Icon';
-import { savedLocationIcon } from './SavedPlacesStrip';
-
-/**
- * A saved place's map marker: its icon centered in a round badge right on the place, in the
- * place's color. A marker stacked under another leaves its icon off.
- */
-function SavedPlacePin({ color, icon }: { color: string; icon: IconName | null }) {
-  const { colors } = useTheme();
-  return (
-    <View style={[pinStyles.badge, { backgroundColor: color, borderColor: colors.savedPlaceBorder }]}>
-      {icon ? <Icon color={colors.ring} name={icon} size={16} /> : null}
-    </View>
-  );
-}
-
-const pinStyles = StyleSheet.create({
-  badge: { width: SAVED_PIN.size, height: SAVED_PIN.size, alignItems: 'center', justifyContent: 'center', borderRadius: SAVED_PIN.size / 2, borderWidth: 2.5 },
-});
+import { SavedPlaceMarkers } from './SavedPlaceMarkers';
 
 /** Where the map opens with no camera to restore: around the rider at street-and-neighborhood scale. */
 const HOME_ZOOM = 14;
@@ -113,7 +92,7 @@ export function HomeMap({
   testID = 'home-map',
 }: HomeMapProps) {
   const mapRef = useRef<MapCanvasRef>(null);
-  const { colors, isDark } = useTheme();
+  const { isDark } = useTheme();
   const [openedOn] = useState(() => (initialCamera
     ? { center: { latitude: initialCamera.latitude, longitude: initialCamera.longitude }, zoom: cameraZoom(initialCamera, 390) }
     : { center: { latitude: location.latitude, longitude: location.longitude }, zoom: HOME_ZOOM }));
@@ -149,17 +128,6 @@ export function HomeMap({
     if (userInteraction) onUserMoveEnd?.(center);
   }, [onCameraChange, onOrientationChange, onUserMoveEnd]);
 
-  // Pins that would collide at this zoom are stacked at one spot (see stackSavedPins).
-  const savedPins = useMemo(() => {
-    const placed = savedLocations.flatMap((saved) => {
-      const point = locationPoint(saved.address);
-      return point ? [{ saved, point }] : [];
-    });
-    const stacks = stackSavedPins(placed.map(({ point }) => point), metersPerPixelAtZoom(zoom, placed[0]?.point.latitude ?? location.latitude));
-    return placed.map((pin, index) => ({ ...pin, ...stacks[index]! }));
-  }, [savedLocations, zoom, location.latitude]);
-  // Stacked pins draw under their stack's leader.
-  const orderedPins = useMemo(() => [...savedPins].sort((a, b) => Number(a.leader) - Number(b.leader)), [savedPins]);
   const showRider = simulatedLocation || locationKnown;
 
   return (
@@ -188,22 +156,7 @@ export function HomeMap({
         />
       ))}
       {showRider ? <HeadingBeamMarker coordinate={location} /> : null}
-      {orderedPins.map(({ saved, position: pinPosition, leader }) => {
-        const name = savedPlaceName(saved.address);
-        const address = addressAfterName(name, saved.address.streetAddress);
-        return (
-          <MapMarker
-            accessibilityLabel={address ? `Plan a trip to ${name}, ${address}` : `Plan a trip to ${name}`}
-            coordinate={pinPosition}
-            key={saved.id}
-            onPress={onSavedLocationPress ? () => onSavedLocationPress(saved, savedPins.filter((pin) => pin.position === pinPosition).map((pin) => pin.saved)) : undefined}
-            testID={`saved-place-marker-${saved.id}`}
-            zIndex={leader ? 2 : 1}
-          >
-            <SavedPlacePin color={savedPlaceColor(saved.address, colors.primary)} icon={leader ? savedLocationIcon(saved.address) : null} />
-          </MapMarker>
-        );
-      })}
+      <SavedPlaceMarkers locations={savedLocations} onPress={onSavedLocationPress} zIndex={1} zoom={zoom} />
       {showRider ? (
         <MapMarker coordinate={location} testID={simulatedLocation ? 'mock-location-marker' : `${testID}-user-location`} zIndex={5}>
           <CurrentLocationMarker />

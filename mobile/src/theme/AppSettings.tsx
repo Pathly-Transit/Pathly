@@ -23,7 +23,11 @@ export const DISPLAY_SETTINGS_KEY = 'pathly.display.v1';
 /** The home map's explore dot: the theme's own purple, or one of the saved-place colors. */
 export type MapDotColor = 'default' | SavedPlaceColor;
 
-type DisplaySettings = { appearance: Appearance; reducedMotion: boolean; pathlingMotion: boolean; easyMode: boolean; textSize: TextSize; highContrast: boolean; mapDotColor: MapDotColor; destinationPin: DestinationPinStyle; leftHanded: boolean };
+/** The base map's look (map/mapStyle.ts), each with a light and a dark version. */
+export type MapTheme = 'default' | 'muted' | 'vibrant' | 'warm';
+export const MAP_THEMES: readonly MapTheme[] = ['default', 'muted', 'vibrant', 'warm'];
+
+type DisplaySettings = { appearance: Appearance; reducedMotion: boolean; pathlingMotion: boolean; easyMode: boolean; textSize: TextSize; highContrast: boolean; mapDotColor: MapDotColor; mapTheme: MapTheme; destinationPin: DestinationPinStyle; leftHanded: boolean };
 
 type AppSettingsValue = {
   appearance: Appearance;
@@ -36,6 +40,7 @@ type AppSettingsValue = {
   leftHanded: boolean;
   setLeftHanded: (next: boolean) => void;
   mapDotColor: MapDotColor;
+  mapTheme: MapTheme;
   /** True when either the app toggle or the device asks for reduced motion. */
   reducedMotionActive: boolean;
   reducedMotion: boolean;
@@ -53,6 +58,7 @@ type AppSettingsValue = {
   setDestinationPin: (value: DestinationPinStyle) => void;
   setHighContrast: (value: boolean) => void;
   setMapDotColor: (value: MapDotColor) => void;
+  setMapTheme: (value: MapTheme) => void;
   setReducedMotion: (value: boolean) => void;
   setTextSize: (value: TextSize) => void;
 };
@@ -84,6 +90,7 @@ function parseDisplaySettings(text: string | null): Partial<DisplaySettings> {
     if (typeof saved.leftHanded === 'boolean') settings.leftHanded = saved.leftHanded;
     if (saved.destinationPin !== undefined) settings.destinationPin = normalizeDestinationPin(saved.destinationPin);
     if (saved.mapDotColor === 'default' || (typeof saved.mapDotColor === 'string' && Object.hasOwn(SAVED_PLACE_COLOR_HEX, saved.mapDotColor))) settings.mapDotColor = saved.mapDotColor as MapDotColor;
+    if (typeof saved.mapTheme === 'string' && (MAP_THEMES as readonly string[]).includes(saved.mapTheme)) settings.mapTheme = saved.mapTheme as MapTheme;
     return settings;
   } catch {
     return {};
@@ -101,7 +108,7 @@ type AppSettingsProviderProps = {
 /** App preferences every screen reads (appearance, motion, text size, contrast), saved on the device. */
 export function AppSettingsProvider({ children, initialAppearance = 'light', initialReducedMotion = false, initialTextSize = 'default', initialHighContrast = false }: AppSettingsProviderProps) {
   const systemScheme = useColorScheme();
-  const [settings, setSettings] = useState<DisplaySettings>({ appearance: initialAppearance, reducedMotion: initialReducedMotion, pathlingMotion: true, easyMode: false, textSize: initialTextSize, highContrast: initialHighContrast, mapDotColor: 'default', destinationPin: { ...DEFAULT_DESTINATION_PIN }, leftHanded: false });
+  const [settings, setSettings] = useState<DisplaySettings>({ appearance: initialAppearance, reducedMotion: initialReducedMotion, pathlingMotion: true, easyMode: false, textSize: initialTextSize, highContrast: initialHighContrast, mapDotColor: 'default', mapTheme: 'default', destinationPin: { ...DEFAULT_DESTINATION_PIN }, leftHanded: false });
   const [deviceReducedMotion, setDeviceReducedMotion] = useState(false);
   // A choice made before the saved settings finish loading wins over them.
   const changedBeforeLoad = useRef(false);
@@ -143,7 +150,7 @@ export function AppSettingsProvider({ children, initialAppearance = 'light', ini
   }, []);
 
   const value = useMemo<AppSettingsValue>(() => {
-    const { appearance, destinationPin, easyMode, highContrast, leftHanded, mapDotColor, pathlingMotion, reducedMotion, textSize } = settings;
+    const { appearance, destinationPin, easyMode, highContrast, leftHanded, mapDotColor, mapTheme, pathlingMotion, reducedMotion, textSize } = settings;
     const scheme = resolveScheme(appearance, systemScheme);
     const palette = paletteFor(scheme, highContrast);
     return {
@@ -155,6 +162,7 @@ export function AppSettingsProvider({ children, initialAppearance = 'light', ini
       leftHanded,
       setLeftHanded: (next) => update({ leftHanded: next }),
       mapDotColor,
+      mapTheme,
       pathlingMotion,
       setPathlingMotion: (next) => update({ pathlingMotion: next }),
       easyMode,
@@ -168,6 +176,7 @@ export function AppSettingsProvider({ children, initialAppearance = 'light', ini
       setDestinationPin: (next) => update({ destinationPin: normalizeDestinationPin(next) }),
       setHighContrast: (next) => update({ highContrast: next }),
       setMapDotColor: (next) => update({ mapDotColor: next }),
+      setMapTheme: (next) => update({ mapTheme: next }),
       setReducedMotion: (next) => update({ reducedMotion: next }),
       setTextSize: (next) => update({ textSize: next }),
     };
@@ -194,6 +203,7 @@ const fallback: AppSettingsValue = {
   leftHanded: false,
   setLeftHanded: () => undefined,
   mapDotColor: 'default',
+  mapTheme: 'default',
   pathlingMotion: true,
   setPathlingMotion: () => undefined,
   easyMode: false,
@@ -207,6 +217,7 @@ const fallback: AppSettingsValue = {
   setDestinationPin: () => undefined,
   setHighContrast: () => undefined,
   setMapDotColor: () => undefined,
+  setMapTheme: () => undefined,
   setReducedMotion: () => undefined,
   setTextSize: () => undefined,
 };
@@ -216,8 +227,8 @@ export function useAppSettings() {
 }
 
 export function useTheme() {
-  const { colors, isDark, scheme } = useAppSettings();
-  return { colors, isDark, scheme };
+  const { colors, isDark, mapTheme, scheme } = useAppSettings();
+  return { colors, isDark, mapTheme, scheme };
 }
 
 /** Half-point steps keep scaled text crisp. */

@@ -19,6 +19,9 @@ import {
   fromMapLibreZoom,
   mapColor,
   toMapLibreZoom,
+  walkDotRadius,
+  walkDotZoom,
+  walkingDots,
   type MapCamera,
   type MapCanvasProps,
   type MapCanvasRef,
@@ -57,6 +60,29 @@ function createBearingStore(initial: number): BearingStore {
 }
 
 const BearingContext = createContext<BearingStore | null>(null);
+
+/** The map's zoom (the app's scale, rounded for walking dots), followed as it changes. */
+type ZoomStore = { get: () => number; set: (zoom: number) => void; subscribe: (listener: () => void) => () => void };
+
+function createZoomStore(initial: number): ZoomStore {
+  let zoom = walkDotZoom(initial);
+  const listeners = new Set<() => void>();
+  return {
+    get: () => zoom,
+    set: (next) => {
+      const rounded = walkDotZoom(next);
+      if (rounded === zoom) return;
+      zoom = rounded;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+const ZoomContext = createContext<ZoomStore | null>(null);
 const NO_SUBSCRIPTION = () => () => undefined;
 
 function useMapBearing(enabled: boolean): number {
@@ -74,13 +100,14 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
   ref,
 ) {
-  const { isDark } = useTheme();
+  const { isDark, mapTheme } = useTheme();
   // As JSON, which is what the native map takes (and an unchanged theme sends nothing new).
-  const mapStyle = useMemo(() => JSON.stringify(pathlyMapStyle(isDark)), [isDark]);
+  const mapStyle = useMemo(() => JSON.stringify(pathlyMapStyle(isDark, mapTheme)), [isDark, mapTheme]);
   const mapRef = useRef<MapRef>(null);
   const cameraRef = useRef<CameraRef>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [bearingStore] = useState(() => createBearingStore(initialCamera.bearing ?? 0));
+  const [zoomStore] = useState(() => createZoomStore(initialCamera.zoom));
   // A gesture that started a move, so its end is reported as the rider's.
   const gesture = useRef(false);
   const [initialViewState] = useState(() => ({
@@ -131,7 +158,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   return (
     <View
       onLayout={(event) => setSize({ width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height })}
-      style={[StyleSheet.absoluteFill, { backgroundColor: mapLandColor(isDark) }]}
+      style={[StyleSheet.absoluteFill, { backgroundColor: mapLandColor(isDark, mapTheme) }]}
       testID={testID}
     >
       <Map
@@ -149,11 +176,15 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
         onPress={onPress ? (event) => onPress(pointOf(event.nativeEvent.lngLat)) : undefined}
         onRegionDidChange={(event: NativeSyntheticEvent<ViewStateChangeEvent>) => {
           bearingStore.set(event.nativeEvent.bearing);
+          zoomStore.set(fromMapLibreZoom(event.nativeEvent.zoom));
           const userInteraction = event.nativeEvent.userInteraction || gesture.current;
           gesture.current = false;
           onCameraIdle?.({ ...cameraOf(event.nativeEvent), userInteraction });
         }}
-        onRegionIsChanging={(event: NativeSyntheticEvent<ViewStateChangeEvent>) => bearingStore.set(event.nativeEvent.bearing)}
+        onRegionIsChanging={(event: NativeSyntheticEvent<ViewStateChangeEvent>) => {
+          bearingStore.set(event.nativeEvent.bearing);
+          zoomStore.set(fromMapLibreZoom(event.nativeEvent.zoom));
+        }}
         onRegionWillChange={(event: NativeSyntheticEvent<ViewStateChangeEvent>) => {
           if (!event.nativeEvent.userInteraction) return;
           gesture.current = true;
@@ -170,14 +201,18 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
           minZoom={minZoom !== undefined ? toMapLibreZoom(minZoom) : undefined}
           ref={cameraRef}
         />
-        <BearingContext.Provider value={bearingStore}>{children}</BearingContext.Provider>
+        <BearingContext.Provider value={bearingStore}><ZoomContext.Provider value={zoomStore}>{children}</ZoomContext.Provider></BearingContext.Provider>
       </Map>
     </View>
   );
 });
 
-/** A line in Pathly's own colors over the base map. */
-export function MapPolyline({ id, coordinates, color, width, opacity = 1, dotted = false, zIndex = 0, testID }: MapPolylineProps) {
+/** A line in Pathly's own colors over the base map; a dotted one (a walk) is drawn as round dots. */
+export function MapPolyline(props: MapPolylineProps) {
+  return props.dotted ? <WalkDots {...props} /> : <SolidLine {...props} />;
+}
+
+function SolidLine({ id, coordinates, color, width, opacity = 1, zIndex = 0, testID }: MapPolylineProps) {
   const data = useMemo<GeoJSON.Feature>(() => ({
     type: 'Feature',
     properties: {},
@@ -190,9 +225,26 @@ export function MapPolyline({ id, coordinates, color, width, opacity = 1, dotted
         beforeId={overlaySlotId(zIndex + 1)}
         id={id}
         layout={{ 'line-cap': 'round', 'line-join': 'round' }}
-        // Dots: zero-length dashes with round caps, a dot's width apart.
-        paint={{ 'line-color': mapColor(color), 'line-width': width, 'line-opacity': opacity, ...(dotted ? { 'line-dasharray': [0, 2] } : {}) }}
+        paint={{ 'line-color': mapColor(color), 'line-width': width, 'line-opacity': opacity }}
         type="line"
+      />
+    </GeoJSONSource>
+  );
+}
+
+/** A walk: round dots a fixed size and distance apart on screen (mapTypes.ts walkingDots), laid out again as the map zooms. */
+function WalkDots({ id, coordinates, color, width, opacity = 1, zIndex = 0, testID }: MapPolylineProps) {
+  const store = useContext(ZoomContext);
+  const zoom = useSyncExternalStore(store ? store.subscribe : NO_SUBSCRIPTION, () => (store ? store.get() : 14));
+  const data = useMemo(() => walkingDots(coordinates, zoom), [coordinates, zoom]);
+  if (coordinates.length < 2) return null;
+  return (
+    <GeoJSONSource data={data} id={`${id}-source`} testID={testID}>
+      <Layer
+        beforeId={overlaySlotId(zIndex + 1)}
+        id={id}
+        paint={{ 'circle-color': mapColor(color), 'circle-radius': walkDotRadius(width), 'circle-opacity': opacity }}
+        type="circle"
       />
     </GeoJSONSource>
   );

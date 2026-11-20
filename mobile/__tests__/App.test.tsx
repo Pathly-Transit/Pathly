@@ -1,4 +1,6 @@
 import { act, fireEvent, render, waitFor, within, type RenderResult } from '@testing-library/react-native';
+import { mapLandColor } from '../src/map/mapStyle';
+import { fadedOver } from '../src/map/mapTypes';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { signOut } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
@@ -1967,10 +1969,11 @@ describe('Pathly prototype navigation', () => {
       for (const stop of stops) {
         const name = stop.props.testID.replace('route-stop-', '');
         const dot = StyleSheet.flatten(stop.props.style);
-        // Westbound from Stony Brook, Port Jefferson is behind the rider: its outline is faint.
+        // Westbound from Stony Brook, Port Jefferson is behind the rider: its outline is the faded
+        // line's color, solid (a see-through ring over the see-through line would look darker).
         expect(dot).toMatchObject(name === 'Stony Brook'
           ? { backgroundColor: '#FFFFFF', borderColor: routeById.ronkonkoma.color }
-          : { backgroundColor: '#FFFFFF', borderColor: name === 'Port Jefferson' ? `${routeById.ronkonkoma.color}59` : routeById.ronkonkoma.color });
+          : { backgroundColor: '#FFFFFF', borderColor: name === 'Port Jefferson' ? fadedOver(routeById.ronkonkoma.color, mapLandColor(false), 0.35) : routeById.ronkonkoma.color });
         // Ordinary stops are exactly as wide as the line, so they don't bulge out of it; the rider's is bigger.
         if (name === 'Stony Brook') expect(dot.width).toBeGreaterThan(routeLine.props.width);
         else expect(dot.width).toBe(routeLine.props.width);

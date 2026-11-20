@@ -5,7 +5,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { signOutUser } from '../auth/authService';
 import { useAuth } from '../auth/AuthContext';
 import { discardAccount } from '../data/accountData';
-import { ThemedStatusBar, useAppSettings, useTheme, useThemedStyles, type Appearance, type MapDotColor } from '../theme/AppSettings';
+import { ThemedStatusBar, useAppSettings, useTheme, useThemedStyles, MAP_THEMES, type Appearance, type MapDotColor, type MapTheme } from '../theme/AppSettings';
+import { mapPalette } from '../map/mapStyle';
 import { ScreenTransition } from '../theme/motion';
 import { lightColors } from '../theme/colors';
 import { FEEDBACK_FORM_URL } from '../data/nudgePrompt';
@@ -160,6 +161,50 @@ function MapDotColorRow({ onFeedback }: { onFeedback: (message: string) => void 
   );
 }
 
+const MAP_THEME_LABELS: Record<MapTheme, string> = { default: 'Default', muted: 'Muted', vibrant: 'Vibrant', warm: 'Warm' };
+
+/** The base map's look: a small preview of each theme's land, park, water and streets. */
+function MapThemeRow({ onFeedback }: { onFeedback: (message: string) => void }) {
+  const styles = useThemedStyles(createStyles);
+  const { mapTheme, setMapTheme } = useAppSettings();
+  const { colors, isDark } = useTheme();
+  return (
+    <View style={styles.choiceBlock}>
+      <Text style={styles.settingText}>Map theme</Text>
+      <Text style={styles.settingDetail}>How streets, water and parks look on every map. Each theme has a light and a dark version.</Text>
+      <View style={styles.swatches}>
+        {MAP_THEMES.map((theme) => {
+          const palette = mapPalette(isDark, theme);
+          const selected = mapTheme === theme;
+          const label = MAP_THEME_LABELS[theme];
+          return (
+            <Pressable
+              accessibilityLabel={`${label} map theme`}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              key={theme}
+              onPress={() => {
+                setMapTheme(theme);
+                onFeedback(`Map theme set to ${label.toLowerCase()}`);
+              }}
+              style={{ alignItems: 'center', gap: 6 }}
+              testID={`map-theme-${theme}`}
+            >
+              <View style={{ width: 64, height: 48, overflow: 'hidden', borderRadius: 12, borderWidth: 2, borderColor: selected ? colors.primary : colors.border, backgroundColor: palette.land }}>
+                <View style={{ position: 'absolute', right: -10, bottom: -10, width: 34, height: 30, borderRadius: 14, backgroundColor: palette.water }} />
+                <View style={{ position: 'absolute', left: 6, top: 6, width: 20, height: 14, borderRadius: 6, backgroundColor: palette.park }} />
+                <View style={{ position: 'absolute', left: 0, right: 0, top: 24, height: 5, backgroundColor: palette.arterial, borderTopWidth: 1, borderBottomWidth: 1, borderColor: palette.arterialCasing }} />
+                <View style={{ position: 'absolute', top: 0, bottom: 0, left: 32, width: 5, backgroundColor: palette.motorway, borderLeftWidth: 1, borderRightWidth: 1, borderColor: palette.motorwayCasing }} />
+              </View>
+              <Text style={[styles.settingDetail, selected && { color: colors.primary }]}>{label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 const appearanceOptions: readonly { label: string; value: Appearance }[] = [
   { label: 'Light', value: 'light' },
   { label: 'Dark', value: 'dark' },
@@ -219,7 +264,7 @@ export function ProfileView({ initialRoute, onBack, onOpenAdminTools, savedPlace
           <ThemedStatusBar />
           <Header onBack={() => openRoute('hub')} title={title} />
           <ScrollView contentContainerStyle={styles.pageContent} key={route} showsVerticalScrollIndicator={false}>
-            {route === 'appearance' ? <><Card><ChoiceRow label="Theme" onSelect={(label) => { const option = appearanceOptions.find((item) => item.label === label); if (option) { setAppearance(option.value); setFeedback(`Appearance set to ${label}`); } }} options={appearanceOptions.map((item) => item.label)} selected={appearanceOptions.find((item) => item.value === appearance)?.label ?? 'Light'} testPrefix="appearance" /></Card><Card><MapDotColorRow onFeedback={setFeedback} /></Card><Card><PressableScale accessibilityHint="Change your destination pin's color and face" accessibilityLabel="Customize your destination pin" accessibilityRole="button" onPress={() => openRoute('pin')} style={styles.settingRow} testID="appearance-destination-pin"><DestinationPinMarker /><View style={styles.rowCopy}><Text style={styles.settingText}>Destination pin</Text><Text style={styles.settingDetail}>Marks where you&apos;re headed on trip maps.</Text></View><Icon name="forward" color={colors.mutedInk} size={20} /></PressableScale></Card></> : null}
+            {route === 'appearance' ? <><Card><ChoiceRow label="Theme" onSelect={(label) => { const option = appearanceOptions.find((item) => item.label === label); if (option) { setAppearance(option.value); setFeedback(`Appearance set to ${label}`); } }} options={appearanceOptions.map((item) => item.label)} selected={appearanceOptions.find((item) => item.value === appearance)?.label ?? 'Light'} testPrefix="appearance" /></Card><Card><MapThemeRow onFeedback={setFeedback} /></Card><Card><MapDotColorRow onFeedback={setFeedback} /></Card><Card><PressableScale accessibilityHint="Change your destination pin's color and face" accessibilityLabel="Customize your destination pin" accessibilityRole="button" onPress={() => openRoute('pin')} style={styles.settingRow} testID="appearance-destination-pin"><DestinationPinMarker /><View style={styles.rowCopy}><Text style={styles.settingText}>Destination pin</Text><Text style={styles.settingDetail}>Marks where you&apos;re headed on trip maps.</Text></View><Icon name="forward" color={colors.mutedInk} size={20} /></PressableScale></Card></> : null}
             {route === 'account' ? <AccountSettings onEditAvatar={() => openRoute('avatar')} onFeedback={setFeedback} /> : null}
             {route === 'inbox' ? <InboxSettings /> : null}
             {route === 'notifications' ? <NotificationSettings onFeedback={setFeedback} /> : null}

@@ -2,6 +2,7 @@
 import type { ExpressionSpecification, LayerSpecification, StyleSpecification, SymbolLayerSpecification } from '@maplibre/maplibre-gl-style-spec';
 
 import { MAP_EXPLORATION_BOUNDS } from '../data/serviceArea';
+import type { MapTheme } from '../theme/AppSettings';
 
 /**
  * The base map every Pathly map draws (home, route, trip, and choose-on-map; native and web):
@@ -43,7 +44,7 @@ const SEMIBOLD = ['Nunito-SemiBold'];
 const BOLD = ['Nunito-Bold'];
 const ITALIC = ['Nunito-Italic'];
 
-type Palette = {
+export type MapPalette = {
   land: string;
   manMade: string;
   park: string;
@@ -79,7 +80,7 @@ type Palette = {
 };
 
 /** Light: the familiar map's colors, highways grayed (they competed with route lines). */
-const LIGHT: Palette = {
+const LIGHT: MapPalette = {
   land: '#F2F1EB',
   manMade: '#EAE8E2',
   park: '#B5E0A8',
@@ -115,7 +116,7 @@ const LIGHT: Palette = {
 };
 
 /** Dark: black and dark-gray surfaces, light-gray labels; water and parks just distinguishable. */
-const DARK: Palette = {
+const DARK: MapPalette = {
   land: '#16171A',
   manMade: '#1B1C1F',
   park: '#172A1D',
@@ -150,6 +151,72 @@ const DARK: Palette = {
   stationRing: '#8E949C',
 };
 
+/** Muted: grays with only a hint of green and blue, so route lines stand out the most. */
+const MUTED_LIGHT: MapPalette = {
+  ...LIGHT,
+  land: '#F3F3F2', manMade: '#ECECEB', park: '#DCE6DA', grass: '#E3EBE1', hospital: '#EFE6E5', school: '#EDEBE6',
+  water: '#C9D6E0', aeroArea: '#E8E9EB', building: '#E4E4E3', buildingOutline: '#D2D2D1',
+  casing: '#D0D0D0', arterialCasing: '#C4C4C4', highway: '#E0E0E0', highwayCasing: '#BDBDBD', motorway: '#DCDCDC', motorwayCasing: '#B8B8B8',
+  path: '#D6D6D6', rail: '#BDBDBD', ferry: '#8FA6BA', boundary: '#B5B5B5',
+  label: '#707070', placeLabel: '#4A4A4A', neighborhoodLabel: '#8A8A8A', roadLabel: '#707070', waterLabel: '#5F7A90', parkLabel: '#5E7A5E',
+  stationLabel: '#4A5560', stationRing: '#7A8590',
+};
+const MUTED_DARK: MapPalette = {
+  ...DARK,
+  land: '#18181A', manMade: '#1C1C1E', park: '#1C221D', grass: '#1B201C', hospital: '#1E1C1D', school: '#1C1C1E',
+  water: '#14191F', aeroArea: '#1D1D20', building: '#202022', buildingOutline: '#28282B',
+  casing: '#0F0F10', minor: '#2A2A2D', arterial: '#313134', arterialCasing: '#0F0F10', highway: '#38383C', highwayCasing: '#0F0F10', motorway: '#3E3E42', motorwayCasing: '#0F0F10',
+  path: '#252528', rail: '#2B2B2E', ferry: '#36506A', boundary: '#3A3A3D',
+  label: '#87898D', labelHalo: '#18181A', placeLabel: '#ABADB1', neighborhoodLabel: '#7B7D81', roadLabel: '#929498', waterLabel: '#5D7288', parkLabel: '#6E8570',
+  stationLabel: '#ABADB1', stationDot: '#18181A', stationRing: '#87898D',
+};
+
+/** Vibrant: deeper blues and greens, and highways in a soft yellow. */
+const VIBRANT_LIGHT: MapPalette = {
+  ...LIGHT,
+  land: '#F6F5EE', park: '#8FD68A', grass: '#B4E6A6', hospital: '#FBC9C2', school: '#F5E2B8',
+  water: '#5DB0F5', aeroArea: '#DCE2EE', building: '#E0DCD2', buildingOutline: '#C6C0B4',
+  arterialCasing: '#A7AEB8', highway: '#FCE9B6', highwayCasing: '#E3C27A', motorway: '#FBDFA0', motorwayCasing: '#DDB36A',
+  ferry: '#1E7FE0', waterLabel: '#1A5FB4', parkLabel: '#1F7A32',
+};
+const VIBRANT_DARK: MapPalette = {
+  ...DARK,
+  land: '#121418', park: '#143A22', grass: '#163220', hospital: '#2A1A1C', school: '#262218',
+  water: '#0A2747', minor: '#2A2E35', arterial: '#343841', highway: '#4A4636', motorway: '#57503A',
+  ferry: '#2E73C0', labelHalo: '#121418', stationDot: '#121418', waterLabel: '#5C93D6', parkLabel: '#5FB872',
+};
+
+/** Warm: paper-cream land and soft, earthy greens and blues. */
+const WARM_LIGHT: MapPalette = {
+  land: '#F5EFE3', manMade: '#EDE5D6', park: '#CFE0B0', grass: '#DCE8C2', hospital: '#F4D9CF', school: '#EFE3CC',
+  water: '#A9CDE0', aeroArea: '#E6E1D6', building: '#E7DECF', buildingOutline: '#D3C7B4',
+  casing: '#D4C9B6', minor: '#FFFDF8', arterial: '#FFFBF2', arterialCasing: '#C9BBA4', highway: '#EBDDC4', highwayCasing: '#C4AE8A', motorway: '#E8D6B6', motorwayCasing: '#BFA37A',
+  path: '#D9CDB8', rail: '#B8AA94', ferry: '#5E8FB5', boundary: '#B8A991',
+  label: '#6B5E4E', labelHalo: '#FFFBF2', placeLabel: '#4A3F33', neighborhoodLabel: '#8A7C6A', roadLabel: '#6B5E4E', waterLabel: '#3E6F8F', parkLabel: '#4E7A3A',
+  stationLabel: '#4D4438', stationDot: '#FFFDF8', stationRing: '#8A7A64',
+};
+const WARM_DARK: MapPalette = {
+  land: '#1C1915', manMade: '#201C18', park: '#1F2619', grass: '#1E2318', hospital: '#241C1A', school: '#221E18',
+  water: '#12202A', aeroArea: '#211D19', building: '#24201B', buildingOutline: '#2C2721',
+  casing: '#110F0D', minor: '#2F2A24', arterial: '#37312A', arterialCasing: '#110F0D', highway: '#423A30', highwayCasing: '#110F0D', motorway: '#4B4236', motorwayCasing: '#110F0D',
+  path: '#2A251F', rail: '#2F2A24', ferry: '#3B6280', boundary: '#3E3830',
+  label: '#9A8F80', labelHalo: '#1C1915', placeLabel: '#C2B6A5', neighborhoodLabel: '#8A7F70', roadLabel: '#A59A8B', waterLabel: '#5E86A3', parkLabel: '#7A9A62',
+  stationLabel: '#C2B6A5', stationDot: '#1C1915', stationRing: '#9A8F80',
+};
+
+const PALETTES: Record<MapTheme, { light: MapPalette; dark: MapPalette }> = {
+  default: { light: LIGHT, dark: DARK },
+  muted: { light: MUTED_LIGHT, dark: MUTED_DARK },
+  vibrant: { light: VIBRANT_LIGHT, dark: VIBRANT_DARK },
+  warm: { light: WARM_LIGHT, dark: WARM_DARK },
+};
+
+/** A map theme's colors in the light or dark version (also drawn as the theme's preview in Settings). */
+export function mapPalette(isDark: boolean, theme: MapTheme = 'default'): MapPalette {
+  const entry = PALETTES[theme] ?? PALETTES.default;
+  return isDark ? entry.dark : entry.light;
+}
+
 /** A line width growing with zoom (each step up doubles the scale, so widths grow ~1.5x per zoom). */
 function width(...stops: number[]): ExpressionSpecification {
   return ['interpolate', ['exponential', 1.5], ['zoom'], ...stops] as ExpressionSpecification;
@@ -162,11 +229,14 @@ function widthWithLinks(...stops: number[]): ExpressionSpecification {
   return out as ExpressionSpecification;
 }
 
+/** Areas ease in over half a zoom from where they start, rather than popping in or out. */
+const fadeIn = (zoom: number): ExpressionSpecification => ['interpolate', ['linear'], ['zoom'], zoom, 0, zoom + 0.5, 1];
+
 const NAME: ExpressionSpecification = ['get', 'name'];
 const POINTS: ExpressionSpecification = ['==', ['geometry-type'], 'Point'];
 const AREAS: ExpressionSpecification = ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false];
 
-type RoadKind = { id: string; kinds: string[]; fill: keyof Palette; casing: keyof Palette; minzoom: number; fillWidth: ExpressionSpecification; casingWidth: ExpressionSpecification };
+type RoadKind = { id: string; kinds: string[]; fill: keyof MapPalette; casing: keyof MapPalette; minzoom: number; fillWidth: ExpressionSpecification; casingWidth: ExpressionSpecification };
 
 /** Street kinds, least important first so the bigger roads draw over them. */
 const ROADS: RoadKind[] = [
@@ -179,7 +249,7 @@ const ROADS: RoadKind[] = [
   { id: 'motorway', kinds: ['motorway'], fill: 'motorway', casing: 'motorwayCasing', minzoom: 4, fillWidth: widthWithLinks(4, 0.5, 10, 1.8, 12, 3.2, 14, 6.5, 16, 14, 18, 32), casingWidth: widthWithLinks(4, 0.8, 10, 2.6, 12, 4.4, 14, 8.4, 16, 16, 18, 35) },
 ];
 
-function roadLayers(palette: Palette, brunnel: 'tunnel' | 'road' | 'bridge'): LayerSpecification[] {
+function roadLayers(palette: MapPalette, brunnel: 'tunnel' | 'road' | 'bridge'): LayerSpecification[] {
   const brunnelFilter: ExpressionSpecification = brunnel === 'road'
     ? ['!', ['match', ['get', 'brunnel'], ['tunnel', 'bridge'], true, false]]
     : ['==', ['get', 'brunnel'], brunnel];
@@ -224,7 +294,7 @@ function withLateLabels(layer: SymbolLayerSpecification & { filter: ExpressionSp
   ];
 }
 
-function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
+function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] {
   const halo = { 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.5 };
   return [
     { id: 'background', type: 'background', paint: { 'background-color': palette.land } },
@@ -238,13 +308,13 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
       filter: ['all', AREAS, ['match', ['get', 'kind'], ['commercial', 'industrial'], true, false]],
       paint: { 'fill-color': palette.manMade, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 10, 0, 12, 0.8] },
     },
-    { id: 'landuse-airport', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 9, filter: ['all', AREAS, ['==', ['get', 'kind'], 'airport']], paint: { 'fill-color': palette.aeroArea } },
-    { id: 'landuse-hospital', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['all', AREAS, ['==', ['get', 'kind'], 'hospital']], paint: { 'fill-color': palette.hospital } },
-    { id: 'landuse-school', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['all', AREAS, ['match', ['get', 'kind'], ['school', 'university'], true, false]], paint: { 'fill-color': palette.school } },
-    { id: 'landuse-cemetery', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 11, filter: ['all', AREAS, ['==', ['get', 'kind'], 'cemetery']], paint: { 'fill-color': palette.grass } },
-    { id: 'landuse-recreation', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['all', AREAS, ['match', ['get', 'kind'], ['theme_park', 'zoo'], true, false]], paint: { 'fill-color': palette.grass } },
+    { id: 'landuse-airport', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 9, filter: ['all', AREAS, ['==', ['get', 'kind'], 'airport']], paint: { 'fill-color': palette.aeroArea, 'fill-opacity': fadeIn(9) } },
+    { id: 'landuse-hospital', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['all', AREAS, ['==', ['get', 'kind'], 'hospital']], paint: { 'fill-color': palette.hospital, 'fill-opacity': fadeIn(12) } },
+    { id: 'landuse-school', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['all', AREAS, ['match', ['get', 'kind'], ['school', 'university'], true, false]], paint: { 'fill-color': palette.school, 'fill-opacity': fadeIn(12) } },
+    { id: 'landuse-cemetery', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 11, filter: ['all', AREAS, ['==', ['get', 'kind'], 'cemetery']], paint: { 'fill-color': palette.grass, 'fill-opacity': fadeIn(11) } },
+    { id: 'landuse-recreation', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['all', AREAS, ['match', ['get', 'kind'], ['theme_park', 'zoo'], true, false]], paint: { 'fill-color': palette.grass, 'fill-opacity': fadeIn(12) } },
     { id: 'park', type: 'fill', source: SOURCE, 'source-layer': 'park', filter: ['all', AREAS, ['match', ['get', 'kind'], ['park', 'national_park'], true, false]], paint: { 'fill-color': palette.park } },
-    { id: 'park-golf', type: 'fill', source: SOURCE, 'source-layer': 'park', minzoom: 10, filter: ['all', AREAS, ['==', ['get', 'kind'], 'golf_course']], paint: { 'fill-color': palette.grass } },
+    { id: 'park-golf', type: 'fill', source: SOURCE, 'source-layer': 'park', minzoom: 10, filter: ['all', AREAS, ['==', ['get', 'kind'], 'golf_course']], paint: { 'fill-color': palette.grass, 'fill-opacity': fadeIn(10) } },
     // The water over parks and the like, whose outlines often run out over a bay.
     { id: 'water', type: 'fill', source: SOURCE, 'source-layer': 'water', paint: { 'fill-color': palette.water } },
     {
@@ -480,13 +550,14 @@ function baseLayers(palette: Palette, isDark: boolean): LayerSpecification[] {
   ];
 }
 
-const styleCache = new Map<boolean, StyleSpecification>();
+const styleCache = new Map<string, StyleSpecification>();
 
-/** The base map style for the light or dark theme (built once per theme). */
-export function pathlyMapStyle(isDark: boolean): StyleSpecification {
-  const cached = styleCache.get(isDark);
+/** The base map style for the light or dark version of a map theme (built once each). */
+export function pathlyMapStyle(isDark: boolean, theme: MapTheme = 'default'): StyleSpecification {
+  const cacheKey = `${theme}-${isDark ? 'dark' : 'light'}`;
+  const cached = styleCache.get(cacheKey);
   if (cached) return cached;
-  const palette = isDark ? DARK : LIGHT;
+  const palette = mapPalette(isDark, theme);
   const slots: LayerSpecification[] = Array.from({ length: OVERLAY_SLOTS + 1 }, (_, slot) => ({
     id: overlaySlotId(slot),
     type: 'background',
@@ -495,18 +566,18 @@ export function pathlyMapStyle(isDark: boolean): StyleSpecification {
   }));
   const style: StyleSpecification = {
     version: 8,
-    name: isDark ? 'Pathly dark' : 'Pathly light',
+    name: `Pathly ${cacheKey}`,
     sources: {
       [SOURCE]: { type: 'vector', tiles: [MAP_TILES_URL], minzoom: 0, maxzoom: TILES_MAX_ZOOM, bounds: TILE_BOUNDS },
     },
     glyphs: MAP_GLYPHS_URL,
     layers: [...baseLayers(palette, isDark), ...slots],
   };
-  styleCache.set(isDark, style);
+  styleCache.set(cacheKey, style);
   return style;
 }
 
 /** The map's land color: shown behind the map while its tiles load. */
-export function mapLandColor(isDark: boolean): string {
-  return (isDark ? DARK : LIGHT).land;
+export function mapLandColor(isDark: boolean, theme: MapTheme = 'default'): string {
+  return mapPalette(isDark, theme).land;
 }
