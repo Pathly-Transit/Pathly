@@ -7,34 +7,38 @@ import { googleMapStyle } from '../data/mapStyle';
 import { themedRouteColor } from '../data/routeColors';
 import { MAP_EXPLORATION_BOUNDS } from '../data/serviceArea';
 import { addressAfterName } from '../data/placesSearch';
-import { metersPerPixelForSpan, SAVED_PIN, savedPlaceColor, stackSavedPins } from '../data/savedPlacePin';
+import { metersPerPixelForSpan, SAVED_PIN, savedPinUnderDot, savedPlaceColor, stackSavedPins } from '../data/savedPlacePin';
 import { locationPoint, savedPlaceName, type SavedLocation } from '../data/userData';
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useMarkerTracking } from '../hooks/useMarkerTracking';
 import { useTheme } from '../theme/AppSettings';
-import { CurrentLocationMarker } from './CurrentLocationMarker';
+import { CURRENT_LOCATION_SIZE, CurrentLocationMarker } from './CurrentLocationMarker';
 import { HeadingBeamMarker } from './HeadingBeamMarker';
 import { Icon, type IconName } from './Icon';
 import { NATIVE_MAP_PROVIDER } from './mapProvider';
-import { savedLocationIcon } from './SavedPlacesStrip';
+import { savedLocationIcon } from './FavoritesStrip';
 
 /** How long saved-place pins keep redrawing after they change, so their icon font has drawn. */
 const PIN_SETTLE_MS = 600;
 
 /**
  * A saved place's map marker, as in Google Maps: its icon centered in a round badge right on the
- * place, in the place's color. A marker stacked under another leaves its icon off.
+ * place, in the place's color. A marker stacked under another leaves its icon off. The clear
+ * square around the badge is part of the marker, so it takes taps too.
  */
 function SavedPlacePin({ color, icon }: { color: string; icon: IconName | null }) {
   const { colors } = useTheme();
   return (
-    <View style={[pinStyles.badge, { backgroundColor: color, borderColor: colors.savedPlaceBorder }]}>
-      {icon ? <Icon color={colors.ring} name={icon} size={16} /> : null}
+    <View style={pinStyles.hitArea}>
+      <View style={[pinStyles.badge, { backgroundColor: color, borderColor: colors.savedPlaceBorder }]}>
+        {icon ? <Icon color={colors.ring} name={icon} size={16} /> : null}
+      </View>
     </View>
   );
 }
 
 const pinStyles = StyleSheet.create({
+  hitArea: { width: SAVED_PIN.hitSize, height: SAVED_PIN.hitSize, alignItems: 'center', justifyContent: 'center' },
   badge: { width: SAVED_PIN.size, height: SAVED_PIN.size, alignItems: 'center', justifyContent: 'center', borderRadius: SAVED_PIN.size / 2, borderWidth: 2.5 },
 });
 
@@ -236,7 +240,20 @@ export function GoogleMapView({ initialCamera, lines = [], location, onCameraCha
         );
       })}
       {simulatedLocation || locationKnown ? (
-        <Marker anchor={{ x: 0.5, y: 0.5 }} coordinate={location} testID={simulatedLocation ? 'mock-location-marker' : `${testID}-user-location`} tracksViewChanges={tracksLocationDot} zIndex={5}>
+        <Marker
+          anchor={{ x: 0.5, y: 0.5 }}
+          coordinate={location}
+          // The dot is drawn over the pins and the map hands a tap to the topmost marker, so a tap
+          // on it opens a favorite it covers (the rider standing at home).
+          onPress={onSavedLocationPress ? () => {
+            const metersPerPixel = metersPerPixelForSpan(region.longitudeDelta, windowWidth, region.latitude);
+            const under = savedPinUnderDot(savedPins, location, CURRENT_LOCATION_SIZE, metersPerPixel);
+            if (under) onSavedLocationPress(under.saved, savedPins.filter((pin) => pin.position === under.position).map((pin) => pin.saved));
+          } : undefined}
+          testID={simulatedLocation ? 'mock-location-marker' : `${testID}-user-location`}
+          tracksViewChanges={tracksLocationDot}
+          zIndex={5}
+        >
           <CurrentLocationMarker />
         </Marker>
       ) : null}

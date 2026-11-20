@@ -4,6 +4,7 @@ import { simplifyPath } from './gtfsGeometry';
 import { displayStepColor } from './routeColors';
 import { agencyIdsForStep, modeForAgency } from './tripAgencies';
 import { displayTransitName } from './transitNames';
+import type { StationEntrance } from './stationEntrances';
 
 /**
  * Real transit trip planning through the Google Routes API (computeRoutes, travelMode TRANSIT):
@@ -54,6 +55,9 @@ export type TransitStep = {
   departures?: TripDeparture[];
   /** The leg's GTFS line, direction and boarding stop (tripStops.ts), so the app can show its live vehicles. */
   liveRoute?: { agencyId: string; routeId: string; boardStopId: string; alightStopId?: string; directionId?: number };
+  /** The boarding and alighting stations' ways in and out (stationEntrances.ts); absent where the agency publishes none. */
+  boardEntrances?: StationEntrance[];
+  alightEntrances?: StationEntrance[];
   /** What the agency's live feed says about this leg's trip (tripLive.ts); absent when it says nothing. */
   live?: LegLive;
   /** The connection into this leg from the previous one, when it's tight or already missed (tripLive.ts). */

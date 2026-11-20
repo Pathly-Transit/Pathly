@@ -11,8 +11,9 @@ import type { AgencyConfig } from './gtfsAgencies';
  * shape the rest of the backend expects. Each is switched on by a field in gtfsAgencies.ts.
  *
  * - `stationStops` (PATH): stop_times.txt names platforms, but PATH's live feed names stations.
- *   Each platform is replaced by its parent station, and the platforms (and entrances) are dropped
- *   from stops.txt, so a station is one stop for both directions, as the live feed sees it.
+ *   Each platform is replaced by its parent station, and the platforms are dropped from stops.txt,
+ *   so a station is one stop for both directions, as the live feed sees it. Entrances
+ *   (location_type 2) stay, still under their station, for the stop list's ways in and out.
  *
  * Entry times are fixed, so the same source yields the same bytes. An archive with nothing to
  * change is returned unchanged.
@@ -60,7 +61,7 @@ function zip(entries: Entries): Buffer {
   return Buffer.from(zipSync(sorted, { level: 6, mtime: ZIP_MTIME }));
 }
 
-/** PATH: platforms in stop_times.txt become their stations, and stops.txt keeps only stations. */
+/** PATH: platforms in stop_times.txt become their stations, and stops.txt keeps only stations and their entrances. */
 export function collapsePlatformsToStations(archive: Uint8Array): Buffer {
   const entries: Entries = unzipSync(archive);
   const stopsName = entryName(entries, 'stops.txt');
@@ -70,13 +71,15 @@ export function collapsePlatformsToStations(archive: Uint8Array): Buffer {
   const stops = csvLines(entries[stopsName]!);
   const idIndex = column(stops.header, 'stop_id');
   const parentIndex = column(stops.header, 'parent_station');
+  const typeIndex = column(stops.header, 'location_type');
   if (idIndex < 0 || parentIndex < 0) return Buffer.from(archive);
   const stationOf = new Map<string, string>();
   const stationLines: string[] = [];
   for (const line of stops.lines) {
     const row = fields(line);
     const parent = row[parentIndex]?.trim();
-    if (parent) stationOf.set(row[idIndex]!.trim(), parent);
+    const entrance = typeIndex >= 0 && row[typeIndex]?.trim() === '2';
+    if (parent && !entrance) stationOf.set(row[idIndex]!.trim(), parent);
     else stationLines.push(line);
   }
   if (stationOf.size === 0) return Buffer.from(archive);

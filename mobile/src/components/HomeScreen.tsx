@@ -42,7 +42,6 @@ import { useDebug } from '../debug/DebugContext';
 import { pinnedSpotLabel } from '../debug/presets';
 import { useCurrentLocation, type Coordinates } from '../hooks/useCurrentLocation';
 import { useActiveTrip } from '../hooks/useActiveTrip';
-import { useNewAccountPlacesPrompt } from '../hooks/useNewAccountPlacesPrompt';
 import { discardAccount } from '../data/accountData';
 import { useTripGuidanceAlerts } from '../hooks/useTripGuidanceAlerts';
 import { useTripRide } from '../hooks/useTripRide';
@@ -74,7 +73,7 @@ import { RouteAlertsPrompt, type RouteAlertsRequest } from './RouteAlertsPrompt'
 import { RouteDetailView, type TappedStop } from './RouteDetailView';
 import { SavedPlaceDetailsSheet } from './SavedPlaceDetailsSheet';
 import { SavePlaceSheet, type SavePlaceRequest } from './SavePlaceSheet';
-import { SetPlacesPrompt } from './SetPlacesPrompt';
+import { OnboardingScreen } from './OnboardingScreen';
 import { ResumeTripCard } from './ResumeTripCard';
 import { CURRENT_LOCATION_LABEL, initialResultsCriteria, RouteResultsView, type ResultsCriteria } from './RouteResultsView';
 import { navigationMapProgress, type TripMapCamera } from '../data/tripMap';
@@ -609,7 +608,6 @@ export function HomeScreen() {
     return subscribeToSavedLocations(uid, MAX_SAVED_LOCATIONS, setSavedLocations);
   }, [uid]);
   const [guestSavePrompt, setGuestSavePrompt] = useState(false);
-  const placesPrompt = useNewAccountPlacesPrompt(user);
   const isPlaceSaved = useCallback((place: SearchPlace) => findSavedLocation(savedLocations, place) != null, [savedLocations]);
   const toggleSavedPlace = useCallback((place: SearchPlace) => {
     if (!uid) {
@@ -1070,7 +1068,7 @@ export function HomeScreen() {
     return screen(
       <SearchView
         near={riderLocation(location, locationStatus)}
-        onAddSavedPlace={uid ? (label) => addSavedPlace('search', label) : undefined}
+        onAddSavedPlace={uid ? () => addSavedPlace('search') : undefined}
         onCancel={showHome}
         onChooseOnMap={() => setActiveView({ name: 'search', pickOnMap: true })}
         onSelect={showRouteResults}
@@ -1359,15 +1357,14 @@ export function HomeScreen() {
               <View pointerEvents="none" style={[styles.layersSlot, thumb.edgeMargin(4)]} />
             </View>
             {/* One popup at a time: places first for a new account, then a holiday reminder, then the occasional ask. */}
-            {systemNotice.notice && !placesPrompt.show && !popupPreview ? <SystemNoticeBanner notice={systemNotice.notice} onDismiss={systemNotice.dismiss} /> : null}
+            {systemNotice.notice && !popupPreview ? <SystemNoticeBanner notice={systemNotice.notice} onDismiss={systemNotice.dismiss} /> : null}
             {popupPreview === 'holiday' ? <SystemNoticeBanner notice={PREVIEW_NOTICE} onDismiss={() => setPopupPreview(null)} /> : null}
             {popupPreview === 'arrival' ? <SupportCard onDismiss={() => setPopupPreview(null)} onDonate={() => setPopupPreview(null)} /> : null}
-            {popupPreview === 'places' ? <SetPlacesPrompt onDone={() => setPopupPreview(null)} onSet={() => setPopupPreview(null)} places={savedLocations} /> : null}
             {popupPreview === 'support' ? (
               <SupportPopup onDismiss={() => setPopupPreview(null)} onFeedback={() => setPopupPreview(null)} onNeverAsk={() => setPopupPreview(null)} onSupport={() => setPopupPreview(null)} />
             ) : null}
             {/* The occasional ask to support Pathly or share feedback, once the rider has used it a while. */}
-            {supportPopup.visible && !systemNotice.notice && !placesPrompt.show && !popupPreview ? (
+            {supportPopup.visible && !systemNotice.notice && !popupPreview ? (
               <SupportPopup
                 onDismiss={supportPopup.dismiss}
                 onFeedback={supportPopup.feedback}
@@ -1403,9 +1400,8 @@ export function HomeScreen() {
           scrollY={homeScrollY}
         />
         {savePlaceSheet}
-        {placesPrompt.show && !saveRequest ? (
-          <SetPlacesPrompt onDone={placesPrompt.dismiss} onSet={(label) => addSavedPlace('home', label)} places={savedLocations} />
-        ) : null}
+        {/* Admin tools' preview of a new account's onboarding (it saves for real). */}
+        {popupPreview === 'onboarding' ? <View style={StyleSheet.absoluteFill}><OnboardingScreen onDone={() => setPopupPreview(null)} /></View> : null}
         <LineLayersSheet choice={lineChoice} lines={layerCandidates} onChange={changeLineChoice} onClose={() => setLayersOpen(false)} visible={layersOpen} />
         <SavedPlaceDetailsSheet
           onClose={() => setMapPlaces([])}

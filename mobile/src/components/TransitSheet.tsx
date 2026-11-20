@@ -531,7 +531,7 @@ export function TransitSheet({
               <View style={[styles.tabContent, styles.emptyState, { minHeight: tabContentMinHeight }]} testID="favorites-route-content">
                 <Mascot mood="curious" size={64} />
                 <Text style={styles.emptyTitle}>No favorites yet</Text>
-                <Text style={styles.emptyBody}>Tap the star on a route, or save a place like home or work.</Text>
+                <Text style={styles.emptyBody}>Tap the star on a route, or add a place like home or work.</Text>
               </View>
             )
           )}

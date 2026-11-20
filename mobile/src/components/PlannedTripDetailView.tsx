@@ -2,12 +2,14 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { legNotes } from '../data/tripLive';
+import { entranceInstruction, legEntrances, type StationEntrance } from '../data/stationEntrances';
 import { legDepartureOptions, quickDepartureOptions, retimeItinerary, type DepartureChoices, type LegDepartureOption } from '../data/tripDepartures';
 
 import {
   badgeMode,
   fareLabel,
   formatTripClock,
+  legHeadsign,
   lineBadge,
   tripMinutes,
   type FareType,
@@ -20,7 +22,7 @@ import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useUserPreferences } from '../data/userPreferences';
 import { useClock } from '../hooks/useClock';
 import { useTheme } from '../theme/AppSettings';
-import { SharedTripDetailView, tripDetailMapPadding, type TripDetailDeparture, type TripDetailLeg, type TripDetailModel, type TripDetailWalk } from './SharedTripDetailView';
+import { SharedTripDetailView, tripDetailMapPadding, type TripDetailDeparture, type TripDetailEntrance, type TripDetailLeg, type TripDetailModel, type TripDetailWalk } from './SharedTripDetailView';
 import { TripMap } from './TripMap';
 import { legLineKey, useTripVehicles } from '../hooks/useTripVehicles';
 import type { TripMapProgress, TripVehicle } from '../data/tripMap';
@@ -130,6 +132,10 @@ function walkRow(step: WalkStep): TripDetailWalk {
   return { minutes: tripMinutes(step.durationSeconds), distance: formatWalkDistance(step.distanceMeters), toName: step.toName };
 }
 
+function entranceRow(entrance: StationEntrance, use: 'enter' | 'exit'): TripDetailEntrance {
+  return { text: entranceInstruction(entrance, use), point: { lat: entrance.lat, lng: entrance.lon } };
+}
+
 function departureRow(option: LegDepartureOption): TripDetailDeparture {
   return { key: option.departs, time: formatTripClock(option.departs), arriveTime: formatTripClock(option.arrives), selected: option.selected, reachable: option.reachable };
 }
@@ -144,11 +150,12 @@ export function toTripDetailModel(itinerary: Itinerary, origin: string, destinat
   let previous: TransitStep | null = null;
   let walkAfter: TripDetailWalk | undefined;
 
-  for (const step of itinerary.steps) {
+  for (const [stepIndex, step] of itinerary.steps.entries()) {
     if (step.kind === 'walk') {
       pendingWalk = step;
       continue;
     }
+    const { enter, exit } = legEntrances(itinerary.steps, stepIndex);
     const walkBefore = pendingWalk ? walkRow(pendingWalk) : undefined;
     const waitSeconds = previous
       ? (Date.parse(step.from.time) - Date.parse(previous.to.time)) / 1000 - (pendingWalk?.durationSeconds ?? 0)
@@ -162,8 +169,8 @@ export function toTripDetailModel(itinerary: Itinerary, origin: string, destinat
       color: step.line.color ?? primary,
       ...(step.line.textColor ? { textColor: step.line.textColor } : {}),
       mode: badgeMode(step),
-      direction: step.headsign ? `Toward ${step.headsign}` : step.line.name,
-      ...(step.headsign ? { headsign: step.headsign } : {}),
+      direction: legHeadsign(step) ? `Toward ${legHeadsign(step)}` : step.line.name,
+      ...(legHeadsign(step) ? { headsign: legHeadsign(step) } : {}),
       stopCount: step.stopCount,
       ...(step.stops && step.stops.length > 0 ? { stops: step.stops.map((stop) => ({ name: stop.name, time: formatTripClock(stop.time), point: stop.location })) } : {}),
       durationMinutes: tripMinutes(step.durationSeconds),
@@ -178,6 +185,8 @@ export function toTripDetailModel(itinerary: Itinerary, origin: string, destinat
       ...(notes.length > 0 ? { notes } : {}),
       ...(step.live?.status === 'tracked' ? { live: true } : {}),
       ...(step.alerts && step.alerts.length > 0 ? { alerts: step.alerts } : {}),
+      ...(enter ? { enter: entranceRow(enter, 'enter') } : {}),
+      ...(exit ? { exit: entranceRow(exit, 'exit') } : {}),
     });
     pendingWalk = null;
     previous = step;

@@ -2,7 +2,7 @@
 import { render } from '@testing-library/react-native';
 
 import { GoogleMapView as WebGoogleMapView } from '../src/components/GoogleMapView.web';
-import { metersPerPixelAtZoom, metersPerPixelForSpan, savedPinSvgUrl, stackSavedPins } from '../src/data/savedPlacePin';
+import { metersPerPixelAtZoom, metersPerPixelForSpan, savedPinSvgUrl, savedPinUnderDot, stackSavedPins } from '../src/data/savedPlacePin';
 import { placeToLocation, type SavedLocation } from '../src/data/userData';
 import { AppSettingsProvider } from '../src/theme/AppSettings';
 
@@ -11,7 +11,8 @@ jest.mock('@react-google-maps/api', () => {
   const GoogleMap = ({ children, ...props }: { children: React.ReactNode }) => <View {...props} testID="web-google-map">{children}</View>;
   const Marker = (props: { title?: string }) => <View {...props} testID={props.title === 'Your location' ? 'web-rider-marker' : `web-${props.title}`} />;
   const Rectangle = (props: object) => <View {...props} testID="web-service-area" />;
-  return { GoogleMap, Marker, Rectangle, useJsApiLoader: () => ({ isLoaded: true }) };
+  const OverlayViewF = ({ children, ...props }: { children: React.ReactNode }) => <View {...props} testID="web-overlay">{children}</View>;
+  return { FLOAT_PANE: 'floatPane', GoogleMap, Marker, OverlayViewF, Rectangle, useJsApiLoader: () => ({ isLoaded: true }) };
 });
 
 // Two places about 300 m apart in Midtown, and one in Brooklyn.
@@ -50,7 +51,25 @@ describe('stackSavedPins', () => {
 
   it('draws an icon centered in the badge, in the ring color', () => {
     const svg = decodeURIComponent(savedPinSvgUrl('#0B4F9C', '#FFFFFF', ['M0,0H256V256Z']));
-    expect(svg).toContain('<g transform="translate(7 7) scale(0.0625)" fill="#FFFFFF"><path d="M0,0H256V256Z"/></g>');
+    expect(svg).toContain('<g transform="translate(14 14) scale(0.0625)" fill="#FFFFFF"><path d="M0,0H256V256Z"/></g>');
+  });
+
+  it('pads the badge to a larger square so its edge is easier to click', () => {
+    const svg = decodeURIComponent(savedPinSvgUrl('#0B4F9C', '#FFFFFF'));
+    expect(svg).toContain('width="44" height="44"');
+    expect(svg).toContain('cx="22" cy="22" r="13.75"');
+  });
+
+  it('finds the nearest pin the rider\'s dot covers', () => {
+    const dot = { latitude: 40.75, longitude: -73.99 };
+    const near = { id: 'near', position: { latitude: 40.75030, longitude: -73.99 } };
+    const nearer = { id: 'nearer', position: { latitude: 40.75001, longitude: -73.99 } };
+    const far = { id: 'far', position: { latitude: 40.76, longitude: -73.99 } };
+    // At 1 m a pixel, a 38 px dot reaches pins centered within (38 + 44) / 2 = 41 m.
+    expect(savedPinUnderDot([near, nearer, far], dot, 38, 1)?.id).toBe('nearer');
+    expect(savedPinUnderDot([near, far], dot, 38, 1)?.id).toBe('near');
+    expect(savedPinUnderDot([far], dot, 38, 1)).toBeNull();
+    expect(savedPinUnderDot([], dot, 38, 1)).toBeNull();
   });
 });
 

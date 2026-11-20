@@ -5,12 +5,14 @@ import MapView, { Callout, Marker, Polyline, type Region } from 'react-native-ma
 import { BeanAvatar } from '../avatars/BeanAvatarImage';
 import { formatAge, visibleTrains } from '../data/liveTrains';
 import { googleMapStyle } from '../data/mapStyle';
-import { approachingVehicle, ARROW_ZOOM_SLACK, directionArrowAt, focusStopIndex, metersPerPixel, middleDirectionArrowAt, MIN_FIT_SPAN, riderNearStop, splitPathAtStop, withAlpha } from '../data/routeDirection';
+import { entranceLabel, type StationEntrance } from '../data/stationEntrances';
+import { approachingVehicle, ARROW_ZOOM_SLACK, directionArrowAt, focusStopIndex, metersPerPixel, middleDirectionArrowAt, MIN_FIT_SPAN, riderNearStop, snapStopsToPath, splitPathAtStop, streetWalkToDraw, walkConnectors, withAlpha } from '../data/routeDirection';
 import { stopRevealZoom, zoomForRegion } from '../data/stopDeclutter';
 import type { RouteLiveVehicle } from '../data/transitLive';
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useMarkerTracking } from '../hooks/useMarkerTracking';
 import { useNow } from '../hooks/useNow';
+import { useSelectionScale } from '../hooks/useSelectionScale';
 import { useTheme } from '../theme/AppSettings';
 import { fontFamilies } from '../theme/typography';
 import { Icon } from './Icon';
@@ -21,7 +23,7 @@ import { HeadingBeamMarker } from './HeadingBeamMarker';
 import { Glide } from '../hooks/useGlide';
 import { DirectionArrow } from './DirectionArrow';
 
-type GeometryStop = { stopId?: string; name: string; lat: number; lon: number };
+type GeometryStop = { stopId?: string; name: string; lat: number; lon: number; entrances?: readonly StationEntrance[] };
 
 const CENTER_ANCHOR = { x: 0.5, y: 0.5 };
 // Street-level span around a focused stop or the rider.
@@ -49,6 +51,9 @@ const LINE_WIDTH = 8;
 // Walks are plain round gray dots, which read from far out over any street.
 const WALK_WIDTH = 6;
 const WALK_DASH = [1, 10];
+// The joins from the walk to the rider's and stop's dots: smaller dots, closer together.
+const CONNECTOR_WIDTH = 3;
+const CONNECTOR_DASH = [1, 6];
 const STOP_RING = 1.5;
 
 // Vehicle marker geometry: the circle sits bottom-left of a larger box so the age badge can
@@ -71,6 +76,10 @@ const RIDER_AVATAR = 24;
 const RIDER_AVATAR_STEP = 13;
 const RIDER_AVATAR_LEFT = 30;
 const RIDER_DISC_INSET = 2;
+// The tapped vehicle, while its popup is open: this much larger, and above every marker.
+const SELECTED_SCALE = 1.3;
+const SELECTED_PAD = 16;
+const SELECTED_Z_INDEX = 10;
 
 type RouteMapProps = {
   /** Incremented by the location button; each change centers the map on `userLocation` and follows it until a pan. */
@@ -82,12 +91,16 @@ type RouteMapProps = {
   directionId?: number;
   /** Stop to open zoomed on and emphasize (the rider's nearest), matched by stopId. */
   focusStopId?: string;
+  /** A station whose entrances to mark and zoom to, from its stop row; `key` repeats the request. */
+  entranceFocus?: { stopId: string; key: number };
   /** Matches the rider's stop by name when its id isn't in `stops` (see focusStopIndex). */
   focusStopName?: string;
   /** Vehicle glyph and label (train vs bus). */
   mode?: TransitMode;
   /** Tapping a live vehicle opens its details. */
   onVehiclePress?: (tripId: string) => void;
+  /** The vehicle whose popup is open: drawn larger, above every other vehicle. */
+  selectedVehicleId?: string | null;
   /** Tapping a stop's name (shown once its dot is tapped) opens the line at that stop. */
   onOpenStop?: (stop: GeometryStop) => void;
   /** Called when the rider drags the map, so the location button can drop its selected state. */
@@ -135,20 +148,32 @@ function regionFor(stops: readonly GeometryStop[], focusStop: GeometryStop | und
  * A live vehicle (Route View and the trip map): a white circle with the line's mode glyph and its
  * position's age, gliding to each refreshed spot rather than jumping there.
  */
-export function LiveVehicleMarker({ color, mode, onPress, vehicle, zIndex }: { color: string; mode: TransitMode; onPress?: (tripId: string) => void; vehicle: RouteLiveVehicle; zIndex: number }) {
+export function LiveVehicleMarker({ color, mode, onPress, selected = false, vehicle, zIndex }: { color: string; mode: TransitMode; onPress?: (tripId: string) => void; selected?: boolean; vehicle: RouteLiveVehicle; zIndex: number }) {
   const avatars = vehicle.riders?.avatars ?? [];
   // The position's age ("12s") ticks each second.
   const now = useNow(1000);
   const age = vehicle.updatedAt != null ? formatAge(now - vehicle.updatedAt) : '';
-  // Re-pictured only when its drawing changes: the ticking age, its color or its riders.
-  const tracksView = useMarkerTracking(`${color}|${mode}|${age}|${JSON.stringify(avatars)}`);
+  // 0 plain, 1 while its popup is open, easing between (useSelectionScale).
+  const selection = useSelectionScale(selected);
+  // Re-pictured only when its drawing changes: the ticking age, its color, its riders or being picked.
+  const tracksView = useMarkerTracking(`${color}|${mode}|${age}|${JSON.stringify(avatars)}|${selected}`);
   const boxWidth = SHADOW_ROOM + (avatars.length > 0 ? RIDER_AVATAR_LEFT + RIDER_AVATAR + (avatars.length - 1) * RIDER_AVATAR_STEP : VEHICLE_BOX);
+  // Picked (or shrinking back), the box gains room on every side for the larger drawing, since
+  // Android clips a marker to its view's bounds. Plain markers keep their tap area.
+  const pad = selected || selection > 0 ? SELECTED_PAD : 0;
+  const circleX = SHADOW_ROOM + VEHICLE_SIZE / 2;
+  const circleY = VEHICLE_BOX_HEIGHT - SHADOW_ROOM - VEHICLE_SIZE / 2;
   // Anchored on the circle's center.
-  const anchor = { x: (SHADOW_ROOM + VEHICLE_SIZE / 2) / boxWidth, y: (VEHICLE_BOX_HEIGHT - SHADOW_ROOM - VEHICLE_SIZE / 2) / VEHICLE_BOX_HEIGHT };
+  const anchor = { x: (pad + circleX) / (boxWidth + pad * 2), y: (pad + circleY) / (VEHICLE_BOX_HEIGHT + pad * 2) };
+  const scale = 1 + (SELECTED_SCALE - 1) * selection;
+  // Grows about the circle's center, not the box's.
+  const shiftX = circleX - boxWidth / 2;
+  const shiftY = circleY - VEHICLE_BOX_HEIGHT / 2;
   return (
     <Glide lat={vehicle.lat} lon={vehicle.lon}>{(point) => (
-      <Marker anchor={anchor} coordinate={{ latitude: point.lat, longitude: point.lon }} onPress={onPress ? () => onPress(vehicle.tripId) : undefined} testID={`route-vehicle-${vehicle.tripId}`} title={onPress ? undefined : mode === 'bus' ? 'Bus' : 'Train'} tracksViewChanges={tracksView} zIndex={zIndex}>
-        <View style={[styles.vehicleBox, { width: boxWidth }]}>
+      <Marker anchor={anchor} coordinate={{ latitude: point.lat, longitude: point.lon }} onPress={onPress ? () => onPress(vehicle.tripId) : undefined} testID={`route-vehicle-${vehicle.tripId}`} title={onPress ? undefined : mode === 'bus' ? 'Bus' : 'Train'} tracksViewChanges={tracksView} zIndex={selected ? SELECTED_Z_INDEX : zIndex}>
+        <View style={{ width: boxWidth + pad * 2, height: VEHICLE_BOX_HEIGHT + pad * 2 }}>
+        <View style={[styles.vehicleBox, { width: boxWidth, left: pad, top: pad }, selection !== 0 && { transform: [{ translateX: shiftX }, { translateY: shiftY }, { scale }, { translateX: -shiftX }, { translateY: -shiftY }] }]} testID={`route-vehicle-drawing-${vehicle.tripId}`}>
           {PAINTED_SHADOW.map(({ grow, opacity }) => (
             <View
               key={grow}
@@ -176,13 +201,14 @@ export function LiveVehicleMarker({ color, mode, onPress, vehicle, zIndex }: { c
             </View>
           ) : null}
         </View>
+        </View>
       </Marker>
     )}</Glide>
   );
 }
 
 /** Real route map: actual stop positions, the real line, and live vehicles — for any route with a live feed. */
-export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreFrom, fitPadding = ROUTE_FIT_PADDING, focusStopId, focusStopName, mode = 'rail', onOpenStop, onUserPan, onVehiclePress, path, showRouteRequest = 0, stops, testID = 'route-map', userLocation, vehicles, walkPath }: RouteMapProps) {
+export function RouteMap({ centerOnUserRequest = 0, color, directionId, entranceFocus, exploreFrom, fitPadding = ROUTE_FIT_PADDING, focusStopId, focusStopName, mode = 'rail', onOpenStop, onUserPan, onVehiclePress, path, selectedVehicleId = null, showRouteRequest = 0, stops, testID = 'route-map', userLocation, vehicles, walkPath }: RouteMapProps) {
   const mapRef = useRef<MapView>(null);
   // Where the walk starts: the purple dot when exploring, else the rider.
   const walkOrigin = exploreFrom ?? userLocation;
@@ -228,6 +254,9 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
     return () => clearTimeout(timer);
   }, [color]);
   const shownVehicles = visibleTrains(vehicles, directionId, now);
+  // Dots sit on the drawn line, not at the stop's own (platform) coordinates beside it.
+  const dotSpots = useMemo(() => snapStopsToPath(path, stops), [path, stops]);
+  const focusDot = focusStop ? dotSpots[stops.indexOf(focusStop)] : undefined;
   // Split at the rider's stop: faint behind it, full strength ahead.
   const line = useMemo(() => {
     const points = path ?? stops;
@@ -256,6 +285,19 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
   // The rider, when they're near their stop: framed with it so they see the walk there.
   // The purple dot is always framed: its walk and stop are the point of the page.
   const nearRider = walkOrigin && focusStop && (exploreFrom != null || riderNearStop(walkOrigin, focusStop)) ? walkOrigin : null;
+  // Thin dotted joins from the rider's dot and to the stop's dot, where the street walk stops short
+  // of them (or straight between them with no walk), for a rider near enough to walk.
+  // No street walk once the rider is at the stop: just the thin join between the dots.
+  const streetWalk = useMemo(
+    () => streetWalkToDraw(walkPath, walkOrigin ? { lat: walkOrigin.latitude, lon: walkOrigin.longitude } : null, focusStop),
+    [focusStop, walkOrigin?.latitude, walkOrigin?.longitude, walkPath],
+  );
+  const connectors = useMemo(() => {
+    const from = streetWalk ? walkOrigin : nearRider;
+    if (!from) return [];
+    return walkConnectors(streetWalk, { lat: from.latitude, lon: from.longitude }, focusDot)
+      .map((join) => join.map((point) => ({ latitude: point.lat, longitude: point.lon })));
+  }, [focusDot?.lat, focusDot?.lon, nearRider?.latitude, nearRider?.longitude, walkOrigin?.latitude, walkOrigin?.longitude, streetWalk]);
   // Set once the map has framed an approaching vehicle (below).
   const framedVehicle = useRef(false);
   // The nearest stop (and whether the rider is near it) often resolves after the page opens; follow
@@ -308,6 +350,18 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the request only; the line is read at request time
   }, [showRouteRequest]);
 
+  // A stop row's entrances: marked on the map, which zooms in to frame them with the station.
+  const entranceStop = entranceFocus ? stops.find((stop) => stop.stopId === entranceFocus.stopId) : undefined;
+  const entrances = entranceStop?.entrances ?? [];
+  useEffect(() => {
+    if (!entranceStop || entrances.length === 0) return;
+    followRider.current = false;
+    riderMovedMap.current = true; // the nearest-stop focus must not pull the map back
+    const points = [entranceStop, ...entrances].map((point) => ({ latitude: point.lat, longitude: point.lon }));
+    mapRef.current?.fitToCoordinates(points, { edgePadding: fitPadding, animated: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the request; the stop is read then
+  }, [entranceFocus?.key]);
+
   return (
     <MapView
       initialRegion={initialRegion}
@@ -333,11 +387,23 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
     >
       {line.behind.length > 1 ? <Polyline coordinates={line.behind} strokeColor={withAlpha(color, BEHIND_LINE_ALPHA)} strokeWidth={LINE_WIDTH} testID="route-line-behind" zIndex={0} /> : null}
       <Polyline coordinates={line.ahead} strokeColor={color} strokeWidth={LINE_WIDTH} testID="route-line" zIndex={1} />
-      {walkPath && walkPath.length > 1 ? (
+      {connectors.map((join, index) => (
+        <Polyline
+          key={`connector-${index}`}
+          coordinates={join}
+          lineCap="round"
+          lineDashPattern={CONNECTOR_DASH}
+          strokeColor={colors.mutedInk}
+          strokeWidth={CONNECTOR_WIDTH}
+          testID={`route-walk-connector-${index}`}
+          zIndex={2}
+        />
+      ))}
+      {streetWalk ? (
         // The walk to the stop, dotted like TripMap.native.tsx's walking legs.
         <>
           <Polyline
-            coordinates={walkPath.map((point) => ({ latitude: point.lat, longitude: point.lon }))}
+            coordinates={streetWalk.map((point) => ({ latitude: point.lat, longitude: point.lon }))}
             lineCap="round"
             lineDashPattern={WALK_DASH}
             strokeColor={colors.mutedInk}
@@ -356,7 +422,7 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
           <Marker
             key={`${stop.stopId ?? stop.name}-${stopIndex}`}
             anchor={CENTER_ANCHOR}
-            coordinate={{ latitude: stop.lat, longitude: stop.lon }}
+            coordinate={{ latitude: dotSpots[stopIndex]?.lat ?? stop.lat, longitude: dotSpots[stopIndex]?.lon ?? stop.lon }}
             testID={`route-stop-${stop.name}`}
             // Names the marker for screen readers; the bubble shown is the Callout below.
             title={stop.name}
@@ -389,7 +455,12 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
           <DirectionArrow color={color} side={arrow.side} />
         </Marker>
       ) : null}
-      {shownVehicles.map((vehicle) => <LiveVehicleMarker key={vehicle.tripId} color={color} mode={mode} onPress={onVehiclePress} vehicle={vehicle} zIndex={2} />)}
+      {shownVehicles.map((vehicle) => <LiveVehicleMarker key={vehicle.tripId} color={color} mode={mode} onPress={onVehiclePress} selected={vehicle.tripId === selectedVehicleId} vehicle={vehicle} zIndex={2} />)}
+      {entrances.map((entrance) => (
+        <Marker key={`entrance-${entrance.lat},${entrance.lon}`} anchor={CENTER_ANCHOR} coordinate={{ latitude: entrance.lat, longitude: entrance.lon }} testID="route-entrance" title={entranceLabel(entrance)} tracksViewChanges={tracksDots} zIndex={2}>
+          <View style={[styles.entranceDot, { backgroundColor: color }]}><Icon color="#FFFFFF" name="arrowRight" size={11} /></View>
+        </Marker>
+      ))}
       {exploreFrom ? (
         <Marker anchor={CENTER_ANCHOR} coordinate={exploreFrom} tappable={false} testID="route-explore-dot" title="Exploring from here" tracksViewChanges={tracksDots} zIndex={3}>
           <View style={[styles.exploreDot, { backgroundColor: colors.searchCenter, shadowColor: colors.searchCenter }]} />
@@ -412,6 +483,7 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
 const ANDROID_MARKER_EDGE = Platform.OS === 'android' ? { borderWidth: 1.5, borderColor: 'rgba(22, 50, 79, 0.3)' } : null;
 
 const styles = StyleSheet.create({
+  entranceDot: { width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#FFFFFF', borderRadius: 3 },
   // The home map's purple explore dot, as it looks there.
   exploreDot: { width: 17, height: 17, borderWidth: 3, borderRadius: 8.5, borderColor: '#FFFFFF', shadowOpacity: 0.32, shadowRadius: 5, shadowOffset: { width: 0, height: 0 }, elevation: 3 },
   stopDot: {

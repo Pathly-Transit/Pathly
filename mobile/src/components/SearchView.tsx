@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../auth/AuthContext';
 import type { BeanMood } from '../avatars/beanAvatar';
 import { searchLineIndex, useLineIndex, type IndexedLine } from '../data/lineIndex';
+import { onePathLinePerColor } from '../data/pathLines';
 import { searchTransitRoutes, warmLineSearch } from '../data/nearbyTransit';
 import { addressAfterName, fetchPlaceDetails, formatDistanceAway, placeDistanceMeters, type PlaceKind, type SearchPlace } from '../data/placesSearch';
 import { locationToPlace, recordSearch, removeSearch, subscribeToSearches, type SavedLocation } from '../data/userData';
@@ -29,7 +30,7 @@ import { Mascot } from './Mascot';
 import { PressableScale } from './PressableScale';
 import { badgeLabel, RouteBadge, transitModeForAgency, type TransitMode } from './RouteBadge';
 import { SavedPlaceBadge } from './SavedPlaceBadge';
-import { savedLocationIcon, savedPlaceLines, SavedPlacesStrip } from './SavedPlacesStrip';
+import { savedLocationIcon, savedPlaceLines, FavoritesStrip } from './FavoritesStrip';
 import { radii } from '../theme/shape';
 
 const MAX_RECENT_SEARCHES = 8;
@@ -109,7 +110,8 @@ export function stopLineBadges(place: SearchPlace | undefined): { agency: string
   if (!place?.routes?.length || !place.kind || place.kind === 'place') return [];
   const mode = KIND_BADGE_MODES[place.kind];
   const agency = place.agency ?? '';
-  return place.routes.map((route) => ({ agency, color: route.color, mode, shortName: badgeLabel({ agency, shortName: route.shortName }) }));
+  const routes = onePathLinePerColor(place.routes, (route) => ({ agency, code: route.shortName, color: route.color }));
+  return routes.map((route) => ({ agency, color: route.color, mode, shortName: badgeLabel({ agency, shortName: route.shortName }) }));
 }
 
 /** "Jamaica, LIRR station, lines PJ, RK, and 8 more" for a stop; "name, address" for a place. */
@@ -138,10 +140,10 @@ export type SearchViewProps = {
   onSelectCurrentLocation?: () => void;
   /** The rider's location, to rank equally good transit stops nearest first. */
   near?: { latitude: number; longitude: number } | null;
-  /** The rider's saved places, offered in a swipeable row above Recent. */
+  /** The rider's favorite places, offered in a swipeable row above Recent. */
   savedPlaces?: readonly SavedLocation[];
-  /** When set, the saved places row offers Set home, Set work, and Add. */
-  onAddSavedPlace?: (label?: 'Home' | 'Work') => void;
+  /** When set, the Favorites row ends with Add. */
+  onAddSavedPlace?: () => void;
   /** When set, matching transit lines ("1", "B46") are offered above places and open the whole line. */
   onSelectLine?: (line: IndexedLine) => Promise<void>;
   /** When set, "Choose on map" leads the empty search, for dropping a pin anywhere. */
@@ -329,7 +331,7 @@ export function SearchView({ initialQuery = '', near, onAddSavedPlace, onCancel,
   const { endSession, getSessionToken, retry, status, suggestions } = usePlacesSearch(query, near);
   const isSearching = status !== 'idle';
   // A guest has no favorites and can't add any, so the row of them isn't drawn.
-  const hasSavedPlacesStrip = savedPlaces.length > 0 || onAddSavedPlace != null;
+  const hasFavoritesStrip = savedPlaces.length > 0;
   const lines = useLineSearch(query, near, onSelectLine != null);
   // While typing, recent searches that match come first, as in Google Maps.
   // Saved places that match come before everything else, with their own icon and color.
@@ -523,7 +525,7 @@ export function SearchView({ initialQuery = '', near, onAddSavedPlace, onCancel,
               ) : null}
             </View>
           </View>
-          {/* "Choose on map" then saved places lead the page, under the search field, until the rider starts typing. */}
+          {/* "Choose on map" then Favorites lead the page, under the search field, until the rider starts typing. */}
           {!isSearching && onChooseOnMap ? (
             <PressableScale
               accessibilityHint="Move the map to drop a pin anywhere"
@@ -534,7 +536,7 @@ export function SearchView({ initialQuery = '', near, onAddSavedPlace, onCancel,
                 endSession();
                 onChooseOnMap();
               }}
-              style={[styles.resultRow, styles.chooseOnMapRow, hasSavedPlacesStrip && styles.chooseOnMapDivider]}
+              style={[styles.resultRow, styles.chooseOnMapRow, hasFavoritesStrip && styles.chooseOnMapDivider]}
               testID="search-choose-on-map"
             >
               <View style={styles.resultIcon}>
@@ -545,7 +547,7 @@ export function SearchView({ initialQuery = '', near, onAddSavedPlace, onCancel,
               </View>
             </PressableScale>
           ) : null}
-          {!isSearching ? <SavedPlacesStrip onAdd={onAddSavedPlace} onSelect={(saved) => selectRecent(locationToPlace(saved.address))} places={savedPlaces} /> : null}
+          {!isSearching ? <FavoritesStrip onAdd={onAddSavedPlace} onSelect={(saved) => selectRecent(locationToPlace(saved.address))} places={savedPlaces} /> : null}
         </SafeAreaView>
 
         <ScrollView

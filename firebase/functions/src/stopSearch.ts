@@ -184,13 +184,19 @@ export async function lookupStations(stations: readonly StationLookup[], near?: 
       return candidate === wanted || candidate.startsWith(`${wanted} `) || wanted.startsWith(`${candidate} `);
     });
     if (matches.length === 0) return null;
-    const exact = matches.filter((entry) => comparable(entry.name) === wanted);
-    const pool = exact.length > 0 ? exact : matches;
+    // A name that says whose station it is ("World Trade Center PATH") means that agency's, not
+    // the subway station of the same name next door.
+    const spoken = ` ${normalizeStopName(name)} `;
+    const named = matches.filter((entry) => spoken.includes(` ${normalizeStopName(entry.agencyLabel)} `));
+    const candidates = named.length > 0 ? named : matches;
+    const exact = candidates.filter((entry) => comparable(entry.name) === wanted);
+    const pool = exact.length > 0 ? exact : candidates;
     const meters = (entry: IndexedStop) => (near ? haversineMeters(near.lat, near.lng, entry.location.lat, entry.location.lng) : 0);
     const { normalized: _normalized, tokens: _tokens, ...best } = [...pool].sort((a, b) => meters(a) - meters(b))[0]!;
     // A station complex can be several timetable stations side by side (Grand Central's 4/5/6, 7,
-    // and shuttle): Google's one station gets all their lines.
-    const sameComplex = matches.filter((entry) => entry.mode === best.mode
+    // and shuttle): Google's one station gets all their lines. Only one agency's, though: the row
+    // carries one agency, so PATH's lines beside the subway's E would be drawn as subway bullets.
+    const sameComplex = matches.filter((entry) => entry.mode === best.mode && entry.agencyLabel === best.agencyLabel
       && haversineMeters(entry.location.lat, entry.location.lng, best.location.lat, best.location.lng) <= COMPLEX_RADIUS_METERS);
     const routes = new Map(best.routes.map((route) => [route.shortName, route]));
     for (const entry of sameComplex) for (const route of entry.routes) if (!routes.has(route.shortName)) routes.set(route.shortName, route);

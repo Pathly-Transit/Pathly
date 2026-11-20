@@ -6,7 +6,7 @@ The first production build has finished in EAS, uploaded successfully and passed
 
 | Item | Recorded value |
 | --- | --- |
-| Repository main | `e45b3b1` after [PR #33](https://github.com/Transit-Clone/Pathly/pull/33) |
+| Repository main | `e45b3b1` after [PR #33](https://github.com/Pathly-Transit/Pathly/pull/33) |
 | Build source commit | `16f7aab3ede3be9905bb8d10f3135dc319fb2772` |
 | EAS build | [`d990d5df-2278-4b82-b2ea-955a317ba768`](https://expo.dev/accounts/pathlyapp/projects/pathly/builds/d990d5df-2278-4b82-b2ea-955a317ba768) |
 | Profile / environment | `production` / `production`, iOS device store build |

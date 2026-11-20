@@ -5,29 +5,21 @@ import { StyleSheet, Text, View } from 'react-native';
 import { GOOGLE_MAPS_LIBRARIES, GOOGLE_MAPS_SCRIPT_ID } from '../data/googleMapsLoaderConfig';
 import { googleMapStyle } from '../data/mapStyle';
 import { themedRouteColor } from '../data/routeColors';
-import { stopIndexAt, tripMapPoints, ENTRANCE_REVEAL_ZOOM, viaRevealZooms, type TripMapProps, type TripMapStop, type TripVehicle } from '../data/tripMap';
+import { stopIndexAt, tripMapPoints, ENTRANCE_REVEAL_ZOOM, viaRevealZooms, type TripMapProps, type TripMapStop } from '../data/tripMap';
 import { useTheme, useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
 import { fontFamilies } from '../theme/typography';
 import { CurrentLocationMarker } from './CurrentLocationMarker';
 import { DESTINATION_PIN_HEIGHT, DESTINATION_PIN_WIDTH, DestinationPinMarker } from './DestinationPinMarker';
 import { HeadingBeamMarker } from './HeadingBeamMarker';
-import { vehicleMarkerIcon, vehicleMarkerLabel } from './RouteMap.web';
-import { Glide } from '../hooks/useGlide';
-import { formatAge } from '../data/liveTrains';
+import { entranceIcon, WebVehicleMarker } from './RouteMap.web';
+import { useNow } from '../hooks/useNow';
 import { centerOffsetFrom, glideMapTo } from './webMapGlide';
 
 const containerStyle = { width: '100%', height: '100%' };
-/** A square in the line's color with a white arrow, for a station's way in or out. */
-function entranceIcon(color: string): google.maps.Icon {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="${color}" stroke="#FFFFFF" stroke-width="1.5"/><path d="M4.5 9H13M10 5.8 13.2 9 10 12.2" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-  return { url: `data:image/svg+xml,${encodeURIComponent(svg)}`, anchor: new google.maps.Point(9, 9) };
-}
-
 const baseMapOptions = { disableDefaultUI: true, keyboardShortcuts: false, clickableIcons: false };
 const FALLBACK_CENTER = { lat: 40.75, lng: -73.95 };
 /** Riders' avatars take the age badge's place, as on Route View's map. */
-const vehicleAge = (vehicle: TripVehicle) => (!vehicle.riders?.avatars.length && vehicle.updatedAt != null ? formatAge(Date.now() - vehicle.updatedAt) : null);
 
 const FIT_PADDING = { top: 90, right: 40, bottom: 60, left: 40 };
 const TRANSIT_WIDTH = 6;
@@ -54,6 +46,8 @@ const locationOffset = () => ({ x: -19, y: -19 });
  * stop. Interactive maps pan and zoom, label a clicked stop, and offer to re-frame the whole trip.
  */
 export function TripMap({ centerOnUserRequest = 0, destination, focusStop, followLocation, followUser, holdCamera, interactive = false, itinerary, navigationProgress, onFollowModeChange, onUserCameraChange, onUserPan, onVehiclePress, origin, padding = FIT_PADDING, testID = 'trip-map', userLocation, userLocationStale = false, vehicles = [], approachLines = [] }: TripMapProps) {
+  // Ticks the live vehicles' ages.
+  const now = useNow(1000);
   // A held camera is where the rider had left this map; it opens there instead of on the trip.
   const holding = holdCamera != null;
   const [initialCenter] = useState(() => (holdCamera ? { lat: holdCamera.latitude, lng: holdCamera.longitude } : FALLBACK_CENTER));
@@ -292,9 +286,7 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
         )))}
         {/* The rides' live vehicles, like Route View's, gliding to each refreshed spot. */}
         {vehicles.map((vehicle) => (
-          <Glide key={`${vehicle.mode}-${vehicle.tripId}`} lat={vehicle.lat} lon={vehicle.lon}>
-            {(point) => <Marker icon={vehicleMarkerIcon(themedRouteColor(vehicle.color, isDark), vehicleAge(vehicle), vehicle.riders?.avatars)} label={vehicleMarkerLabel(vehicleAge(vehicle))} onClick={onVehiclePress ? () => onVehiclePress(vehicle.tripId) : undefined} position={{ lat: point.lat, lng: point.lon }} title={vehicle.mode === 'bus' ? 'Bus' : 'Train'} zIndex={3} />}
-          </Glide>
+          <WebVehicleMarker key={`${vehicle.mode}-${vehicle.tripId}`} color={themedRouteColor(vehicle.color, isDark)} now={now} onPress={onVehiclePress} title={vehicle.mode === 'bus' ? 'Bus' : 'Train'} vehicle={vehicle} zIndex={3} />
         ))}
         {/* The rider's pin (Settings, Appearance) stands on the destination's gray dot, so it reads apart from the start. */}
         {destinationStop ? (

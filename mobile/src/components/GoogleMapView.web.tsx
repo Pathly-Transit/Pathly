@@ -1,4 +1,4 @@
-import { GoogleMap, Marker, Polyline, useJsApiLoader } from '@react-google-maps/api';
+import { FLOAT_PANE, GoogleMap, Marker, OverlayViewF, Polyline, useJsApiLoader } from '@react-google-maps/api';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
@@ -14,7 +14,7 @@ import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useTheme } from '../theme/AppSettings';
 import { afterClick } from './afterClick';
 import { iconPaths } from './Icon';
-import { savedLocationIcon } from './SavedPlacesStrip';
+import { savedLocationIcon } from './FavoritesStrip';
 import { HeadingBeamMarker } from './HeadingBeamMarker';
 import { centerOffsetFrom, glideMapTo } from './webMapGlide';
 
@@ -23,6 +23,21 @@ const ZOOM = 14;
 const MIN_ZOOM = 6;
 
 const containerStyle = { width: '100%', height: '100%' };
+
+// The rider's dot: an 8 px radius blue circle with a 2 px white edge, centered on the rider. It's
+// placed absolutely so the overlay's own wrapper stays 0 px and has no area to catch a click.
+const RIDER_DOT_SIZE = 18;
+const riderDotOffset = () => ({ x: 0, y: 0 });
+const riderDotStyle = {
+  position: 'absolute',
+  left: -RIDER_DOT_SIZE / 2,
+  top: -RIDER_DOT_SIZE / 2,
+  width: RIDER_DOT_SIZE,
+  height: RIDER_DOT_SIZE,
+  borderRadius: RIDER_DOT_SIZE / 2,
+  borderWidth: 2,
+  borderColor: '#FFFFFF',
+} as const;
 
 // Keep the camera near the region, with a generous browsing margin and a soft viewport edge.
 // disableDefaultUI drops the satellite/map-type toggle, street view pegman, fullscreen
@@ -231,7 +246,7 @@ export function GoogleMapView({ initialCamera, lines = [], location, onCameraCha
                 // drawn into the badge. Only a stack's top pin shows its icon.
                 icon={{
                   url: savedPinSvgUrl(savedPlaceColor(saved.address, colors.primary), colors.savedPlaceBorder, leader ? iconPaths(savedLocationIcon(saved.address)) : null, colors.ring),
-                  anchor: new google.maps.Point(SAVED_PIN.size / 2, SAVED_PIN.size / 2),
+                  anchor: new google.maps.Point(SAVED_PIN.hitSize / 2, SAVED_PIN.hitSize / 2),
                 }}
                 key={saved.id}
                 // Google Maps reports the tap before the browser's own click arrives; opening the
@@ -245,14 +260,17 @@ export function GoogleMapView({ initialCamera, lines = [], location, onCameraCha
             );
           })}
           <HeadingBeamMarker coordinate={location} />
-          {/* The rider's blue "you are here" dot, following every GPS update. */}
-          <Marker
-            clickable={false}
-            icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: colors.location, fillOpacity: 1, strokeColor: '#FFFFFF', strokeWeight: 2 }}
-            position={position}
-            title="Your location"
-            zIndex={3}
-          />
+          {/* The rider's blue "you are here" dot, following every GPS update. Drawn above the pins
+              but click-through: a Marker, even unclickable, still catches the click, which left a
+              favorite under the dot hard to open. */}
+          <OverlayViewF getPixelPositionOffset={riderDotOffset} mapPaneName={FLOAT_PANE} position={position}>
+            <View
+              accessibilityLabel="Your location"
+              pointerEvents="none"
+              style={[riderDotStyle, { backgroundColor: colors.location }]}
+              testID="web-rider-dot"
+            />
+          </OverlayViewF>
         </GoogleMap>
       ) : null}
     </View>

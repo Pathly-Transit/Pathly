@@ -9,7 +9,7 @@ import { typography } from '../theme/typography';
 import { FitText } from './FitText';
 import { Icon } from './Icon';
 import { PressableScale } from './PressableScale';
-import { savedLocationIcon, savedPlaceLines } from './SavedPlacesStrip';
+import { savedLocationIcon, savedPlaceLines } from './FavoritesStrip';
 import { radii } from '../theme/shape';
 
 type SavedLocationCardProps = {

@@ -9,7 +9,7 @@ import { SheetPanel } from './SheetPanel';
 import { Icon } from './Icon';
 import { PressableScale } from './PressableScale';
 import { SavedPlaceBadge } from './SavedPlaceBadge';
-import { savedLocationIcon, savedPlaceLines } from './SavedPlacesStrip';
+import { savedLocationIcon, savedPlaceLines } from './FavoritesStrip';
 import { radii } from '../theme/shape';
 
 type SavedPlaceDetailsSheetProps = {

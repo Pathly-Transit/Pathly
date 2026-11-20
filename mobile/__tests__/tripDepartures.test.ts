@@ -1,4 +1,4 @@
-import { savedPlaceIcon } from '../src/components/SavedPlacesStrip';
+import { savedPlaceIcon } from '../src/components/FavoritesStrip';
 import { stopRevealZoom, zoomForRegion } from '../src/data/stopDeclutter';
 import { viaRevealZooms, type TripMapStop } from '../src/data/tripMap';
 import { legDepartureOptions, quickDepartureOptions, retimeItinerary } from '../src/data/tripDepartures';

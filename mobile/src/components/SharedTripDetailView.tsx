@@ -36,6 +36,8 @@ export type TripDetailWalk = { minutes: number; distance: string; toName: string
 
 /** A stop the leg passes without the rider getting off. */
 export type TripDetailStop = { name: string; time: string; point: { lat: number; lng: number } };
+/** Where to go into or out of a station ("Exit by the stair at the NE corner"), shown on the map when pressed. */
+export type TripDetailEntrance = { text: string; point: { lat: number; lng: number } };
 
 /** One departure in a leg's departure box. `key` identifies it to `onSelectDeparture`. */
 export type TripDetailDeparture = { key: string; time: string; arriveTime: string; selected: boolean; reachable: boolean };
@@ -76,6 +78,9 @@ export type TripDetailLeg = {
   live?: boolean;
   /** The line's service alerts (delays, detours, planned work), shown under the ride. */
   alerts?: readonly ServiceAlert[];
+  /** The way into the boarding station and out of the alighting one, for subway and PATH (planned trips). */
+  enter?: TripDetailEntrance;
+  exit?: TripDetailEntrance;
 };
 
 export type TripDetailModel = {
@@ -177,6 +182,28 @@ function Rail({ color, dot, from = true, to = true }: { color: string; dot?: 'te
       {to ? <View style={[styles.railLine, styles.railBottom, { backgroundColor: color }]} /> : null}
       {dot === 'terminal' ? <View style={[styles.segmentDot, { borderColor: color }]} /> : null}
       {dot === 'via' ? <View style={[styles.viaDot, { backgroundColor: color }]} /> : null}
+    </View>
+  );
+}
+
+/** A way into or out of a station, under its stop: pressed, the map shows it. */
+function EntranceRow({ color, entrance, onFocusStop, rail, testID }: { color: string; entrance: TripDetailEntrance; onFocusStop?: (stop: TripDetailStop) => void; rail: ReactNode; testID: string }) {
+  const styles = useThemedStyles(createStyles);
+  return (
+    <View style={styles.timelineRow}>
+      {rail}
+      <PressableScale
+        accessibilityHint={onFocusStop ? 'Shows it on the map' : undefined}
+        accessibilityLabel={entrance.text}
+        accessibilityRole={onFocusStop ? 'button' : undefined}
+        disabled={!onFocusStop}
+        onPress={() => onFocusStop?.({ name: entrance.text, time: '', point: entrance.point })}
+        style={styles.entranceRow}
+        testID={testID}
+      >
+        <View style={[styles.entranceMark, { backgroundColor: color }]}><Icon color="#FFFFFF" name="arrowRight" size={11} /></View>
+        <Text style={styles.entranceText}>{entrance.text}</Text>
+      </PressableScale>
     </View>
   );
 }
@@ -660,6 +687,7 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
                     <Rail color={tint(leg.color)} dot="terminal" from={false} />
                     <View style={styles.stopRow}><Text style={styles.stopName}>{leg.startName}</Text><View style={styles.stopTimeLive}><Text style={styles.stopTime}>{leg.startTime}</Text>{leg.live ? <LiveSignal color={colors.green} style={styles.stopTimeSignal} /> : null}</View></View>
                   </View>
+                  {leg.enter ? <EntranceRow color={tint(leg.color)} entrance={leg.enter} onFocusStop={onFocusStop} rail={<Rail color={tint(leg.color)} />} testID={`${testPrefix}-enter-${index}`} /> : null}
                   {stops ? (
                     <>
                       <View style={styles.timelineRow}>
@@ -771,6 +799,7 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
                       <View style={styles.stopRow}><Text style={styles.stopName}>{leg.endName}</Text><Text style={styles.stopTime}>{leg.endTime}</Text></View>
                     </View>
                   )}
+                  {leg.exit ? <EntranceRow color={tint(leg.color)} entrance={leg.exit} onFocusStop={onFocusStop} rail={<Rail color={tint(leg.color)} from={false} to={false} />} testID={`${testPrefix}-exit-${index}`} /> : null}
                 </View>
               </View>
             </View>
@@ -810,6 +839,9 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
 const createStyles = (colors: Palette) => StyleSheet.create({
   headerDirection: { marginTop: 2, color: colors.ink, ...typography.metadata, fontSize: 12 },
   timelineRow: { flexDirection: 'row', alignItems: 'stretch' },
+  entranceRow: { minWidth: 0, flex: 1, minHeight: 30, flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 10, paddingBottom: 4 },
+  entranceMark: { width: 16, height: 16, alignItems: 'center', justifyContent: 'center', borderRadius: 3 },
+  entranceText: { minWidth: 0, flex: 1, color: colors.mutedInk, ...typography.metadata, fontSize: 13 },
   rail: { width: 22, alignItems: 'center', justifyContent: 'center' },
   railLine: { position: 'absolute', left: 9, width: 4 },
   railTop: { top: 0, bottom: '50%' },

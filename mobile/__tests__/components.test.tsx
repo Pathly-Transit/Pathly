@@ -14,7 +14,7 @@ import { ScreenTransition } from '../src/theme/motion';
 import { darkColors, lightColors } from '../src/theme/colors';
 import { badgeLabel, RouteBadge, transitModeForAgency } from '../src/components/RouteBadge';
 import { RouteMap } from '../src/components/RouteMap';
-import { SavedPlacesStrip } from '../src/components/SavedPlacesStrip';
+import { FavoritesStrip } from '../src/components/FavoritesStrip';
 
 jest.mock('react-native-safe-area-context', () => mockSafeAreaContext);
 
@@ -269,30 +269,30 @@ describe('badgeLabel', () => {
   });
 });
 
-describe('SavedPlacesStrip', () => {
+describe('FavoritesStrip', () => {
   const place = (id: string, name: string) => ({ id, dateSaved: null, address: { name, streetAddress: `${id} Main St`, coordinates: [40.7, -73.9] as [number, number], type: 'Destination' as const, placeId: id } });
 
   it('lists saved places by name then address in a sideways row, and opens the tapped one', () => {
     const onSelect = jest.fn();
     const places = [place('a', 'Home'), place('b', 'Work'), place('c', 'Gym')];
-    const screen = render(<AppSettingsProvider><SavedPlacesStrip onSelect={onSelect} places={places} /></AppSettingsProvider>);
+    const screen = render(<AppSettingsProvider><FavoritesStrip onSelect={onSelect} places={places} /></AppSettingsProvider>);
     expect(screen.getByTestId('search-saved-places').props.horizontal).toBe(true);
     expect(screen.getByLabelText('Home, a Main St')).toBeTruthy();
     fireEvent.press(screen.getByTestId('search-saved-place-b'));
     expect(onSelect).toHaveBeenCalledWith(places[1]);
   });
 
-  it('shows nothing without saved places', () => {
-    const screen = render(<AppSettingsProvider><SavedPlacesStrip onSelect={jest.fn()} places={[]} /></AppSettingsProvider>);
+  it('shows nothing without favorites, not even Add', () => {
+    const screen = render(<AppSettingsProvider><FavoritesStrip onAdd={jest.fn()} onSelect={jest.fn()} places={[]} /></AppSettingsProvider>);
     expect(screen.queryByTestId('search-saved-places')).toBeNull();
   });
 
-  it('puts saved destinations before unset Home and Work shortcuts', () => {
-    const screen = render(<AppSettingsProvider><SavedPlacesStrip onAdd={jest.fn()} onSelect={jest.fn()} places={[place('gym', 'Gym')]} /></AppSettingsProvider>);
+  it('ends with Add once there are favorites, and has no Set home or Set work cards', () => {
+    const screen = render(<AppSettingsProvider><FavoritesStrip onAdd={jest.fn()} onSelect={jest.fn()} places={[place('gym', 'Gym')]} /></AppSettingsProvider>);
     const strip = screen.getByTestId('search-saved-places');
     const ids = strip.findAll((node: { props: { testID?: string } }) => typeof node.props.testID === 'string' && /^(search-saved-place-|search-set-|search-add-saved-place)/.test(node.props.testID))
       .map((node: { props: { testID?: string } }) => node.props.testID);
     const unique = [...new Set(ids)];
-    expect(unique).toEqual(['search-saved-place-gym', 'search-set-home', 'search-set-work', 'search-add-saved-place']);
+    expect(unique).toEqual(['search-saved-place-gym', 'search-add-saved-place']);
   });
 });

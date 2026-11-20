@@ -10,7 +10,7 @@ import { isServiceRunningOn, loadAgencyStaticData } from './gtfsStaticData';
  * failed fetch means nothing to show, never a failed request.
  */
 const NWS_POINTS = ['40.75,-73.98', '40.79,-73.20'] as const;
-const NWS_USER_AGENT = 'Pathly transit app (https://github.com/Transit-Clone/Pathly)';
+const NWS_USER_AGENT = 'Pathly transit app (https://github.com/Pathly-Transit/Pathly)';
 const CACHE_TTL_MS = 15 * 60 * 1000;
 const WINTER_EVENT = /winter storm|blizzard|ice storm|snow squall|winter weather|lake effect snow/i;
 

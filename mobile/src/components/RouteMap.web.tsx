@@ -6,12 +6,14 @@ import { GOOGLE_MAPS_LIBRARIES, GOOGLE_MAPS_SCRIPT_ID } from '../data/googleMaps
 import { beanAvatarSvg, type BeanAvatarConfig } from '../avatars/beanAvatar';
 import { formatAge, visibleTrains } from '../data/liveTrains';
 import { googleMapStyle } from '../data/mapStyle';
-import { approachingVehicle, ARROW_ZOOM_SLACK, directionArrowAt, focusStopIndex, metersPerPixel, middleDirectionArrowAt, riderNearStop, splitPathAtStop, withMinimumFitSpan } from '../data/routeDirection';
+import { entranceLabel, type StationEntrance } from '../data/stationEntrances';
+import { approachingVehicle, ARROW_ZOOM_SLACK, directionArrowAt, focusStopIndex, metersPerPixel, middleDirectionArrowAt, riderNearStop, snapStopsToPath, splitPathAtStop, streetWalkToDraw, walkConnectors, withMinimumFitSpan } from '../data/routeDirection';
 import { stopRevealZoom } from '../data/stopDeclutter';
 import type { RouteLiveVehicle } from '../data/transitLive';
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useNow } from '../hooks/useNow';
-import { useTheme } from '../theme/AppSettings';
+import { SELECT_MS } from '../hooks/useSelectionScale';
+import { useAppSettings, useTheme } from '../theme/AppSettings';
 import { fontFamilies } from '../theme/typography';
 import type { TransitMode } from './RouteBadge';
 import { HeadingBeamMarker } from './HeadingBeamMarker';
@@ -19,7 +21,7 @@ import { Glide } from '../hooks/useGlide';
 import { DIRECTION_ARROW_BOX, DirectionArrow } from './DirectionArrow';
 import { cameraToFit, glideMapTo } from './webMapGlide';
 
-type GeometryStop = { stopId?: string; name: string; lat: number; lon: number };
+type GeometryStop = { stopId?: string; name: string; lat: number; lon: number; entrances?: readonly StationEntrance[] };
 
 const containerStyle = { width: '100%', height: '100%' };
 // 'greedy': one-finger drag pans on touch browsers and the wheel zooms without holding Ctrl,
@@ -28,6 +30,8 @@ const baseMapOptions = { disableDefaultUI: true, keyboardShortcuts: false, gestu
 // Arbitrary point; immediately replaced by fitBounds (or the focus stop) once the map is ready.
 const FALLBACK_CENTER = { lat: 40.75, lng: -73.95 };
 const FOCUS_ZOOM = 13;
+/** A station's entrances are framed no closer than this, so its street corners still show. */
+const ENTRANCE_MAX_ZOOM = 18;
 const ROUTE_FIT_PADDING = { top: 90, right: 40, bottom: 60, left: 40 };
 // The line behind the rider's stop (already travelled in this direction) is drawn faint.
 const BEHIND_LINE_OPACITY = 0.35;
@@ -39,6 +43,8 @@ const STOP_DOT_SCALE = (LINE_WIDTH - STOP_RING) / 2;
 // The walk to the stop: a row of dots, matching TripMap.web.tsx's walking legs.
 // Walks are plain round gray dots, which read from far out over any street.
 const WALK_DOT_SCALE = 3.5;
+// The joins from the walk to the rider's and stop's dots: smaller dots, closer together.
+const CONNECTOR_DOT_SCALE = 1.75;
 
 // Vehicle marker geometry: circle at bottom-left of a larger box so the age badge can overhang its top-right.
 const VEHICLE_SIZE = 42;
@@ -48,6 +54,9 @@ const RIDER_AVATAR = 24;
 const RIDER_AVATAR_STEP = 13;
 const RIDER_AVATAR_LEFT = 30;
 const RIDER_DISC_INSET = 2;
+// The tapped vehicle, while its popup is open: this much larger, and above every other vehicle.
+const SELECTED_SCALE = 1.3;
+const SELECTED_Z_INDEX = 10;
 const vehicleBoxWidth = (riders: number) => (riders > 0 ? RIDER_AVATAR_LEFT + RIDER_AVATAR + (riders - 1) * RIDER_AVATAR_STEP : VEHICLE_BOX);
 
 /**
@@ -61,7 +70,7 @@ function vehicleIconUrl(color: string, age: string | null, avatars: readonly Bea
   const cx = r;
   const cy = VEHICLE_BOX - r;
   const badge = age
-    // Just the badge's circle: its "5s" is the marker's label (vehicleMarkerLabel), since an image
+    // Just the badge's circle: its "5s" is text laid over it (WebVehicleMarker), since an image
     // can't load the app's font and fell back to Arial.
     ? `<circle cx="${VEHICLE_BOX - 12}" cy="12" r="11" fill="${color}"/>`
     : '';
@@ -72,34 +81,114 @@ function vehicleIconUrl(color: string, age: string | null, avatars: readonly Bea
     return `<circle cx="${left + RIDER_AVATAR / 2}" cy="${RIDER_AVATAR / 2}" r="${RIDER_AVATAR / 2}" fill="#FFFFFF" filter="url(#s)"/><image x="${left + RIDER_DISC_INSET}" y="${RIDER_DISC_INSET}" width="${RIDER_AVATAR - RIDER_DISC_INSET * 2}" height="${RIDER_AVATAR - RIDER_DISC_INSET * 2}" href="data:image/svg+xml;charset=UTF-8,${encodeURIComponent(beanAvatarSvg(avatar))}"/>`;
   }).reverse().join('');
   const width = vehicleBoxWidth(avatars.length);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${VEHICLE_BOX}" viewBox="0 0 ${width} ${VEHICLE_BOX}">
+  const height = VEHICLE_BOX;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
 <defs><filter id="s" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#16324F" flood-opacity="0.45"/></filter></defs>
+<g>
 <circle cx="${cx}" cy="${cy}" r="${r - 3}" fill="#FFFFFF" filter="url(#s)"/>
 <g transform="translate(${cx - 8.4} ${cy - 10.8}) scale(1.2)">
 <rect x="0" y="0" width="14" height="14" rx="3.5" fill="${color}"/>
 <rect x="2.2" y="2.6" width="9.6" height="5" rx="1.2" fill="#FFFFFF"/>
 <circle cx="3.6" cy="11" r="1.3" fill="#FFFFFF"/><circle cx="10.4" cy="11" r="1.3" fill="#FFFFFF"/>
 <path d="M2.4 14.6 L0.6 17.6 M11.6 14.6 L13.4 17.6" stroke="${color}" stroke-width="1.8" stroke-linecap="round"/>
-</g>${badge}${riders}
+</g>${badge}${riders}</g>
 </svg>`;
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
-/** A live vehicle's marker icon (Route View and the trip map), anchored on its circle's center. */
-export function vehicleMarkerIcon(color: string, age: string | null, avatars: readonly BeanAvatarConfig[] = []): google.maps.Icon {
-  return {
-    url: vehicleIconUrl(color, age, avatars),
-    scaledSize: new google.maps.Size(vehicleBoxWidth(avatars.length), VEHICLE_BOX),
-    // Anchor on the circle's center, not the badge-inclusive box's.
-    anchor: new google.maps.Point(VEHICLE_SIZE / 2, VEHICLE_BOX - VEHICLE_SIZE / 2),
-    // The age label's center, on the badge.
-    labelOrigin: new google.maps.Point(VEHICLE_BOX - 12, 12.5),
-  };
+/**
+ * One live vehicle, gliding to each refreshed spot rather than jumping there. Picked, it grows and
+ * gains its ring (shrinking back once let go), and sits above every other vehicle.
+ *
+ * Drawn as one element, its age in the same box as its circle: a Google marker's label goes in a
+ * layer above every marker's picture, so two vehicles side by side showed one's age over the
+ * other's circle. As one element, the vehicle in front covers the one behind, age and all.
+ *
+ * The grow is the browser's own transition, so it runs without redrawing the vehicle each frame.
+ */
+export function WebVehicleMarker({ color, now, onPress, selected = false, title, vehicle, zIndex }: { color: string; now: number; onPress?: (tripId: string) => void; selected?: boolean; title: string; vehicle: RouteLiveVehicle; zIndex: number }) {
+  const { reducedMotionActive } = useAppSettings();
+  const avatars = vehicle.riders?.avatars ?? [];
+  const age = avatars.length === 0 && vehicle.updatedAt != null ? formatAge(now - vehicle.updatedAt) : null;
+  // Drawn once per refresh, not per glide frame.
+  const avatarsKey = JSON.stringify(avatars);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- avatars are keyed by their contents
+  const url = useMemo(() => vehicleIconUrl(color, age, avatars), [color, age, avatarsKey]);
+  const pad = 0;
+  const drawingWidth = vehicleBoxWidth(avatars.length);
+  const width = drawingWidth + pad * 2;
+  const height = VEHICLE_BOX + pad * 2;
+  // The circle's center, which sits on the vehicle's position.
+  const centerX = pad + VEHICLE_SIZE / 2;
+  const centerY = pad + VEHICLE_BOX - VEHICLE_SIZE / 2;
+  const offset = useCallback(() => ({ x: -centerX, y: -centerY }), [centerX, centerY]);
+  const transition = reducedMotionActive ? 'none' : `transform ${SELECT_MS}ms ease-out`;
+  return (
+    <Glide lat={vehicle.lat} lon={vehicle.lon}>
+      {(point) => (
+        <OverlayViewF getPixelPositionOffset={offset} mapPaneName={OVERLAY_MOUSE_TARGET} position={{ lat: point.lat, lng: point.lon }} zIndex={selected ? SELECTED_Z_INDEX : zIndex}>
+          <div
+            aria-label={onPress ? `${title}, details` : title}
+            data-testid={`route-vehicle-${vehicle.tripId}`}
+            onClick={onPress ? (event) => {
+              event.stopPropagation();
+              onPress(vehicle.tripId);
+            } : undefined}
+            // Google's map listens below React's root: without this a tap would also reach the map.
+            ref={(element) => {
+              if (element && onPress) google.maps.OverlayView.preventMapHitsAndGesturesFrom(element);
+            }}
+            role={onPress ? 'button' : 'img'}
+            style={{
+              position: 'relative',
+              width,
+              height,
+              cursor: onPress ? 'pointer' : 'default',
+              transform: `scale(${selected ? SELECTED_SCALE : 1})`,
+              transformOrigin: `${centerX}px ${centerY}px`,
+              transition,
+              willChange: 'transform',
+              // The picture's empty corners don't take taps meant for the map or a stop under them.
+              pointerEvents: 'none',
+            }}
+            title={title}
+          >
+            <img alt="" draggable={false} height={VEHICLE_BOX} src={url} style={{ position: 'absolute', left: pad, top: pad, display: 'block', pointerEvents: 'none' }} width={drawingWidth} />
+            {/* Just the circle (and the age badge) take taps. */}
+            <span
+              style={{ position: 'absolute', left: centerX - VEHICLE_SIZE / 2, top: centerY - VEHICLE_SIZE / 2, width: VEHICLE_SIZE, height: VEHICLE_SIZE, borderRadius: VEHICLE_SIZE / 2, pointerEvents: 'auto' }}
+            />
+            {age ? (
+              <span
+                style={{
+                  position: 'absolute',
+                  left: pad + VEHICLE_BOX - 24,
+                  top: pad + 1,
+                  width: 24,
+                  height: 22,
+                  lineHeight: '22px',
+                  textAlign: 'center',
+                  color: '#FFFFFF',
+                  fontFamily: `${fontFamilies.extraBold}, Nunito, sans-serif`,
+                  fontSize: 9,
+                  fontWeight: 800,
+                  pointerEvents: 'auto',
+                }}
+              >
+                {age}
+              </span>
+            ) : null}
+          </div>
+        </OverlayViewF>
+      )}
+    </Glide>
+  );
 }
 
-/** The vehicle's update age ("5s", "1m") on its badge, in the app's font. */
-export function vehicleMarkerLabel(age: string | null): google.maps.MarkerLabel | undefined {
-  return age ? { text: age, color: '#FFFFFF', fontFamily: fontFamilies.extraBold, fontSize: '9px', fontWeight: '800' } : undefined;
+/** A square in the line's color with a white arrow, for a station's way in or out. */
+export function entranceIcon(color: string): google.maps.Icon {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><rect x="1" y="1" width="16" height="16" rx="3" fill="${color}" stroke="#FFFFFF" stroke-width="1.5"/><path d="M4.5 9H13M10 5.8 13.2 9 10 12.2" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  return { url: `data:image/svg+xml,${encodeURIComponent(svg)}`, anchor: new google.maps.Point(9, 9) };
 }
 
 /** Places the stop label's bottom-center just above the dot. */
@@ -117,12 +206,16 @@ type RouteMapProps = {
   directionId?: number;
   /** Stop to open zoomed on and emphasize (the rider's nearest), matched by stopId. */
   focusStopId?: string;
+  /** A station whose entrances to mark and zoom to, from its stop row; `key` repeats the request. */
+  entranceFocus?: { stopId: string; key: number };
   /** Matches the rider's stop by name when its id isn't in `stops` (see focusStopIndex). */
   focusStopName?: string;
   /** Vehicle label (train vs bus). */
   mode?: TransitMode;
   /** Tapping a live vehicle opens its details. */
   onVehiclePress?: (tripId: string) => void;
+  /** The vehicle whose popup is open: drawn larger, above every other vehicle. */
+  selectedVehicleId?: string | null;
   /** Tapping a stop's name (shown once its dot is tapped) opens the line at that stop. */
   onOpenStop?: (stop: GeometryStop) => void;
   /** Called when the rider drags the map, so the location button can drop its selected state. */
@@ -147,7 +240,7 @@ type RouteMapProps = {
 /** Real route map: actual stop positions, the real line, and live vehicles — for any route with a live feed. */
 const arrowOffset = () => ({ x: -DIRECTION_ARROW_BOX / 2, y: -DIRECTION_ARROW_BOX / 2 });
 
-export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreFrom, focusStopId, focusStopName, mode = 'rail', onOpenStop, onUserPan, onVehiclePress, path, showRouteRequest = 0, stops, testID = 'route-map', userLocation, vehicles, walkPath }: RouteMapProps) {
+export function RouteMap({ centerOnUserRequest = 0, color, directionId, entranceFocus, exploreFrom, focusStopId, focusStopName, mode = 'rail', onOpenStop, onUserPan, onVehiclePress, path, selectedVehicleId = null, showRouteRequest = 0, stops, testID = 'route-map', userLocation, vehicles, walkPath }: RouteMapProps) {
   // Where the walk starts: the purple dot when exploring, else the rider.
   const walkOrigin = exploreFrom ?? userLocation;
   const { isLoaded } = useJsApiLoader({
@@ -173,6 +266,13 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
   const shownVehicles = visibleTrains(vehicles, directionId, now);
   const vehicleLabel = mode === 'bus' ? 'Bus' : 'Train';
   const focusStop = stops[focusStopIndex(stops, focusStopId, focusStopName)];
+  // Dots sit on the drawn line, not at the stop's own (platform) coordinates beside it.
+  const dotSpots = useMemo(() => snapStopsToPath(path, stops), [path, stops]);
+  const dotSpot = (stop: GeometryStop) => {
+    const spot = dotSpots[stops.indexOf(stop)];
+    return { lat: spot?.lat ?? stop.lat, lng: spot?.lon ?? stop.lon };
+  };
+  const focusDot = focusStop ? dotSpots[stops.indexOf(focusStop)] : undefined;
 
   // Split at the rider's stop: faint behind it, full strength ahead.
   const line = useMemo(() => {
@@ -205,6 +305,19 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
   // The rider, when they're near their stop: framed with it so they see the walk there.
   // The purple dot is always framed: its walk and stop are the point of the page.
   const nearRider = walkOrigin && focusStop && (exploreFrom != null || riderNearStop(walkOrigin, focusStop)) ? { lat: walkOrigin.latitude, lng: walkOrigin.longitude } : null;
+  // Thin dotted joins from the rider's dot and to the stop's dot, where the street walk stops short
+  // of them (or straight between them with no walk, for a rider near enough to walk).
+  // No street walk once the rider is at the stop: just the thin join between the dots.
+  const streetWalk = useMemo(
+    () => streetWalkToDraw(walkPath, walkOrigin ? { lat: walkOrigin.latitude, lon: walkOrigin.longitude } : null, focusStop),
+    [focusStop, walkOrigin?.latitude, walkOrigin?.longitude, walkPath],
+  );
+  const connectors = useMemo(() => {
+    const from = streetWalk ? walkOrigin : nearRider ? { latitude: nearRider.lat, longitude: nearRider.lng } : null;
+    if (!from) return [];
+    return walkConnectors(streetWalk, { lat: from.latitude, lon: from.longitude }, focusDot)
+      .map((join) => join.map((point) => ({ lat: point.lat, lng: point.lon })));
+  }, [focusDot?.lat, focusDot?.lon, nearRider?.lat, nearRider?.lng, walkOrigin?.latitude, walkOrigin?.longitude, streetWalk]);
   const frameStop = (target: google.maps.Map, stop: GeometryStop, extra: readonly google.maps.LatLngLiteral[]) => {
     // Never closer than ~1.3 km, so a rider right by the stop doesn't open the map at street level.
     const points = extra.length > 0 ? withMinimumFitSpan([{ lat: stop.lat, lng: stop.lon }, ...extra]) : [{ lat: stop.lat, lng: stop.lon }];
@@ -224,6 +337,22 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
     target.fitBounds(bounds, ROUTE_FIT_PADDING);
   };
   const glideCancel = useRef<(() => void) | null>(null);
+
+  // A stop row's entrances: marked on the map, which zooms in to frame them with the station.
+  const entranceStop = entranceFocus ? stops.find((stop) => stop.stopId === entranceFocus.stopId) : undefined;
+  const entrances = entranceStop?.entrances ?? [];
+  const frameEntrances = (target: google.maps.Map, stop: GeometryStop) => {
+    const points = [{ lat: stop.lat, lng: stop.lon }, ...entrances.map((entrance) => ({ lat: entrance.lat, lng: entrance.lon }))];
+    const camera = cameraToFit(target, points, ROUTE_FIT_PADDING, ENTRANCE_MAX_ZOOM);
+    glideCancel.current?.();
+    if (camera) {
+      glideCancel.current = glideMapTo(target, camera.centerAt, camera.zoom);
+      return;
+    }
+    const bounds = new google.maps.LatLngBounds();
+    for (const point of points) bounds.extend(point);
+    target.fitBounds(bounds, ROUTE_FIT_PADDING);
+  };
 
   // Opens on the rider's nearest stop when known (with the rider, if they're close by), otherwise
   // fits every stop with some breathing room.
@@ -297,6 +426,14 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the request only; the line is read at request time
   }, [showRouteRequest]);
 
+  useEffect(() => {
+    if (!map || !entranceStop || entrances.length === 0) return;
+    followRider.current = false;
+    riderMovedMap.current = true; // the nearest-stop focus must not pull the map back
+    frameEntrances(map, entranceStop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the request; the stop is read then
+  }, [map, entranceFocus?.key]);
+
   return (
     <View style={StyleSheet.absoluteFill} testID={testID}>
       {isLoaded ? (
@@ -317,7 +454,19 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
         >
           {line.behind.length > 1 ? <Polyline options={behindPolylineOptions} path={line.behind} /> : null}
           <Polyline options={polylineOptions} path={line.ahead} />
-          {walkPath && walkPath.length > 1 ? (
+          {connectors.map((join, index) => (
+            <Polyline
+              key={`connector-${index}`}
+              options={{
+                strokeOpacity: 0,
+                icons: [{ icon: { path: google.maps.SymbolPath.CIRCLE, scale: CONNECTOR_DOT_SCALE, fillColor: colors.mutedInk, fillOpacity: 1, strokeWeight: 0 }, offset: '0', repeat: '7px' }],
+                zIndex: 2,
+                clickable: false,
+              }}
+              path={join}
+            />
+          ))}
+          {streetWalk ? (
             <Polyline
               options={{
                 strokeOpacity: 0,
@@ -325,7 +474,7 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
                 zIndex: 2,
                 clickable: false,
               }}
-              path={walkPath.map((point) => ({ lat: point.lat, lng: point.lon }))}
+              path={streetWalk.map((point) => ({ lat: point.lat, lng: point.lon }))}
             />
           ) : null}
           {stops.map((stop, stopIndex) => {
@@ -342,7 +491,7 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
                   ? { path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#FFFFFF', fillOpacity: 1, strokeColor: color, strokeWeight: 4 }
                   : { path: google.maps.SymbolPath.CIRCLE, scale: STOP_DOT_SCALE, fillColor: '#FFFFFF', fillOpacity: 1, strokeColor: color, strokeOpacity: passed ? BEHIND_LINE_OPACITY : 1, strokeWeight: STOP_RING }}
                 onClick={() => setSelectedStop(stop)}
-                position={{ lat: stop.lat, lng: stop.lon }}
+                position={dotSpot(stop)}
                 title={stop.name}
                 zIndex={focused ? 1 : 0}
               />
@@ -350,7 +499,7 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
           })}
           {selectedStop ? (
             // A compact label instead of Google's InfoWindow, whose close button overlapped the name.
-            <OverlayViewF getPixelPositionOffset={labelOffset} mapPaneName={OVERLAY_MOUSE_TARGET} position={{ lat: selectedStop.lat, lng: selectedStop.lon }}>
+            <OverlayViewF getPixelPositionOffset={labelOffset} mapPaneName={OVERLAY_MOUSE_TARGET} position={dotSpot(selectedStop)}>
               <div
                 aria-label={onOpenStop ? `Open ${selectedStop.name}` : undefined}
                 onClick={onOpenStop ? (event) => {
@@ -381,6 +530,15 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
               </div>
             </OverlayViewF>
           ) : null}
+          {entrances.map((entrance) => (
+            <Marker
+              key={`entrance-${entrance.lat},${entrance.lon}`}
+              icon={entranceIcon(color)}
+              position={{ lat: entrance.lat, lng: entrance.lon }}
+              title={entranceLabel(entrance)}
+              zIndex={2}
+            />
+          ))}
           {exploreFrom ? (
             <Marker
               clickable={false}
@@ -409,19 +567,9 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
               </View>
             </OverlayViewF>
           ) : null}
-          {shownVehicles.map((vehicle) => {
-            // Built once per refresh, not per glide frame, so the marker never redraws its icon mid-slide.
-            const avatars = vehicle.riders?.avatars ?? [];
-            const age = avatars.length === 0 && vehicle.updatedAt != null ? formatAge(now - vehicle.updatedAt) : null;
-            const icon = vehicleMarkerIcon(color, age, avatars);
-            const label = vehicleMarkerLabel(age);
-            // Each vehicle glides to its refreshed spot rather than jumping there.
-            return (
-              <Glide key={vehicle.tripId} lat={vehicle.lat} lon={vehicle.lon}>
-                {(point) => <Marker icon={icon} label={label} onClick={onVehiclePress ? () => onVehiclePress(vehicle.tripId) : undefined} position={{ lat: point.lat, lng: point.lon }} title={vehicleLabel} zIndex={2} />}
-              </Glide>
-            );
-          })}
+          {shownVehicles.map((vehicle) => (
+            <WebVehicleMarker key={vehicle.tripId} color={color} now={now} onPress={onVehiclePress} selected={vehicle.tripId === selectedVehicleId} title={vehicleLabel} vehicle={vehicle} zIndex={2} />
+          ))}
         </GoogleMap>
       ) : null}
     </View>

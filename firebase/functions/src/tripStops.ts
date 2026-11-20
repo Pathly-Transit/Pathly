@@ -1,5 +1,6 @@
 import { haversineMeters } from './geo';
 import type { AgencyId } from './gtfsAgencies';
+import { stationEntrances } from './stationEntrances';
 import {
   gtfsTimeToSeconds,
   isAgencyAvailable,
@@ -374,6 +375,11 @@ export async function addTripStops<T extends { steps: { kind: string }[] }>(itin
         liveTripRefs.set(step, result.live);
         const { agencyId, routeId, boardStopId, alightStopId, directionId } = result.live;
         step.liveRoute = directionId === undefined ? { agencyId, routeId, boardStopId, alightStopId } : { agencyId, routeId, boardStopId, alightStopId, directionId };
+        // Where to go in at the boarding station and out at the alighting one.
+        const boardEntrances = stationEntrances(agencyId, boardStopId);
+        const alightEntrances = stationEntrances(agencyId, alightStopId);
+        if (boardEntrances.length > 0) step.boardEntrances = boardEntrances;
+        if (alightEntrances.length > 0) step.alightEntrances = alightEntrances;
       }
     }
   }));

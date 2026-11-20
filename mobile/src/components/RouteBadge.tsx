@@ -105,29 +105,13 @@ type RouteBadgeProps = {
 const [, , PATH_MARK_WIDTH, PATH_MARK_HEIGHT] = (/viewBox="([^"]+)"/.exec(PATH_MARK)?.[1] ?? '0 0 108 75').split(' ').map(Number) as [number, number, number, number];
 
 /**
- * PATH's lines that join two others' tracks share a color with one of them in PATH's feed (Journal
- * Square - 33rd Street via Hoboken is as orange as Journal Square - 33rd Street; World Trade Center
- * - 33rd Street as green as Hoboken - WTC). Their P's lower arrow takes the 33rd Street line's
- * blue, so no two lines look alike. Keyed by line code and by route_id.
+ * PATH's P (the two arrows of its logo) `height` tall, all in `color`. A night or weekend line
+ * that shares another's color (JSQ-HOB-33 is as orange as JSQ-33) is told apart by where it goes
+ * ("33rd Street via Hoboken"), the way its signs and riders tell it apart, not by its P.
  */
-const PATH_SECOND_COLORS: Readonly<Record<string, string>> = {
-  'JSQ-HOB-33': '#4D92FB',
-  1024: '#4D92FB',
-  'WTC-33': '#4D92FB',
-  77285: '#4D92FB',
-};
-
-/**
- * PATH's P (the two arrows of its logo) `height` tall, in `color`. With `line` (its code or
- * route_id), a line that joins two others gets its second color on the lower arrow.
- */
-export function PathMark({ color, height, line }: { color: string; height: number; line?: string }) {
-  const tint = useRouteColor();
+export function PathMark({ color, height }: { color: string; height: number }) {
   const width = Math.round((height * PATH_MARK_WIDTH) / PATH_MARK_HEIGHT);
-  const second = line ? PATH_SECOND_COLORS[line] : undefined;
-  let arrow = 0;
-  const xml = PATH_MARK.replace(/#0095D3/g, () => (arrow++ === 0 || !second ? color : tint(second)));
-  return <SvgXml height={height} width={width} xml={xml} />;
+  return <SvgXml height={height} width={width} xml={PATH_MARK.replace(/#0095D3/g, color)} />;
 }
 
 /** Whether a `#RRGGBB` color is light enough that white text on it is hard to read. */
@@ -163,12 +147,13 @@ export function RouteBadge({
     </View>
   ) : null;
 
-  // PATH's lines are signed with its P, in the line's color; the code (NWK-WTC) is read aloud.
+  // PATH's lines are signed with its P, in the line's color. Riders name a PATH train by where it
+  // goes, which the text beside the badge says, so the badge reads only "PATH train".
   if (isPath(agency)) {
     const width = Math.round((metrics.height * PATH_MARK_WIDTH) / PATH_MARK_HEIGHT);
     return (
-      <View accessibilityLabel={`${shortName} PATH train${alertLabel}`} accessible={true} style={[styles.badge, { width, height: metrics.height }, style]} testID={testID}>
-        <PathMark color={routeColor} height={metrics.height} line={shortName} />
+      <View accessibilityLabel={`PATH train${alertLabel}`} accessible={true} style={[styles.badge, { width, height: metrics.height }, style]} testID={testID}>
+        <PathMark color={routeColor} height={metrics.height} />
         {alertDot}
       </View>
     );

@@ -127,3 +127,18 @@ test('the callable looks up station names and validates them', async () => {
   await assert.rejects(call({ stations: [{ name: 'Jamaica', kind: 'tram' }] }), { code: 'invalid-argument' });
   await assert.rejects(call({ stations: Array.from({ length: 9 }, () => ({ name: 'Jamaica', kind: 'rail' })) }), { code: 'invalid-argument' });
 });
+
+test("a PATH station isn't merged with the subway station of the same name", async () => {
+  const WTC = { lat: 40.7116, lng: -74.0117 };
+  const [pathWtc, plainWtc] = await lookupStations([
+    { name: 'World Trade Center (estação PATH)', kind: 'subway' },
+    { name: 'World Trade Center', kind: 'subway' },
+  ], WTC);
+  assert.equal(pathWtc.agencyLabel, 'PATH');
+  assert.equal(pathWtc.name, 'World Trade Center');
+  assert.ok(pathWtc.routes.length > 0);
+  assert.ok(pathWtc.routes.every((route) => /^[A-Z0-9]+(-[A-Z0-9]+)+$/.test(route.shortName)), 'only PATH lines');
+  // Whichever agency's station is nearest, its row carries only that agency's lines.
+  const pathLine = (route) => /-/.test(route.shortName);
+  assert.ok(plainWtc.routes.every(pathLine) || !plainWtc.routes.some(pathLine));
+});

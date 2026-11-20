@@ -1,4 +1,4 @@
-import { approachingVehicle, bearingDegrees, directionArrowAt, MIN_FIT_SPAN, splitPathAtStop, withAlpha, withMinimumFitSpan } from '../src/data/routeDirection';
+import { approachingVehicle, bearingDegrees, directionArrowAt, MIN_FIT_SPAN, snapStopsToPath, splitPathAtStop, streetWalkToDraw, walkConnectors, withAlpha, withMinimumFitSpan } from '../src/data/routeDirection';
 
 // A straight east-west line along 40.9°N: 21 points about 84 m apart.
 const line = Array.from({ length: 21 }, (_, index) => ({ lat: 40.9, lon: -73.2 + index * 0.001 }));
@@ -103,5 +103,64 @@ describe('framing a stop with a rider right beside it', () => {
   it('leaves a frame that is already wide enough alone', () => {
     const farRider = { lat: 40.77, lng: -73.96 };
     expect(withMinimumFitSpan([stop, farRider])).toEqual([stop, farRider]);
+  });
+});
+
+describe('snapStopsToPath', () => {
+  // An east-west line; stops sit ~20 m north of it, like platforms beside the track.
+  const line = [{ lat: 40.75, lon: -73.99 }, { lat: 40.75, lon: -73.97 }];
+  const beside = (lon: number) => ({ name: 'stop', lat: 40.75018, lon });
+
+  it('moves stop dots onto the drawn line', () => {
+    const [first, second] = snapStopsToPath(line, [beside(-73.985), beside(-73.975)]);
+    expect(first).toEqual({ lat: 40.75, lon: -73.985 });
+    expect(second!.lat).toBeCloseTo(40.75, 10);
+    expect(second!.lon).toBeCloseTo(-73.975, 10);
+  });
+
+  it('keeps a stop far from the line at its own spot', () => {
+    const far = { name: 'far', lat: 40.76, lon: -73.98 };
+    expect(snapStopsToPath(line, [far])).toEqual([{ lat: 40.76, lon: -73.98 }]);
+  });
+
+  it('leaves stops alone with no line to snap to', () => {
+    expect(snapStopsToPath(undefined, [beside(-73.98)])).toEqual([{ lat: 40.75018, lon: -73.98 }]);
+  });
+});
+
+describe('walkConnectors', () => {
+  const rider = { lat: 40.7500, lon: -73.9900 };
+  const stop = { lat: 40.7520, lon: -73.9850 };
+  const walk = [{ lat: 40.7502, lon: -73.9898 }, { lat: 40.7518, lon: -73.9852 }];
+
+  it('joins the walk to the rider and the stop where it stops short', () => {
+    expect(walkConnectors(walk, rider, stop)).toEqual([[rider, walk[0]], [walk[1], stop]]);
+  });
+
+  it('skips a join when the walk already reaches the dot', () => {
+    expect(walkConnectors([rider, stop], rider, stop)).toEqual([]);
+  });
+
+  it('runs straight from the rider to the stop with no walk', () => {
+    expect(walkConnectors(undefined, rider, stop)).toEqual([[rider, stop]]);
+    expect(walkConnectors(undefined, null, stop)).toEqual([]);
+  });
+});
+
+describe('streetWalkToDraw', () => {
+  const stop = { lat: 40.7115, lon: -74.0110 };
+  const walk = [{ lat: 40.7116, lon: -74.0105 }, { lat: 40.7114, lon: -74.0108 }];
+
+  it('drops the street walk once the rider is at the stop', () => {
+    expect(streetWalkToDraw(walk, { lat: 40.7116, lon: -74.0108 }, stop)).toBeNull();
+  });
+
+  it('keeps a real walk for a rider farther off', () => {
+    const longWalk = [{ lat: 40.7150, lon: -74.0050 }, { lat: 40.7130, lon: -74.0080 }, { lat: 40.7116, lon: -74.0108 }];
+    expect(streetWalkToDraw(longWalk, { lat: 40.7150, lon: -74.0050 }, stop)).toBe(longWalk);
+  });
+
+  it('drops a walk too short to be more than a jog along the street', () => {
+    expect(streetWalkToDraw(walk, { lat: 40.7150, lon: -74.0050 }, stop)).toBeNull();
   });
 });

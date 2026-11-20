@@ -1,3 +1,4 @@
+import { isPathAgency, pathHeadsign } from './pathLines';
 import type { Itinerary, LatLng, TransitStep, TripStep } from './tripPlanning';
 
 export type NavigationPhase = 'walking' | 'waiting-to-board' | 'riding' | 'transferring' | 'arrived';
@@ -540,8 +541,9 @@ export function normalizeItinerary(itinerary: Itinerary, options: NormalizeItine
       startCheckpointOrdinal: board.ordinal,
       endCheckpointOrdinal: end.ordinal,
       transitLegIndex: leg,
-      line: { ...step.line },
-      headsign: step.headsign,
+      // PATH is spoken of by where it goes ("Ride PATH toward 33rd Street"), not by its line code.
+      line: isPathAgency(step.agency.name) ? { ...step.line, shortName: 'PATH' } : { ...step.line },
+      headsign: step.headsign && isPathAgency(step.agency.name) ? pathHeadsign(step.headsign, step.line) : step.headsign,
       departureTime: step.from.time,
       arrivalTime: step.to.time,
       fromName: step.from.name,

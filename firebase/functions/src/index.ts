@@ -56,6 +56,7 @@ import {
 import { walkingPath } from './walkingGraph';
 import { addLiveStatus } from './tripLive';
 import { addTripStops, matchTripStops } from './tripStops';
+import { withStopEntrances } from './stationEntrances';
 
 const CALLABLE_RUNTIME_SERVICE_ACCOUNT = 'pathly-callable-runtime@pathly-b7f0f.iam.gserviceaccount.com';
 const GTFS_WRITER_SERVICE_ACCOUNT = 'pathly-gtfs-writer@pathly-b7f0f.iam.gserviceaccount.com';
@@ -615,7 +616,8 @@ export const getRouteGeometry = onCall<RouteGeometryRequest>(protectedCallableOp
 
   const geometry = await getRouteGeometryDiscovery(agencyId, routeId, directionId);
   if (!geometry) throw new HttpsError('not-found', `No scheduled trips found for ${agencyId} route "${routeId}" direction ${directionId}`);
-  return geometry;
+  // Each station's ways in and out, for the stop list (stationEntrances.ts).
+  return { ...geometry, stops: withStopEntrances(agencyId, geometry.stops) };
 });
 
 /**
@@ -942,6 +944,8 @@ export const geocodeAddress = onCall<GeocodeRequest, Promise<GeocodeResult>>(
 
     const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
     url.searchParams.set('address', address);
+    // Pathly is in English; without this Google may answer in another language.
+    url.searchParams.set('language', 'en');
     url.searchParams.set('key', googleMapsApiKey.value());
 
     const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
@@ -975,6 +979,7 @@ export const reverseGeocode = onCall<ReverseGeocodeRequest>(
     const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
     url.searchParams.set('latlng', `${lat},${lon}`);
     url.searchParams.set('result_type', 'street_address|premise|route|intersection');
+    url.searchParams.set('language', 'en');
     url.searchParams.set('key', googleMapsApiKey.value());
     const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     const body = (await response.json()) as ReverseGeocodingApiResponse;

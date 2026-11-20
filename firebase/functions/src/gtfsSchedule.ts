@@ -99,11 +99,15 @@ export async function getStopPredictions(
   const config = agencyConfig(agencyId);
   const now = Date.now();
   const { tripsById, stopsById } = loadAgencyStaticData(agencyId);
-  const liveHeadsign = (trip: GtfsTripStatus): string | null => {
+  // The last stop a feed lists for a trip names where it ends, unless that is the asked-for stop
+  // itself: PATH's feed lists each train at one station only, so at World Trade Center every
+  // train, Hoboken-bound ones too, would read "To World Trade Center".
+  const liveHeadsign = (trip: GtfsTripStatus, atStopId: string): string | null => {
     const timetable = tripsById.get(trip.tripId)?.headsign;
     if (timetable) return timetable;
     const lastStopId = trip.stops.at(-1)?.stopId;
-    return (lastStopId && stopsById.get(lastStopId)?.name) || null;
+    if (!lastStopId || lastStopId === atStopId) return null;
+    return stopsById.get(lastStopId)?.name || null;
   };
   const direction1Live: LiveEntry[] = [];
   const direction0Live: LiveEntry[] = [];
@@ -117,14 +121,14 @@ export async function getStopPredictions(
       if (minutes < 0) continue;
       // Terminals can serve both directions from one stop_id; the trip's own direction decides then.
       const isDirection1 = direction1StopId === direction0StopId ? trip.directionId === 1 : stop.stopId === direction1StopId;
-      (isDirection1 ? direction1Live : direction0Live).push({ tripId: trip.tripId, minutes, peakOffpeak: trip.peakOffpeak, delayMinutes: feedDelayMinutes(stop.delaySeconds), headsign: liveHeadsign(trip), stopId: stop.stopId, atMs });
+      (isDirection1 ? direction1Live : direction0Live).push({ tripId: trip.tripId, minutes, peakOffpeak: trip.peakOffpeak, delayMinutes: feedDelayMinutes(stop.delaySeconds), headsign: liveHeadsign(trip, stop.stopId), stopId: stop.stopId, atMs });
     } else {
       const stop = trip.stops.find((candidate) => candidate.stopId === direction1StopId);
       if (!stop?.scheduledTime) continue;
       const atMs = new Date(stop.scheduledTime).getTime();
       const minutes = Math.round((atMs - now) / 60_000);
       if (minutes < 0) continue;
-      (trip.directionId === 1 ? direction1Live : direction0Live).push({ tripId: trip.tripId, minutes, peakOffpeak: trip.peakOffpeak, delayMinutes: feedDelayMinutes(stop.delaySeconds), headsign: liveHeadsign(trip), stopId: stop.stopId, atMs });
+      (trip.directionId === 1 ? direction1Live : direction0Live).push({ tripId: trip.tripId, minutes, peakOffpeak: trip.peakOffpeak, delayMinutes: feedDelayMinutes(stop.delaySeconds), headsign: liveHeadsign(trip, stop.stopId), stopId: stop.stopId, atMs });
     }
   }
 

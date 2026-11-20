@@ -1,10 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, fireEvent, render, renderHook, within } from '@testing-library/react-native';
-import { StyleSheet } from 'react-native';
+import { Dimensions, ScrollView, StyleSheet } from 'react-native';
 import mockSafeAreaContext from 'react-native-safe-area-context/jest/mock';
 
 import { BEAN_EYES, BEAN_HAIR, BEAN_MOUTHS, BEAN_OUTFITS, beanAvatarSvg, bodyRect, DEFAULT_BEAN_AVATAR, normalizeBeanAvatar } from '../src/avatars/beanAvatar';
 import { DetailMapPage } from '../src/components/DetailMapPage';
+import { mapPageMapHeight } from '../src/components/mapSheetLayout';
 import { LineLayersSheet } from '../src/components/LineLayersSheet';
 import { SETTINGS_LINES } from '../src/components/LivelyPathling';
 import { CHATS } from '../src/components/PathlingChat';
@@ -258,6 +259,35 @@ describe('Map buttons placement (DetailMapPage)', () => {
   });
 });
 
+describe('Sheet sized to its content (DetailMapPage)', () => {
+  const page = (fitContent: boolean) => render(
+    <AppSettingsProvider>
+      <DetailMapPage contentTestID="c" controls={null} fitContent={fitContent} handle={{ accessibilityHint: 'h', accessibilityLabel: 'Handle', testID: 'grip' }} map={null} mapHeight={300} mapTestID="m" scrollTestID="s" testID="t">{null}</DetailMapPage>
+    </AppSettingsProvider>,
+  );
+
+  it('fills the screen below the map instead of a whole extra screen', () => {
+    const { height } = Dimensions.get('window');
+    expect(StyleSheet.flatten(page(true).getByTestId('c').props.style).minHeight).toBe(height - 300);
+    expect(StyleSheet.flatten(page(false).getByTestId('c').props.style).minHeight).toBe(height);
+  });
+
+  it('expands from the handle only as far as the content scrolls', () => {
+    const screen = page(true);
+    const scroller = screen.UNSAFE_getByType(ScrollView).instance as { scrollTo: jest.Mock };
+    const scrollTo = jest.spyOn(scroller, 'scrollTo').mockImplementation(() => {});
+    fireEvent(screen.getByTestId('s'), 'layout', { nativeEvent: { layout: { height: 800 } } });
+    fireEvent(screen.getByTestId('s'), 'contentSizeChange', 0, 900);
+    fireEvent.press(screen.getByTestId('grip'));
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ y: 100 }));
+    // A sheet that already fits doesn't try to scroll past its end.
+    fireEvent.press(screen.getByTestId('grip'));
+    fireEvent(screen.getByTestId('s'), 'contentSizeChange', 0, 700);
+    fireEvent.press(screen.getByTestId('grip'));
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ y: 0 }));
+  });
+});
+
 describe('Route View opened from search', () => {
   it('stays on the direction it opened on when live times come in', async () => {
     const [first, second] = routeById.s1.directions;
@@ -296,6 +326,13 @@ describe('Route View layout', () => {
     const dot = StyleSheet.flatten(within(screen.getByTestId('route-detail-content')).getByTestId('stop-dot-highlighted-0').props.style);
     expect(dot.backgroundColor).toBe('#FFFFFF');
     expect(dot.width).toBeGreaterThan(lineWidth);
+  });
+
+  it('sizes the sheet to its stops, so a short direction has no empty scroll past the last stop', async () => {
+    const screen = renderRoute();
+    await act(async () => {});
+    const { height } = Dimensions.get('window');
+    expect(StyleSheet.flatten(screen.getByTestId('route-detail-content').props.style).minHeight).toBe(height - mapPageMapHeight(height));
   });
 
   it('moves Locate up under the top buttons when GO is shown', async () => {

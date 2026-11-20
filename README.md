@@ -32,7 +32,7 @@ Project documents are in `docs/`:
 ## Installation
 
 ```sh
-git clone https://github.com/Transit-Clone/Pathly.git
+git clone https://github.com/Pathly-Transit/Pathly.git
 cd Pathly
 nvm use
 npm ci

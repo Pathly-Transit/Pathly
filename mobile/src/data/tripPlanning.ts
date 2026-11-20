@@ -2,10 +2,11 @@
 import type { Coordinates, LocationStatus } from '../hooks/useCurrentLocation';
 import { badgeLabel, type TransitMode } from '../components/RouteBadge';
 import { callable } from '../lib/firebase';
-import { pathLineCode } from './pathLines';
+import { isPathAgency, pathHeadsign, pathLineCode } from './pathLines';
 import type { SearchPlace } from './placesSearch';
 import { appNow, isMockClock } from '../debug/clock';
 import type { RoutePreference, ServiceAlert, TripTimeChoice } from './transit';
+import type { StationEntrance } from './stationEntrances';
 import {
   createTripSelectionIdentity,
   sameTripSelection,
@@ -39,6 +40,9 @@ export type TransitStep = {
   departures?: TripDeparture[];
   /** The leg's GTFS line, direction and boarding stop (backend tripStops.ts), for its live vehicles. */
   liveRoute?: { agencyId: string; routeId: string; boardStopId: string; alightStopId?: string; directionId?: number };
+  /** The boarding and alighting stations' ways in and out (backend stationEntrances.ts); absent where the agency publishes none, and for buses. */
+  boardEntrances?: StationEntrance[];
+  alightEntrances?: StationEntrance[];
   /** What the agency's live feed says about this leg's trip (backend tripLive.ts). */
   live?: LegLive;
   /** The connection into this leg from the previous one, when it's tight or already missed. */
@@ -585,6 +589,23 @@ export function lineBadge(step: TransitStep): string {
   }
   const short = (step.line.shortName ?? '').replace(/\s+(Line|Train)$/i, '').trim();
   return badgeLabel({ agency: step.agency.name, shortName: short || step.line.name });
+}
+
+/** Where a leg's vehicle is headed, as riders read it ("33rd Street via Hoboken" for that PATH train). */
+export function legHeadsign(step: TransitStep): string | undefined {
+  const headsign = step.headsign?.trim();
+  if (!headsign) return undefined;
+  return isPathAgency(step.agency.name) ? pathHeadsign(headsign, step.line) : headsign;
+}
+
+/**
+ * A leg's line in a sentence ("PJ is cancelled"). PATH's line codes are a timetable detail;
+ * riders say "the PATH to 33rd Street", so that's what PATH legs say.
+ */
+export function lineInText(step: TransitStep): string {
+  if (!isPathAgency(step.agency.name)) return lineBadge(step);
+  const headsign = legHeadsign(step);
+  return headsign ? `PATH to ${headsign}` : 'PATH';
 }
 
 /** The badge shape for a leg's mode; other vehicles (trams, cable cars) use the bus shape. */

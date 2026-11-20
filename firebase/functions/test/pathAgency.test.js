@@ -56,7 +56,7 @@ test('the service area takes in New Jersey, from Cape May and Philadelphia to Po
 // ---------------------------------------------------------------------------------------------
 // Feed changes before publishing
 
-test('PATH platforms become their stations, in stop times and stops', () => {
+test('PATH platforms become their stations, in stop times and stops, keeping entrances', () => {
   const archive = zip({
     'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station\n26733,Newark,40.73,-74.16,1,\n781718,Newark,40.73,-74.16,0,26733\n4249031,Entrance,40.73,-74.16,2,26733\n26734,World Trade Center,40.71,-74.01,1,\n781760,World Trade Center,40.71,-74.01,0,26734\n',
     'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT1,07:20:00,07:20:00,781718,1\nT1,07:42:00,07:42:00,781760,2\n',
@@ -65,7 +65,8 @@ test('PATH platforms become their stations, in stop times and stops', () => {
   const files = unzipText(collapsePlatformsToStations(archive));
   assert.match(files['stop_times.txt'], /T1,07:20:00,07:20:00,26733,1/);
   assert.match(files['stop_times.txt'], /T1,07:42:00,07:42:00,26734,2/);
-  assert.deepEqual(files['stops.txt'].trim().split('\n').slice(1).map((line) => line.split(',')[0]), ['26733', '26734']);
+  // Platforms go; stations and their entrances stay.
+  assert.deepEqual(files['stops.txt'].trim().split('\n').slice(1).map((line) => line.split(',')[0]), ['26733', '4249031', '26734']);
   assert.equal(files['trips.txt'], 'route_id,service_id,trip_id\n862,WK,T1\n');
 
   const transformed = unzipText(transformSourceArchive(AGENCY_CONFIGS.path, Buffer.from(archive)));
@@ -151,6 +152,7 @@ test('PATH\'s live arrivals land on the station a rider looks at', async () => {
       { id: 'a1', routeId: '862', directionId: 1, stopId: '26733', inSeconds: 240 },
       { id: 'a2', routeId: '862', directionId: 0, stopId: '26733', inSeconds: 600 },
       { id: 'other-line', routeId: '859', directionId: 1, stopId: '26730', inSeconds: 120 },
+      { id: 'to-hob', routeId: '860', directionId: 0, stopId: '26734', inSeconds: 180 },
     ]));
   };
   const status = await getRouteStatus('path', '862');
@@ -161,6 +163,13 @@ test('PATH\'s live arrivals land on the station a rider looks at', async () => {
   assert.equal(predictions.towardDirection1[0].minutes, 4);
   assert.equal(predictions.towardDirection0[0].live, true);
   assert.equal(predictions.towardDirection0[0].minutes, 10);
+
+  // PATH's feed lists each train at one station only, so at World Trade Center a Hoboken-bound
+  // train's last listed stop is World Trade Center: that isn't where it's going.
+  const hobWtc = await getRouteStatus('path', '860');
+  const atWtc = await getStopPredictions('path', '860', '26734', '26734', hobWtc.trips);
+  assert.equal(atWtc.towardDirection0[0].live, true);
+  assert.equal(atWtc.towardDirection0[0].headsign, null);
 });
 
 test('PATH\'s public live feed is probed by the backend status', async () => {

@@ -9,7 +9,7 @@ import type { Palette } from '../theme/colors';
 import { fontFamilies, typography } from '../theme/typography';
 import { Icon } from './Icon';
 import { PressableScale } from './PressableScale';
-import { savedPlaceIcon } from './SavedPlacesStrip';
+import { savedPlaceIcon } from './FavoritesStrip';
 import { radii } from '../theme/shape';
 
 const QUICK_NAMES = ['Home', 'Work'] as const;

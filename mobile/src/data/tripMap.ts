@@ -1,4 +1,5 @@
 import { stopRevealZoom } from './stopDeclutter';
+import { entranceLabel } from './stationEntrances';
 import { subwayEntrancesAt } from './subwayEntrances';
 import { formatTripClock, type Itinerary, type LatLng, type TransitStep, type TripStep } from './tripPlanning';
 import { distanceMeters, type NavigationCursor, type NormalizedNavigationPlan } from './enrouteNavigation';
@@ -255,10 +256,16 @@ export function tripMapPoints(itinerary: Itinerary | null | undefined, origin?: 
         ...(step.stops ?? []).map((stop): TripMapStop => ({ point: stop.location, kind: 'via', color, leg, label: `${stop.name}, ${formatTripClock(stop.time)}` })),
         { point: step.to.location, kind: 'stop', color, leg, label: `${step.to.name}, ${formatTripClock(step.to.time)}` },
       );
-      if (step.mode === 'subway') {
-        // A transfer's two legs can share a station, whose entrances are drawn once.
-        for (const entrance of [...subwayEntrancesAt(step.from.location), ...subwayEntrancesAt(step.to.location)]) {
-          entrances.set(`${entrance.point.lat},${entrance.point.lng},${entrance.label}`, { point: entrance.point, kind: 'entrance', color, label: entrance.label });
+      // The stations' own entrances as the backend matched them (subway and PATH), else, for a subway
+      // ride it didn't match, the open data's nearest station's. A transfer's two legs can share a
+      // station, whose entrances are drawn once.
+      const ends = [[step.boardEntrances, step.from.location], [step.alightEntrances, step.to.location]] as const;
+      for (const [served, at] of ends) {
+        const shown = served
+          ? served.map((entrance) => ({ point: { lat: entrance.lat, lng: entrance.lon }, label: entranceLabel(entrance) }))
+          : step.mode === 'subway' ? subwayEntrancesAt(at) : [];
+        for (const entrance of shown) {
+          entrances.set(`${entrance.point.lat},${entrance.point.lng}`, { point: entrance.point, kind: 'entrance', color, label: entrance.label });
         }
       }
     }

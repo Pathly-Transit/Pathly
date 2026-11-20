@@ -17,7 +17,8 @@ jest.mock('@react-google-maps/api', () => {
     />
   );
   const Rectangle = (props: object) => <View {...props} testID="web-service-area" />;
-  return { GoogleMap, Marker, Rectangle, useJsApiLoader: () => ({ isLoaded: true }) };
+  const OverlayViewF = ({ children, ...props }: { children: React.ReactNode }) => <View {...props} testID="web-overlay">{children}</View>;
+  return { FLOAT_PANE: 'floatPane', GoogleMap, Marker, OverlayViewF, Rectangle, useJsApiLoader: () => ({ isLoaded: true }) };
 });
 
 const WORK_PLACE = { id: 'work-place', title: 'Work', subtitle: '123 Main St', location: { latitude: 40.75, longitude: -73.99 } };
@@ -65,6 +66,55 @@ describe('home map saved-place markers', () => {
     expect(onSavedLocationPress).toHaveBeenCalledWith(savedWork, [savedWork]);
   });
 
+  it('opens a favorite the rider\'s dot covers when the dot is tapped on native', () => {
+    const onSavedLocationPress = jest.fn();
+    const screen = render(settings(
+      <NativeGoogleMapView
+        location={WORK_PLACE.location}
+        locationKnown
+        onSavedLocationPress={onSavedLocationPress}
+        savedLocations={[savedWork]}
+      />,
+    ));
+
+    const marker = screen.getByTestId('saved-place-marker-work-place', { includeHiddenElements: true });
+    const dot = screen.getByTestId('google-map-view-user-location', { includeHiddenElements: true });
+    // The dot stays drawn over the favorite, and a tap on it opens the favorite.
+    expect(dot.props.zIndex).toBeGreaterThan(marker.props.zIndex);
+    fireEvent.press(dot);
+    expect(onSavedLocationPress).toHaveBeenCalledWith(savedWork, [savedWork]);
+  });
+
+  it('does nothing when the rider\'s dot is tapped away from favorites on native', () => {
+    const onSavedLocationPress = jest.fn();
+    const screen = render(settings(
+      <NativeGoogleMapView location={{ latitude: 40.7, longitude: -73.9 }} locationKnown onSavedLocationPress={onSavedLocationPress} savedLocations={[savedWork]} />,
+    ));
+
+    fireEvent.press(screen.getByTestId('google-map-view-user-location', { includeHiddenElements: true }));
+    expect(onSavedLocationPress).not.toHaveBeenCalled();
+  });
+
+  it('keeps the rider\'s dot on top on web without blocking clicks on a favorite', () => {
+    const screen = render(settings(
+      <WebGoogleMapView location={WORK_PLACE.location} onSavedLocationPress={jest.fn()} savedLocations={[savedWork]} />,
+    ));
+
+    const marker = screen.getByTestId('web-Plan a trip to Work, 123 Main St', { includeHiddenElements: true });
+    // Not a Marker: Google Maps gives every marker, even an unclickable one, an element that
+    // swallows clicks. The dot is drawn in the floating pane, over the pins, and lets clicks through.
+    expect(screen.queryByTestId('web-rider-marker', { includeHiddenElements: true })).toBeNull();
+    const dot = screen.getByTestId('web-rider-dot', { includeHiddenElements: true });
+    expect(dot.props.pointerEvents).toBe('none');
+    const overlay = screen.getByTestId('web-overlay', { includeHiddenElements: true });
+    expect(overlay.props.mapPaneName).toBe('floatPane');
+    expect(overlay.props.position).toEqual({ lat: 40.75, lng: -73.99 });
+    // The overlay's own wrapper stays 0 px across, so it has no area to catch a click either.
+    expect(overlay.props.getPixelPositionOffset()).toEqual({ x: 0, y: 0 });
+    expect(dot.props.style).toEqual(expect.arrayContaining([expect.objectContaining({ position: 'absolute', left: -9, top: -9, width: 18, height: 18 })]));
+    expect(marker.props.clickable).toBe(true);
+  });
+
   it('renders only routable saved places on web and opens the selected place', () => {
     const onSavedLocationPress = jest.fn();
     const screen = render(settings(
@@ -79,7 +129,8 @@ describe('home map saved-place markers', () => {
     expect(marker.props.position).toEqual({ lat: 40.75, lng: -73.99 });
     expect(marker.props.icon.url).toMatch(/^data:image\/svg\+xml/);
     expect(decodeURIComponent(marker.props.icon.url)).toContain('fill="#0B4F9C"');
-    expect(marker.props.icon.anchor).toEqual({ x: 15, y: 15 });
+    // The 30 px badge sits in the middle of a 44 px image whose clear margin takes clicks too.
+    expect(marker.props.icon.anchor).toEqual({ x: 22, y: 22 });
     expect(marker.props.options).toEqual({ optimized: false });
     expect(screen.queryByTestId('web-Plan a trip to Future', { includeHiddenElements: true })).toBeNull();
     jest.useFakeTimers();
