@@ -22,7 +22,7 @@ import { DetailMapPage } from './DetailMapPage';
 import { Icon } from './Icon';
 import { LiveSignal } from './LiveSignal';
 import { MapBackdrop } from './MapBackdrop';
-import { RouteBadge, type TransitMode } from './RouteBadge';
+import { RouteBadge, transitModeForAgency, type TransitMode } from './RouteBadge';
 import { DestinationPin, orientLegs, routeFocus, RouteLines, type MapLeg } from './RouteMapOverlay';
 import { MAP_CONTROL_SIZE, MapControlButton } from './MapControlButton';
 import { mapPageMapHeight } from './mapSheetLayout';
@@ -30,6 +30,29 @@ import { PressableScale } from './PressableScale';
 import { TripNotePill } from './TripNotePill';
 import { radii } from '../theme/shape';
 
+
+/** Agencies by the short names riders use; Google sends their full names ("MTA New York City Transit"). */
+const AGENCY_SHORT_NAMES: readonly [RegExp, string][] = [
+  [/long island rail/i, 'LIRR'],
+  [/metro[\s-]*north/i, 'Metro-North'],
+  [/^path$|port authority trans[\s-]*hudson/i, 'PATH'],
+  [/nassau inter[\s-]*county|^nice\b/i, 'NICE'],
+  [/suffolk/i, 'Suffolk Transit'],
+  [/staten island ferry/i, 'Staten Island Ferry'],
+  [/nyc ferry/i, 'NYC Ferry'],
+  [/nj\s*transit/i, 'NJ Transit'],
+  [/\bmta\b|new york city transit/i, 'MTA'],
+];
+const MODE_WORDS: Record<TransitMode, string> = { subway: 'Subway', rail: 'Train', bus: 'Bus', ferry: 'Ferry' };
+
+/** A leg's agency and kind of vehicle, for its pill: "LIRR Train", "MTA Subway", "PATH Train", "NICE Bus". */
+export function legKindLabel(agency: string, mode: TransitMode): string {
+  const name = AGENCY_SHORT_NAMES.find(([pattern]) => pattern.test(agency.trim()))?.[1] ?? agency.trim();
+  // PATH rides like the subway, but riders call it a train.
+  const word = name === 'PATH' ? 'Train' : MODE_WORDS[mode];
+  if (!name) return word;
+  return new RegExp(`\\b${word}$`, 'i').test(name) ? name : `${name} ${word}`;
+}
 
 /** Walking before a leg (or, on the model, after the last one). */
 export type TripDetailWalk = { minutes: number; distance: string; toName: string };
@@ -600,7 +623,12 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
                   <RouteBadge agency={leg.agency} alert={!!leg.alerts?.length} color={tint(leg.color)} mode={leg.mode} shortName={leg.shortName} size="large" textColor={leg.textColor} />
                   <View style={styles.routeCopy}>
                     <Text style={styles.stepAction}>{leg.routeName}</Text>
-                    <Text numberOfLines={2} style={styles.headerDirection}>{leg.headsign ? `Toward ${leg.headsign}` : leg.direction}</Text>
+                    <View style={styles.directionRow}>
+                      <View style={styles.agencyPill} testID={`${testPrefix}-agency-${index}`}>
+                        <Text numberOfLines={1} style={styles.agencyPillText}>{legKindLabel(leg.agency, leg.mode ?? transitModeForAgency(leg.agency))}</Text>
+                      </View>
+                      <Text numberOfLines={2} style={[styles.headerDirection, styles.directionText]}>{leg.headsign ? `Toward ${leg.headsign}` : leg.direction}</Text>
+                    </View>
                   </View>
                   <Text style={styles.segmentDuration}>{duration.visible}</Text>
                 </View>
@@ -838,6 +866,10 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
 
 const createStyles = (colors: Palette) => StyleSheet.create({
   headerDirection: { marginTop: 2, color: colors.ink, ...typography.metadata, fontSize: 12 },
+  directionRow: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  directionText: { marginTop: 0, flexShrink: 1 },
+  agencyPill: { flexShrink: 0, paddingHorizontal: 7, paddingVertical: 2, borderRadius: radii.pill, backgroundColor: colors.background },
+  agencyPillText: { color: colors.ink, fontFamily: fontFamilies.bold, fontSize: 11 },
   timelineRow: { flexDirection: 'row', alignItems: 'stretch' },
   entranceRow: { minWidth: 0, flex: 1, minHeight: 30, flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 10, paddingBottom: 4 },
   entranceMark: { width: 16, height: 16, alignItems: 'center', justifyContent: 'center', borderRadius: 3 },
