@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import { Platform, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent } from 'react-native';
 import MapView, { Callout, Marker, Polyline, type Region } from 'react-native-maps';
 
@@ -12,7 +12,7 @@ import type { RouteLiveVehicle } from '../data/transitLive';
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useMarkerTracking } from '../hooks/useMarkerTracking';
 import { useNow } from '../hooks/useNow';
-import { useSelectionScale } from '../hooks/useSelectionScale';
+import { SELECTED_SCALE, useSelectionScale } from '../hooks/useSelectionScale';
 import { useTheme } from '../theme/AppSettings';
 import { fontFamilies } from '../theme/typography';
 import { Icon } from './Icon';
@@ -20,8 +20,9 @@ import { NATIVE_MAP_PROVIDER } from './mapProvider';
 import type { TransitMode } from './RouteBadge';
 import { CurrentLocationMarker } from './CurrentLocationMarker';
 import { HeadingBeamMarker } from './HeadingBeamMarker';
-import { Glide } from '../hooks/useGlide';
+import { useGlide } from '../hooks/useGlide';
 import { DirectionArrow } from './DirectionArrow';
+import type { VehicleScreenPoint } from './SelectedVehicleOverlay';
 
 type GeometryStop = { stopId?: string; name: string; lat: number; lon: number; entrances?: readonly StationEntrance[] };
 
@@ -77,7 +78,6 @@ const RIDER_AVATAR_STEP = 13;
 const RIDER_AVATAR_LEFT = 30;
 const RIDER_DISC_INSET = 2;
 // The tapped vehicle, while its popup is open: this much larger, and above every marker.
-const SELECTED_SCALE = 1.3;
 const SELECTED_PAD = 16;
 const SELECTED_Z_INDEX = 10;
 
@@ -99,6 +99,7 @@ type RouteMapProps = {
   mode?: TransitMode;
   /** Tapping a live vehicle opens its details. */
   onVehiclePress?: (tripId: string) => void;
+  onSelectedVehiclePosition?: (point: VehicleScreenPoint | null) => void;
   /** The vehicle whose popup is open: drawn larger, above every other vehicle. */
   selectedVehicleId?: string | null;
   /** Tapping a stop's name (shown once its dot is tapped) opens the line at that stop. */
@@ -148,7 +149,41 @@ function regionFor(stops: readonly GeometryStop[], focusStop: GeometryStop | und
  * A live vehicle (Route View and the trip map): a white circle with the line's mode glyph and its
  * position's age, gliding to each refreshed spot rather than jumping there.
  */
-export function LiveVehicleMarker({ color, mode, onPress, selected = false, vehicle, zIndex }: { color: string; mode: TransitMode; onPress?: (tripId: string) => void; selected?: boolean; vehicle: RouteLiveVehicle; zIndex: number }) {
+export function LiveVehicleMarker({ color, mode, onPress, onPosition, project, projectionRevision, selected = false, vehicle, zIndex }: {
+  color: string;
+  mode: TransitMode;
+  onPress?: (tripId: string) => void;
+  onPosition?: RouteMapProps['onSelectedVehiclePosition'];
+  project?: (coordinate: LatLngPoint) => Promise<{ x: number; y: number } | null>;
+  projectionRevision?: number;
+  selected?: boolean;
+  vehicle: RouteLiveVehicle;
+  zIndex: number;
+}) {
+  const { lat, lon } = useGlide(vehicle);
+  const { tripId } = vehicle;
+  const projection = useRef({ selection: 0, requested: 0, reported: 0 });
+  useEffect(() => {
+    const updates = projection.current;
+    return () => {
+      updates.selection += 1;
+      onPosition?.(null);
+    };
+  }, [onPosition]);
+  useEffect(() => {
+    if (!onPosition || !project) return;
+    const updates = projection.current;
+    const selection = updates.selection;
+    const request = ++updates.requested;
+    void project({ latitude: lat, longitude: lon }).then((point) => {
+      if (!point || updates.selection !== selection || request <= updates.reported) return;
+      updates.reported = request;
+      onPosition({ tripId, ...point });
+    }).catch(() => {
+      // A projection can fail before the map is ready. Layout and camera updates retry.
+    });
+  }, [lat, lon, onPosition, project, projectionRevision, tripId]);
+
   const avatars = vehicle.riders?.avatars ?? [];
   // The position's age ("12s") ticks each second.
   const now = useNow(1000);
@@ -170,8 +205,7 @@ export function LiveVehicleMarker({ color, mode, onPress, selected = false, vehi
   const shiftX = circleX - boxWidth / 2;
   const shiftY = circleY - VEHICLE_BOX_HEIGHT / 2;
   return (
-    <Glide lat={vehicle.lat} lon={vehicle.lon}>{(point) => (
-      <Marker anchor={anchor} coordinate={{ latitude: point.lat, longitude: point.lon }} onPress={onPress ? () => onPress(vehicle.tripId) : undefined} testID={`route-vehicle-${vehicle.tripId}`} title={onPress ? undefined : mode === 'bus' ? 'Bus' : 'Train'} tracksViewChanges={tracksView} zIndex={selected ? SELECTED_Z_INDEX : zIndex}>
+      <Marker anchor={anchor} coordinate={{ latitude: lat, longitude: lon }} onPress={onPress ? () => onPress(tripId) : undefined} testID={`route-vehicle-${tripId}`} title={onPress ? undefined : mode === 'bus' ? 'Bus' : 'Train'} tracksViewChanges={tracksView} zIndex={selected || selection > 0 ? SELECTED_Z_INDEX : zIndex}>
         <View style={{ width: boxWidth + pad * 2, height: VEHICLE_BOX_HEIGHT + pad * 2 }}>
         <View style={[styles.vehicleBox, { width: boxWidth, left: pad, top: pad }, selection !== 0 && { transform: [{ translateX: shiftX }, { translateY: shiftY }, { scale }, { translateX: -shiftX }, { translateY: -shiftY }] }]} testID={`route-vehicle-drawing-${vehicle.tripId}`}>
           {PAINTED_SHADOW.map(({ grow, opacity }) => (
@@ -203,13 +237,26 @@ export function LiveVehicleMarker({ color, mode, onPress, selected = false, vehi
         </View>
         </View>
       </Marker>
-    )}</Glide>
   );
 }
 
 /** Real route map: actual stop positions, the real line, and live vehicles — for any route with a live feed. */
-export function RouteMap({ centerOnUserRequest = 0, color, directionId, entranceFocus, exploreFrom, fitPadding = ROUTE_FIT_PADDING, focusStopId, focusStopName, mode = 'rail', onOpenStop, onUserPan, onVehiclePress, path, selectedVehicleId = null, showRouteRequest = 0, stops, testID = 'route-map', userLocation, vehicles, walkPath }: RouteMapProps) {
+export function RouteMap({ centerOnUserRequest = 0, color, directionId, entranceFocus, exploreFrom, fitPadding = ROUTE_FIT_PADDING, focusStopId, focusStopName, mode = 'rail', onOpenStop, onSelectedVehiclePosition, onUserPan, onVehiclePress, path, selectedVehicleId = null, showRouteRequest = 0, stops, testID = 'route-map', userLocation, vehicles, walkPath }: RouteMapProps) {
   const mapRef = useRef<MapView>(null);
+  const mapContainer = useRef<ComponentRef<typeof View>>(null);
+  const [projectionRevision, setProjectionRevision] = useState(0);
+  const projectVehicle = useCallback(async (coordinate: LatLngPoint) => {
+    const map = mapRef.current;
+    const container = mapContainer.current;
+    if (!map || !container) return null;
+    const point = await map.pointForCoordinate(coordinate);
+    return new Promise<{ x: number; y: number }>((resolve) => {
+      container.measureInWindow((x, y) => resolve({ x: x + point.x, y: y + point.y }));
+    });
+  }, []);
+  const refreshProjection = selectedVehicleId && onSelectedVehiclePosition
+    ? () => setProjectionRevision((revision) => revision + 1)
+    : undefined;
   // Where the walk starts: the purple dot when exploring, else the rider.
   const walkOrigin = exploreFrom ?? userLocation;
   // Places hidden, and recolored in the dark theme (see mapStyle.ts).
@@ -362,17 +409,27 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, entrance
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the request; the stop is read then
   }, [entranceFocus?.key]);
 
-  return (
+  const map = (
     <MapView
       initialRegion={initialRegion}
-      onLayout={(event: LayoutChangeEvent) => setMapWidth(event.nativeEvent.layout.width)}
-      onMapReady={() => setTracksStopViews(false)}
+      onLayout={(event: LayoutChangeEvent) => {
+        setMapWidth(event.nativeEvent.layout.width);
+        refreshProjection?.();
+      }}
+      onMapReady={() => {
+        setTracksStopViews(false);
+        refreshProjection?.();
+      }}
       onPanDrag={() => {
         riderMovedMap.current = true;
         followRider.current = false;
         onUserPan?.();
       }}
-      onRegionChangeComplete={(region: Region) => setZoom(zoomForRegion(region.longitudeDelta, mapWidth || windowWidth))}
+      onRegionChange={refreshProjection}
+      onRegionChangeComplete={(region: Region) => {
+        setZoom(zoomForRegion(region.longitudeDelta, mapWidth || windowWidth));
+        refreshProjection?.();
+      }}
       customMapStyle={mapStyle}
       provider={NATIVE_MAP_PROVIDER}
       ref={mapRef}
@@ -455,7 +512,10 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, entrance
           <DirectionArrow color={color} side={arrow.side} />
         </Marker>
       ) : null}
-      {shownVehicles.map((vehicle) => <LiveVehicleMarker key={vehicle.tripId} color={color} mode={mode} onPress={onVehiclePress} selected={vehicle.tripId === selectedVehicleId} vehicle={vehicle} zIndex={2} />)}
+      {shownVehicles.map((vehicle) => {
+        const selected = vehicle.tripId === selectedVehicleId;
+        return <LiveVehicleMarker key={vehicle.tripId} color={color} mode={mode} onPosition={selected ? onSelectedVehiclePosition : undefined} onPress={onVehiclePress} project={projectVehicle} projectionRevision={selected ? projectionRevision : undefined} selected={selected} vehicle={vehicle} zIndex={2} />;
+      })}
       {entrances.map((entrance) => (
         <Marker key={`entrance-${entrance.lat},${entrance.lon}`} anchor={CENTER_ANCHOR} coordinate={{ latitude: entrance.lat, longitude: entrance.lon }} testID="route-entrance" title={entranceLabel(entrance)} tracksViewChanges={tracksDots} zIndex={2}>
           <View style={[styles.entranceDot, { backgroundColor: color }]}><Icon color="#FFFFFF" name="arrowRight" size={11} /></View>
@@ -474,6 +534,7 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, entrance
       ) : null}
     </MapView>
   );
+  return <View collapsable={false} ref={mapContainer} style={StyleSheet.absoluteFill}>{map}</View>;
 }
 
 /**

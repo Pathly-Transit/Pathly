@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Animated, Easing, useWindowDimensions, type ViewProps } from 'react-native';
 
 import { useAppSettings } from '../theme/AppSettings';
+import { useNativeDriver } from '../theme/motion';
 
 /** How long the sheet takes to rise into place. */
 const RISE_MS = 300;
@@ -21,7 +22,9 @@ export function SheetPanel({ children, style, ...rest }: ViewProps) {
       return;
     }
     // Eased to a stop rather than sprung: an overshoot would lift the sheet off the screen's edge.
-    Animated.timing(rise, { toValue: 0, duration: RISE_MS, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+    const animation = Animated.timing(rise, { toValue: 0, duration: RISE_MS, easing: Easing.out(Easing.cubic), useNativeDriver });
+    animation.start();
+    return () => animation.stop();
   }, [reducedMotionActive, rise]);
   const translateY = rise.interpolate({ inputRange: [0, 1], outputRange: [0, height * 0.6] });
   return <Animated.View {...rest} style={[style, { transform: [{ translateY }] }]}>{children}</Animated.View>;

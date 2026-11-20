@@ -12,7 +12,7 @@ import { stopRevealZoom } from '../data/stopDeclutter';
 import type { RouteLiveVehicle } from '../data/transitLive';
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useNow } from '../hooks/useNow';
-import { SELECT_MS } from '../hooks/useSelectionScale';
+import { SELECT_BEZIER, SELECT_MS, SELECTED_SCALE } from '../hooks/useSelectionScale';
 import { useAppSettings, useTheme } from '../theme/AppSettings';
 import { fontFamilies } from '../theme/typography';
 import type { TransitMode } from './RouteBadge';
@@ -20,6 +20,7 @@ import { HeadingBeamMarker } from './HeadingBeamMarker';
 import { Glide } from '../hooks/useGlide';
 import { DIRECTION_ARROW_BOX, DirectionArrow } from './DirectionArrow';
 import { cameraToFit, glideMapTo } from './webMapGlide';
+import type { VehicleScreenPoint } from './SelectedVehicleOverlay';
 
 type GeometryStop = { stopId?: string; name: string; lat: number; lon: number; entrances?: readonly StationEntrance[] };
 
@@ -55,7 +56,6 @@ const RIDER_AVATAR_STEP = 13;
 const RIDER_AVATAR_LEFT = 30;
 const RIDER_DISC_INSET = 2;
 // The tapped vehicle, while its popup is open: this much larger, and above every other vehicle.
-const SELECTED_SCALE = 1.3;
 const SELECTED_Z_INDEX = 10;
 const vehicleBoxWidth = (riders: number) => (riders > 0 ? RIDER_AVATAR_LEFT + RIDER_AVATAR + (riders - 1) * RIDER_AVATAR_STEP : VEHICLE_BOX);
 
@@ -65,7 +65,7 @@ const vehicleBoxWidth = (riders: number) => (riders > 0 ? RIDER_AVATAR_LEFT + RI
  * its top-right, as an SVG data URL. With no outline, the shadow keeps the white circle visible
  * on pale tiles.
  */
-function vehicleIconUrl(color: string, age: string | null, avatars: readonly BeanAvatarConfig[]) {
+function vehicleIconUrl(color: string, age: string | null, avatars: readonly BeanAvatarConfig[], badgeOnly = false) {
   const r = VEHICLE_SIZE / 2;
   const cx = r;
   const cy = VEHICLE_BOX - r;
@@ -80,12 +80,13 @@ function vehicleIconUrl(color: string, age: string | null, avatars: readonly Bea
     const left = RIDER_AVATAR_LEFT + index * RIDER_AVATAR_STEP;
     return `<circle cx="${left + RIDER_AVATAR / 2}" cy="${RIDER_AVATAR / 2}" r="${RIDER_AVATAR / 2}" fill="#FFFFFF" filter="url(#s)"/><image x="${left + RIDER_DISC_INSET}" y="${RIDER_DISC_INSET}" width="${RIDER_AVATAR - RIDER_DISC_INSET * 2}" height="${RIDER_AVATAR - RIDER_DISC_INSET * 2}" href="data:image/svg+xml;charset=UTF-8,${encodeURIComponent(beanAvatarSvg(avatar))}"/>`;
   }).reverse().join('');
-  const width = vehicleBoxWidth(avatars.length);
-  const height = VEHICLE_BOX;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  const width = badgeOnly ? VEHICLE_SIZE - 6 : vehicleBoxWidth(avatars.length);
+  const height = badgeOnly ? width : VEHICLE_BOX;
+  const origin = badgeOnly ? `${cx - width / 2} ${cy - height / 2}` : '0 0';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${origin} ${width} ${height}">
 <defs><filter id="s" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#16324F" flood-opacity="0.45"/></filter></defs>
 <g>
-<circle cx="${cx}" cy="${cy}" r="${r - 3}" fill="#FFFFFF" filter="url(#s)"/>
+<circle cx="${cx}" cy="${cy}" r="${r - 3}" fill="#FFFFFF"${badgeOnly ? '' : ' filter="url(#s)"'}/>
 <g transform="translate(${cx - 8.4} ${cy - 10.8}) scale(1.2)">
 <rect x="0" y="0" width="14" height="14" rx="3.5" fill="${color}"/>
 <rect x="2.2" y="2.6" width="9.6" height="5" rx="1.2" fill="#FFFFFF"/>
@@ -97,8 +98,8 @@ function vehicleIconUrl(color: string, age: string | null, avatars: readonly Bea
 }
 
 /**
- * One live vehicle, gliding to each refreshed spot rather than jumping there. Picked, it grows and
- * gains its ring (shrinking back once let go), and sits above every other vehicle.
+ * One live vehicle, gliding to each refreshed spot. The picked vehicle grows, sits above the other
+ * markers, and shrinks back when dismissed.
  *
  * Drawn as one element, its age in the same box as its circle: a Google marker's label goes in a
  * layer above every marker's picture, so two vehicles side by side showed one's age over the
@@ -106,8 +107,34 @@ function vehicleIconUrl(color: string, age: string | null, avatars: readonly Bea
  *
  * The grow is the browser's own transition, so it runs without redrawing the vehicle each frame.
  */
-export function WebVehicleMarker({ color, now, onPress, selected = false, title, vehicle, zIndex }: { color: string; now: number; onPress?: (tripId: string) => void; selected?: boolean; title: string; vehicle: RouteLiveVehicle; zIndex: number }) {
+export function WebVehicleMarker({ color, now, onPosition, onPress, selected = false, title, vehicle, zIndex }: { color: string; now: number; onPosition?: RouteMapProps['onSelectedVehiclePosition']; onPress?: (tripId: string) => void; selected?: boolean; title: string; vehicle: RouteLiveVehicle; zIndex: number }) {
   const { reducedMotionActive } = useAppSettings();
+  const hitTarget = useRef<HTMLSpanElement>(null);
+  const { tripId } = vehicle;
+  useEffect(() => {
+    if (!onPosition) return;
+    const badgeUrl = vehicleIconUrl(color, null, [], true);
+    let frame: number;
+    let lastPoint: VehicleScreenPoint | undefined;
+    const trackPosition = () => {
+      const bounds = hitTarget.current?.getBoundingClientRect();
+      if (bounds && bounds.width > 0) {
+        // The hit target follows Google's overlay and grows around its own center.
+        const x = Math.round(bounds.left + bounds.width / 2);
+        const y = Math.round(bounds.top + bounds.height / 2);
+        if (x !== lastPoint?.x || y !== lastPoint?.y) {
+          lastPoint = { tripId, x, y, badgeUrl };
+          onPosition(lastPoint);
+        }
+      }
+      frame = requestAnimationFrame(trackPosition);
+    };
+    trackPosition();
+    return () => {
+      cancelAnimationFrame(frame);
+      onPosition(null);
+    };
+  }, [color, onPosition, tripId]);
   const avatars = vehicle.riders?.avatars ?? [];
   const age = avatars.length === 0 && vehicle.updatedAt != null ? formatAge(now - vehicle.updatedAt) : null;
   // Drawn once per refresh, not per glide frame.
@@ -122,7 +149,7 @@ export function WebVehicleMarker({ color, now, onPress, selected = false, title,
   const centerX = pad + VEHICLE_SIZE / 2;
   const centerY = pad + VEHICLE_BOX - VEHICLE_SIZE / 2;
   const offset = useCallback(() => ({ x: -centerX, y: -centerY }), [centerX, centerY]);
-  const transition = reducedMotionActive ? 'none' : `transform ${SELECT_MS}ms ease-out`;
+  const transition = reducedMotionActive ? undefined : `transform ${SELECT_MS}ms cubic-bezier(${SELECT_BEZIER.join(', ')})`;
   return (
     <Glide lat={vehicle.lat} lon={vehicle.lon}>
       {(point) => (
@@ -156,6 +183,7 @@ export function WebVehicleMarker({ color, now, onPress, selected = false, title,
             <img alt="" draggable={false} height={VEHICLE_BOX} src={url} style={{ position: 'absolute', left: pad, top: pad, display: 'block', pointerEvents: 'none' }} width={drawingWidth} />
             {/* Just the circle (and the age badge) take taps. */}
             <span
+              ref={hitTarget}
               style={{ position: 'absolute', left: centerX - VEHICLE_SIZE / 2, top: centerY - VEHICLE_SIZE / 2, width: VEHICLE_SIZE, height: VEHICLE_SIZE, borderRadius: VEHICLE_SIZE / 2, pointerEvents: 'auto' }}
             />
             {age ? (
@@ -214,6 +242,7 @@ type RouteMapProps = {
   mode?: TransitMode;
   /** Tapping a live vehicle opens its details. */
   onVehiclePress?: (tripId: string) => void;
+  onSelectedVehiclePosition?: (point: VehicleScreenPoint | null) => void;
   /** The vehicle whose popup is open: drawn larger, above every other vehicle. */
   selectedVehicleId?: string | null;
   /** Tapping a stop's name (shown once its dot is tapped) opens the line at that stop. */
@@ -240,7 +269,7 @@ type RouteMapProps = {
 /** Real route map: actual stop positions, the real line, and live vehicles — for any route with a live feed. */
 const arrowOffset = () => ({ x: -DIRECTION_ARROW_BOX / 2, y: -DIRECTION_ARROW_BOX / 2 });
 
-export function RouteMap({ centerOnUserRequest = 0, color, directionId, entranceFocus, exploreFrom, focusStopId, focusStopName, mode = 'rail', onOpenStop, onUserPan, onVehiclePress, path, selectedVehicleId = null, showRouteRequest = 0, stops, testID = 'route-map', userLocation, vehicles, walkPath }: RouteMapProps) {
+export function RouteMap({ centerOnUserRequest = 0, color, directionId, entranceFocus, exploreFrom, focusStopId, focusStopName, mode = 'rail', onOpenStop, onSelectedVehiclePosition, onUserPan, onVehiclePress, path, selectedVehicleId = null, showRouteRequest = 0, stops, testID = 'route-map', userLocation, vehicles, walkPath }: RouteMapProps) {
   // Where the walk starts: the purple dot when exploring, else the rider.
   const walkOrigin = exploreFrom ?? userLocation;
   const { isLoaded } = useJsApiLoader({
@@ -567,9 +596,10 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, entrance
               </View>
             </OverlayViewF>
           ) : null}
-          {shownVehicles.map((vehicle) => (
-            <WebVehicleMarker key={vehicle.tripId} color={color} now={now} onPress={onVehiclePress} selected={vehicle.tripId === selectedVehicleId} title={vehicleLabel} vehicle={vehicle} zIndex={2} />
-          ))}
+          {shownVehicles.map((vehicle) => {
+            const selected = vehicle.tripId === selectedVehicleId;
+            return <WebVehicleMarker key={vehicle.tripId} color={color} now={now} onPosition={selected ? onSelectedVehiclePosition : undefined} onPress={onVehiclePress} selected={selected} title={vehicleLabel} vehicle={vehicle} zIndex={2} />;
+          })}
         </GoogleMap>
       ) : null}
     </View>

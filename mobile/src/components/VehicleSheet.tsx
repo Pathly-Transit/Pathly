@@ -1,7 +1,7 @@
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BeanAvatar } from '../avatars/BeanAvatarImage';
-import { STALE_TRAIN_MS } from '../data/liveTrains';
+import { formatAge, STALE_TRAIN_MS } from '../data/liveTrains';
 import { nearRider } from '../data/rideDetection';
 import { rideReportLabel } from '../data/rideReports';
 import { focusStopIndex } from '../data/routeDirection';
@@ -12,7 +12,7 @@ import type { LiveSource } from '../data/transit';
 import type { RouteLiveVehicle } from '../data/transitLive';
 import { useDebug } from '../debug/DebugContext';
 import { useNow } from '../hooks/useNow';
-import { useTheme, useThemedStyles } from '../theme/AppSettings';
+import { useAppSettings, useTheme, useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
 import { radii } from '../theme/shape';
 import { fontFamilies, typography } from '../theme/typography';
@@ -23,6 +23,7 @@ import { Icon } from './Icon';
 import { PressableScale } from './PressableScale';
 import { RideReportBar } from './RideReportBar';
 import type { TransitMode } from './RouteBadge';
+import { SelectedVehicleOverlay, type VehicleScreenPoint } from './SelectedVehicleOverlay';
 
 const NOUNS: Record<TransitMode, string> = { bus: 'bus', subway: 'train', rail: 'train', ferry: 'boat' };
 
@@ -64,6 +65,8 @@ type VehicleSheetProps = {
   path?: readonly { lat: number; lon: number }[];
   /** This direction's times at the rider's stop: the one matching the vehicle is shown, live. */
   predictions?: readonly { minutes: number; live: boolean }[];
+  /** Window position of the selected Route View marker. */
+  selectedVehiclePoint?: VehicleScreenPoint | null;
   vehicle: RouteLiveVehicle | null;
 };
 
@@ -72,9 +75,10 @@ const TRAIN_AT_STOP_METERS = 120;
 const BUS_AT_STOP_METERS = 40;
 
 /** A tapped vehicle, from the bottom: where it's headed, how far it is from the rider's stop, and who's on it. */
-export function VehicleSheet({ color, onColor, destination, focusStopId, focusStopName, lineName, liveSource, mode, onClaim, onClose, onBoardTripId = null, onDismiss, path, predictions = [], reportFix = null, reportSource, riderAt, ridingTripId, sharingEnabled, stops, vehicle }: VehicleSheetProps) {
+export function VehicleSheet({ color, onColor, destination, focusStopId, focusStopName, lineName, liveSource, mode, onClaim, onClose, onBoardTripId = null, onDismiss, path, predictions = [], reportFix = null, reportSource, riderAt, ridingTripId, selectedVehiclePoint, sharingEnabled, stops, vehicle }: VehicleSheetProps) {
   const styles = useThemedStyles(createStyles);
   const { colors } = useTheme();
+  const { reducedMotionActive } = useAppSettings();
   const now = useNow(1000);
   const riding = vehicle != null && vehicle.tripId === ridingTripId;
   const riders = vehicle?.riders;
@@ -94,80 +98,92 @@ export function VehicleSheet({ color, onColor, destination, focusStopId, focusSt
   const { isAdmin, rideAlong, setMockLocation, startRideAlong } = useDebug();
   const ridingAlong = vehicle != null && rideAlong?.tripId === vehicle.tripId;
   return (
-    <Modal animationType="fade" onRequestClose={onClose} transparent={true} visible={vehicle != null}>
-      <Pressable accessibilityLabel="Close vehicle details" onPress={onClose} style={styles.backdrop} testID="vehicle-sheet-backdrop" />
-      {vehicle ? (
-        <SheetPanel style={styles.sheet} testID="vehicle-sheet">
-          <View style={styles.header}>
-            <View style={styles.headerCopy}>
-              <Text accessibilityLabel={`${lineName} ${NOUNS[mode]} to ${destination}`} accessibilityRole="header" numberOfLines={2} style={styles.title} testID="vehicle-sheet-title">{destination}</Text>
-              {stopsAway ? <Text numberOfLines={1} style={[styles.stopsAway, { color: accent }]} testID="vehicle-sheet-stops-away">{stopsAway}</Text> : null}
-              {whereNow ? <Text numberOfLines={2} style={styles.whereNow} testID="vehicle-sheet-where">{whereNow}</Text> : null}
-            </View>
-            {arrival ? <ArrivalTime color={accent} live={arrival.live} minutes={arrival.minutes} testID="vehicle-sheet-arrival" /> : null}
-            <PressableScale accessibilityLabel="Close" accessibilityRole="button" hitSlop={8} onPress={onClose} style={styles.close} testID="vehicle-sheet-close"><Icon name="close" size={26} /></PressableScale>
-          </View>
-
-          {onBoard && riders ? (
-            <View style={styles.row} testID="vehicle-sheet-riders">
-              <View style={styles.avatars}>
-                {riders.avatars.map((avatar, index) => (
-                  <View key={index} style={[styles.avatarDisc, index > 0 && styles.avatarStacked, { zIndex: riders.avatars.length - index }]}>
-                    <BeanAvatar config={avatar} size={28} />
-                  </View>
-                ))}
+    <Modal animationType={reducedMotionActive ? 'none' : 'fade'} onRequestClose={onClose} statusBarTranslucent={true} transparent={true} visible={vehicle != null}>
+      <View style={styles.viewport}>
+        <Pressable accessibilityLabel="Close vehicle details" onPress={onClose} style={styles.backdrop} testID="vehicle-sheet-backdrop">
+          {vehicle && selectedVehiclePoint !== undefined ? (
+            <SelectedVehicleOverlay
+              ageLabel={vehicle.updatedAt != null && !vehicle.riders?.avatars.length ? formatAge(now - vehicle.updatedAt) : null}
+              color={color}
+              mode={mode}
+              point={selectedVehiclePoint?.tripId === vehicle.tripId ? selectedVehiclePoint : null}
+            />
+          ) : null}
+        </Pressable>
+        {vehicle ? (
+          <SheetPanel accessibilityViewIsModal={true} key={vehicle.tripId} style={styles.sheet} testID="vehicle-sheet">
+            <View style={styles.header}>
+              <View style={styles.headerCopy}>
+                <Text accessibilityLabel={`${lineName} ${NOUNS[mode]} to ${destination}`} accessibilityRole="header" numberOfLines={2} style={styles.title} testID="vehicle-sheet-title">{destination}</Text>
+                {stopsAway ? <Text numberOfLines={1} style={[styles.stopsAway, { color: accent }]} testID="vehicle-sheet-stops-away">{stopsAway}</Text> : null}
+                {whereNow ? <Text numberOfLines={2} style={styles.whereNow} testID="vehicle-sheet-where">{whereNow}</Text> : null}
               </View>
-              <Text style={styles.rowText}>{onBoard}</Text>
+              {arrival ? <ArrivalTime color={accent} live={arrival.live} minutes={arrival.minutes} testID="vehicle-sheet-arrival" /> : null}
+              <PressableScale accessibilityLabel="Close" accessibilityRole="button" hitSlop={8} onPress={onClose} style={styles.close} testID="vehicle-sheet-close"><Icon name="close" size={26} /></PressableScale>
             </View>
-          ) : null}
-          {vehicle.reports?.length ? (
-            <View style={styles.row} testID="vehicle-sheet-reports">
-              <Icon name="people" size={20} />
-              <Text style={styles.rowText}>{vehicle.reports.map((report) => (report.count > 1 ? `${rideReportLabel(report.kind)} (${report.count})` : rideReportLabel(report.kind))).join(', ')}</Text>
-            </View>
-          ) : null}
 
-          {reportSource && (riding || vehicle.tripId === onBoardTripId) ? <RideReportBar fix={reportFix} key={vehicle.tripId} source={reportSource} tripId={vehicle.tripId} /> : null}
-          {riding ? (
-            <PressableScale accessibilityRole="button" onPress={() => { onDismiss(vehicle.tripId); onClose(); }} style={[styles.button, styles.secondaryButton]} testID="vehicle-sheet-not-on">
-              <Text style={styles.secondaryButtonText}>{`I’m not on this ${NOUNS[mode]}`}</Text>
-            </PressableScale>
-          ) : canClaim ? (
-            <PressableScale accessibilityRole="button" onPress={() => { onClaim(vehicle.tripId); onClose(); }} style={[styles.button, { backgroundColor: color }]} testID="vehicle-sheet-on">
-              <Text style={[styles.primaryButtonText, onColor ? { color: onColor } : null]}>{`I’m on this ${NOUNS[mode]}`}</Text>
-            </PressableScale>
-          ) : null}
-          {isAdmin && liveSource ? (
-            <PressableScale
-              accessibilityHint="Admin testing: your mock location follows this vehicle's feed position"
-              accessibilityRole="button"
-              onPress={() => {
-                if (ridingAlong) setMockLocation(undefined);
-                else {
-                  const { lat, lon } = feedVehicles([vehicle])[0]!;
-                  startRideAlong({ source: liveSource, tripId: vehicle.tripId, label: `Riding along on the ${lineName} ${NOUNS[mode]}` }, { lat, lon });
-                }
-                onClose();
-              }}
-              style={[styles.button, styles.secondaryButton]}
-              testID="vehicle-sheet-ride-along"
-            >
-              <Text style={styles.secondaryButtonText}>{ridingAlong ? 'Stop riding along' : 'Ride along (admin)'}</Text>
-            </PressableScale>
-          ) : null}
-          <Text style={styles.note} testID="vehicle-sheet-note">
-            {sharingEnabled
-              ? 'Other riders see your avatar here, never your name. Your location is erased soon after you get off.'
-              : 'Turn on Share my rides in Settings, Privacy to help place vehicles for other riders.'}
-          </Text>
-        </SheetPanel>
-      ) : null}
+            {onBoard && riders ? (
+              <View style={styles.row} testID="vehicle-sheet-riders">
+                <View style={styles.avatars}>
+                  {riders.avatars.map((avatar, index) => (
+                    <View key={index} style={[styles.avatarDisc, index > 0 && styles.avatarStacked, { zIndex: riders.avatars.length - index }]}>
+                      <BeanAvatar config={avatar} size={28} />
+                    </View>
+                  ))}
+                </View>
+                <Text style={styles.rowText}>{onBoard}</Text>
+              </View>
+            ) : null}
+            {vehicle.reports?.length ? (
+              <View style={styles.row} testID="vehicle-sheet-reports">
+                <Icon name="people" size={20} />
+                <Text style={styles.rowText}>{vehicle.reports.map((report) => (report.count > 1 ? `${rideReportLabel(report.kind)} (${report.count})` : rideReportLabel(report.kind))).join(', ')}</Text>
+              </View>
+            ) : null}
+
+            {reportSource && (riding || vehicle.tripId === onBoardTripId) ? <RideReportBar fix={reportFix} key={vehicle.tripId} source={reportSource} tripId={vehicle.tripId} /> : null}
+            {riding ? (
+              <PressableScale accessibilityRole="button" onPress={() => { onDismiss(vehicle.tripId); onClose(); }} style={[styles.button, styles.secondaryButton]} testID="vehicle-sheet-not-on">
+                <Text style={styles.secondaryButtonText}>{`I’m not on this ${NOUNS[mode]}`}</Text>
+              </PressableScale>
+            ) : canClaim ? (
+              <PressableScale accessibilityRole="button" onPress={() => { onClaim(vehicle.tripId); onClose(); }} style={[styles.button, { backgroundColor: color }]} testID="vehicle-sheet-on">
+                <Text style={[styles.primaryButtonText, onColor ? { color: onColor } : null]}>{`I’m on this ${NOUNS[mode]}`}</Text>
+              </PressableScale>
+            ) : null}
+            {isAdmin && liveSource ? (
+              <PressableScale
+                accessibilityHint="Admin testing: your mock location follows this vehicle's feed position"
+                accessibilityRole="button"
+                onPress={() => {
+                  if (ridingAlong) setMockLocation(undefined);
+                  else {
+                    const { lat, lon } = feedVehicles([vehicle])[0]!;
+                    startRideAlong({ source: liveSource, tripId: vehicle.tripId, label: `Riding along on the ${lineName} ${NOUNS[mode]}` }, { lat, lon });
+                  }
+                  onClose();
+                }}
+                style={[styles.button, styles.secondaryButton]}
+                testID="vehicle-sheet-ride-along"
+              >
+                <Text style={styles.secondaryButtonText}>{ridingAlong ? 'Stop riding along' : 'Ride along (admin)'}</Text>
+              </PressableScale>
+            ) : null}
+            <Text style={styles.note} testID="vehicle-sheet-note">
+              {sharingEnabled
+                ? 'Other riders see your avatar here, never your name. Your location is erased soon after you get off.'
+                : 'Turn on Share my rides in Settings, Privacy to help place vehicles for other riders.'}
+            </Text>
+          </SheetPanel>
+        ) : null}
+      </View>
     </Modal>
   );
 }
 
 const createStyles = (colors: Palette) => StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.35)' },
+  viewport: { flex: 1, justifyContent: 'flex-end' },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: colors.scrim },
   sheet: {
     width: '100%',
     maxWidth: 540,
@@ -175,7 +191,7 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     gap: 14,
     paddingHorizontal: 18,
     paddingTop: 18,
-    paddingBottom: 34,
+    paddingBottom: 30,
     borderTopLeftRadius: radii.sheet,
     borderTopRightRadius: radii.sheet,
     backgroundColor: colors.surface,

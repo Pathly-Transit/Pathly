@@ -1,8 +1,9 @@
-import { fireEvent, render, waitFor, type RenderResult } from '@testing-library/react-native';
+import { fireEvent, render, waitFor, within, type RenderResult } from '@testing-library/react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { httpsCallable } from 'firebase/functions';
 import * as Location from 'expo-location';
 import mockSafeAreaContext from 'react-native-safe-area-context/jest/mock';
+import { StyleSheet } from 'react-native';
 
 import App from '../App';
 import { createTripSelectionIdentity, normalizeItinerary } from '../src/data/enrouteNavigation';
@@ -197,6 +198,12 @@ describe('Home active-trip MVP integration', () => {
 
   it('follows the trip on Trip Details after GO, keeps it behind Back, and ends it into a fresh Recent search', async () => {
     const screen = await renderHome();
+    const layoutUnderSearch = (height: number) => fireEvent(screen.getByTestId('home-under-search'), 'layout', {
+      nativeEvent: { layout: { x: 16, y: 76, width: 320, height } },
+    });
+    const layersTop = () => StyleSheet.flatten(screen.getByTestId('line-layers-button').props.style).top;
+    layoutUnderSearch(46);
+    const startingLayersTop = layersTop();
     await openResults(screen);
     fireEvent.press(screen.getByTestId(`search-result-view-${railTrip.id}`));
     await screen.findByTestId(`search-trip-detail-${railTrip.id}`);
@@ -229,7 +236,11 @@ describe('Home active-trip MVP integration', () => {
     expect(screen.queryByTestId(`search-trip-departure-0-${alternateFirstDeparture}`)).toBeNull();
 
     fireEvent.press(screen.getByTestId('search-trip-back'));
-    const resume = await screen.findByTestId('resume-active-trip');
+    const row = await screen.findByTestId('home-under-search');
+    const resume = await within(row).findByTestId('resume-active-trip');
+    expect(within(resume).queryByText('Resume')).toBeNull();
+    layoutUnderSearch(68);
+    expect(layersTop()).toBe(startingLayersTop);
     expect(screen.queryByTestId('active-trip-detail')).toBeNull();
     expect((await currentDocument()).active?.selection.itineraryId).toBe(railTrip.id);
 

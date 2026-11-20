@@ -35,6 +35,7 @@ import { MapBackdrop } from './MapBackdrop';
 import { MapLabelGlow } from './MapLabelGlow';
 import { Mascot } from './Mascot';
 import { VehicleSheet } from './VehicleSheet';
+import type { VehicleScreenPoint } from './SelectedVehicleOverlay';
 import { useOnBoardVehicle } from '../hooks/useTripRide';
 import { RouteMap } from './RouteMap';
 import { pointAlong, routeFocus, RouteLines, VehicleMarker, type MapLeg } from './RouteMapOverlay';
@@ -445,6 +446,7 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
   // Which pill's sheet is open: each pill opens only its own notice.
   const [openSheet, setOpenSheet] = useState<{ kind: 'alerts' | 'outlook'; index: number } | null>(null);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
+  const [vehicleScreenPoint, setVehicleScreenPoint] = useState<VehicleScreenPoint | null>(null);
   // The stop whose entrances are listed, and the one whose entrances the map shows (`key` repeats a request).
   const [openEntrances, setOpenEntrances] = useState<string | null>(null);
   const [entranceFocus, setEntranceFocus] = useState<{ stopId: string; key: number } | null>(null);
@@ -785,6 +787,7 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
         } : undefined}
         onUserPan={() => setIsLocationCentered(false)}
         onVehiclePress={setSelectedVehicleId}
+        onSelectedVehiclePosition={setVehicleScreenPoint}
         selectedVehicleId={selectedVehicle?.tripId ?? null}
         // The agency's real track/street shape for this direction, served with the stop list.
         path={geometryStatus.geometry.path}
@@ -1006,7 +1009,10 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
         liveSource={route.liveSource}
         mode={vehicleIcon}
         onClaim={ride.claim}
-        onClose={() => setSelectedVehicleId(null)}
+        onClose={() => {
+          setSelectedVehicleId(null);
+          setVehicleScreenPoint(null);
+        }}
         onBoardTripId={onBoardTripId}
         onDismiss={ride.dismiss}
         path={geometryStatus.status === 'loaded' ? geometryStatus.geometry.path : undefined}
@@ -1015,6 +1021,7 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
         reportSource={route.liveSource}
         riderAt={locationFix && (!tripRide || onTripLine) ? { lat: locationFix.lat, lon: locationFix.lon } : null}
         ridingTripId={ride.ridingTripId}
+        selectedVehiclePoint={vehicleScreenPoint}
         sharingEnabled={ride.sharingEnabled}
         stops={geometryStatus.status === 'loaded' ? geometryStatus.geometry.stops : []}
         vehicle={selectedVehicle}

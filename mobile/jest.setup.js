@@ -340,12 +340,14 @@ jest.mock('react-native-maps', () => {
   const mockAnimateToRegion = jest.fn();
   const mockAnimateCamera = jest.fn();
   const mockFitToCoordinates = jest.fn();
+  const mockPointForCoordinate = jest.fn(() => Promise.resolve({ x: 0, y: 0 }));
   const mockCamera = { heading: 0, pitch: 0 };
   const MockMapView = forwardRef((props, ref) => {
     useImperativeHandle(ref, () => ({
       animateToRegion: mockAnimateToRegion,
       animateCamera: mockAnimateCamera,
       fitToCoordinates: mockFitToCoordinates,
+      pointForCoordinate: mockPointForCoordinate,
       getCamera: () => Promise.resolve({ ...mockCamera, center: { latitude: 0, longitude: 0 }, zoom: 14 }),
     }));
     return <View {...props} />;
@@ -361,6 +363,7 @@ jest.mock('react-native-maps', () => {
     mockAnimateCamera,
     mockCamera,
     mockFitToCoordinates,
+    mockPointForCoordinate,
     PROVIDER_GOOGLE: 'google',
     Polygon: MockPolygon,
     Marker: MockMarker,

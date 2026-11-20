@@ -585,10 +585,9 @@ export function HomeScreen() {
   // The transit menu scrolls over the map in one page scroll; the location button rides up with it.
   const [homeScrollY] = useState(() => new Animated.Value(0));
   // The line layers button stays put on the map, under the search bar, and the transit menu slides
-  // over it as it scrolls up (it's drawn with the map, beneath the menu). Its spot is measured from
-  // the row it lines up with under the search bar (which moves down with a resume-trip card).
-  const [layersRow, setLayersRow] = useState<{ y: number; height: number } | null>(null);
-  const layersButtonTop = statusBarInset + (layersRow ? layersRow.y + (layersRow.height - MAP_CONTROL_SIZE) / 2 : 74);
+  // over it as it scrolls up. The button stays aligned with the top of the row as the card fills it.
+  const [underSearchTop, setUnderSearchTop] = useState<number | null>(null);
+  const layersButtonTop = statusBarInset + (underSearchTop ?? 74);
 
   const showHome = useCallback(() => setActiveView({ name: 'home' }), []);
   const showSearch = useCallback(() => {
@@ -1337,22 +1336,21 @@ export function HomeScreen() {
               onProfilePress={() => setActiveView({ name: 'profile' })}
               onSearchPress={showSearch}
             />
-            {hasResumableTrip ? (
-              <View style={styles.resumeCardWrap}>
-                <ResumeTripCard
-                  destination={trip.active?.destination.label ?? trip.recovery?.destination.label ?? 'destination'}
-                  instruction={resumeGuidance?.currentAction ?? (trip.status === 'recovery' ? 'Exact route needs recovery' : undefined)}
-                  onResume={() => setActiveView(tripView)}
-                />
-              </View>
-            ) : null}
-            {/* A holiday reminder beside the line layers button, under the profile button. */}
             <View
-              onLayout={(event) => setLayersRow({ y: event.nativeEvent.layout.y, height: event.nativeEvent.layout.height })}
+              onLayout={(event) => setUnderSearchTop(event.nativeEvent.layout.y)}
               pointerEvents="box-none"
               style={[styles.underSearch, { flexDirection: thumb.row }]}
+              testID="home-under-search"
             >
-              <View pointerEvents="none" style={styles.nudge} />
+              <View pointerEvents="box-none" style={styles.underSearchContent}>
+                {hasResumableTrip ? (
+                  <ResumeTripCard
+                    destination={trip.active?.destination.label ?? trip.recovery?.destination.label ?? 'destination'}
+                    instruction={resumeGuidance?.currentAction ?? (trip.status === 'recovery' ? 'Exact route needs recovery' : undefined)}
+                    onResume={() => setActiveView(tripView)}
+                  />
+                ) : null}
+              </View>
               {/* Room for the line layers button, which is drawn with the map (see homeMap). */}
               <View pointerEvents="none" style={[styles.layersSlot, thumb.edgeMargin(4)]} />
             </View>
@@ -1438,10 +1436,8 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     zIndex: 30,
   },
   header: { paddingTop: 10, paddingHorizontal: 16 },
-  resumeCardWrap: { marginTop: 8 },
-  // Centered under the 54 px profile button.
-  underSearch: { alignItems: 'center', gap: 10, marginTop: 10 },
-  nudge: { flex: 1 },
+  underSearch: { alignItems: 'flex-start', gap: 10, marginTop: 10 },
+  underSearchContent: { flex: 1, minWidth: 0 },
   layersSlot: { width: MAP_CONTROL_SIZE, height: MAP_CONTROL_SIZE },
   layersButton: { position: 'absolute' },
   locationButton: {
