@@ -241,6 +241,9 @@ function LegAlerts({ alerts, expanded, onToggle, testID }: { alerts: readonly Se
 const LEAVE_WITHIN_HORIZON_MIN = 90;
 /** Just below the top row of map buttons (its 8 pt top padding, a button, then a gap). */
 const TOP_ROW_BOTTOM = 8 + MAP_CONTROL_SIZE + 12;
+// GO's touch area reaches past its edge, and a press survives the finger drifting this far.
+const ACTION_HIT_SLOP = { top: 12, right: 12, bottom: 12, left: 12 };
+const ACTION_PRESS_RETENTION = { top: 40, right: 40, bottom: 40, left: 40 };
 
 /**
  * Room the trip map keeps clear when it frames the trip, so no stop hides under the page's own
@@ -445,9 +448,11 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
     }} selected={locationSelected ?? isLocationCentered} testID={`${testPrefix}-location`} />
   );
 
-  // GO (or END) rides the sheet's top edge and scrolls away with it.
+  // GO (or END) rides the sheet's top edge and scrolls away with it. It sits on a scrolling sheet
+  // over a draggable map, so a tap that wobbles a little still counts: a wider touch area, a press
+  // that holds while the finger drifts, and no press-in delay.
   const action = (
-    <PressableScale accessibilityLabel={actionLabel} accessibilityRole="button" onPress={isEndAction ? () => setConfirmingEnd(true) : onAction} style={[styles.goButton, isEndAction && styles.endTripAction]} testID={isEndAction ? `${testPrefix}-end` : `${testPrefix}-go`}>
+    <PressableScale accessibilityLabel={actionLabel} accessibilityRole="button" hitSlop={ACTION_HIT_SLOP} pressRetentionOffset={ACTION_PRESS_RETENTION} unstable_pressDelay={0} onPress={isEndAction ? () => setConfirmingEnd(true) : onAction} style={[styles.goButton, isEndAction && styles.endTripAction]} testID={isEndAction ? `${testPrefix}-end` : `${testPrefix}-go`}>
       <Icon color={colors.onPrimary} name={isEndAction ? 'stop' : 'go'} size={20} />
       <Text style={styles.goButtonText}>{isEndAction ? 'END' : 'GO'}</Text>
     </PressableScale>

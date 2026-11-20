@@ -347,9 +347,9 @@ export function describeRouteAt(agencyId: AgencyId, route: NearbyRouteInfo, lat:
 
 const MAX_ROUTE_RESULTS = 12;
 // Words a rider might search a line by besides its own names: its mode ("ferry", "bus", "train").
-const MODE_WORDS: Record<AgencyId, string> = { subway: 'subway train', lirr: 'rail train', metronorth: 'metro north railroad commuter rail train mnr', nycferry: 'ferry boat', siferry: 'ferry boat', nice: 'bus', suffolk: 'bus', bx: 'bus', bk: 'bus', mn: 'bus', qn: 'bus', si: 'bus', busco: 'bus' };
+const MODE_WORDS: Record<AgencyId, string> = { subway: 'subway train', lirr: 'rail train', metronorth: 'metro north railroad commuter rail train mnr', nycferry: 'ferry boat', siferry: 'ferry boat', nice: 'bus', suffolk: 'bus', bx: 'bus', bk: 'bus', mn: 'bus', qn: 'bus', si: 'bus', busco: 'bus', path: 'path subway train port authority trans hudson' };
 // Rail, subway and ferry lines come before buses: they're what people search for by name.
-const MODE_RANK: Record<AgencyId, number> = { subway: 0, lirr: 0, metronorth: 0, nycferry: 1, siferry: 1, nice: 2, suffolk: 2, bx: 2, bk: 2, mn: 2, qn: 2, si: 2, busco: 2 };
+const MODE_RANK: Record<AgencyId, number> = { subway: 0, lirr: 0, metronorth: 0, nycferry: 1, siferry: 1, nice: 2, suffolk: 2, bx: 2, bk: 2, mn: 2, qn: 2, si: 2, busco: 2, path: 0 };
 const routeSearchText = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 /**
@@ -397,9 +397,11 @@ export type IndexedLine = { agencyId: AgencyId; agencyDisplayName: string; route
 
 /**
  * Version of what listLines returns. The daily refresh saves its output (readLineIndex): bump this
- * when a change alters it (a new field, a color rule) so a deploy doesn't serve the old saved list.
+ * when a change alters it (a new field, a color rule, a new agency) so a deploy doesn't serve the
+ * old saved list. 2: Metro-North's lines (the list saved before it had none, so "Hudson Line" found nothing).
+ * 3: PATH's lines. 4: PATH's lines by code (NWK-WTC) rather than all "PATH".
  */
-export const LINE_INDEX_FORMAT = 1;
+export const LINE_INDEX_FORMAT = 4;
 
 /** Every line of every available agency, for the app to search on the device as the rider types. */
 export function listLines(): IndexedLine[] {
@@ -462,7 +464,7 @@ export function getAgencyLines(agencyId: AgencyId): Promise<AgencyLine[]> {
 export type StopTransfer = { agencyId: AgencyId; agencyDisplayName: string; routeId: string; shortName: string; color: string };
 
 // Station transfers (subway to LIRR at Jamaica) span a bigger complex than a bus stop pair does.
-const STATION_AGENCIES = new Set<AgencyId>(['subway', 'lirr', 'metronorth', 'nycferry', 'siferry']);
+const STATION_AGENCIES = new Set<AgencyId>(['subway', 'lirr', 'metronorth', 'nycferry', 'siferry', 'path']);
 const STATION_TRANSFER_METERS = 250;
 const STOP_TRANSFER_METERS = 120;
 const GRID_DEGREES = 0.005;
@@ -557,6 +559,7 @@ const MAX_NEARBY_DISTANCE_METERS: Partial<Record<AgencyId, number>> = {
   suffolk: 2_400,
   nycferry: 2_400, // ferry landings are few and far between, like LIRR stations but on foot.
   siferry: 2_400,
+  path: 1_600, // Rapid transit like the subway: stations a walk apart.
 };
 const DEFAULT_MAX_NEARBY_DISTANCE_METERS = 1_600;
 
@@ -576,6 +579,7 @@ const MAX_NEARBY_CAP_METERS: Partial<Record<AgencyId, number>> = {
   suffolk: 12_000,
   nycferry: 12_000,
   siferry: 12_000,
+  path: 6_000,
 };
 const DEFAULT_MAX_NEARBY_CAP_METERS = 6_000;
 

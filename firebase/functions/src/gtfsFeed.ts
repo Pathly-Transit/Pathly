@@ -2,6 +2,7 @@ import { parse as parseSync } from 'csv-parse/sync';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
+import { pathLineCode } from './pathLines';
 import { displayTransitName } from './transitNames';
 
 /**
@@ -63,7 +64,9 @@ export function readAgencyStaticData(dataDir: string): AgencyStaticData {
   for (const row of readCsv<RouteRow>(dataDir, 'routes.txt')) {
     // LIRR's routes.txt has no route_short_name column at all (not just blank) — fall all the
     // way back to the route_id itself rather than leaving this undefined.
-    const shortName = row.route_short_name || row.route_long_name || row.route_id;
+    // PATH names every route "PATH"; riders know its lines by code (NWK-WTC), built from the long name.
+    const pathCode = row.route_short_name === 'PATH' ? pathLineCode(row.route_long_name) : null;
+    const shortName = pathCode || row.route_short_name || row.route_long_name || row.route_id;
     routesById.set(row.route_id, { routeId: row.route_id, shortName, name: row.route_long_name || shortName, color: row.route_color });
   }
 

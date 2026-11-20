@@ -51,6 +51,7 @@ import { PressableScale } from './PressableScale';
 import { RouteBadge, type TransitMode } from './RouteBadge';
 import { FiltersSheet, ModesSheet } from './RouteOptionsSheet';
 import { ItinerarySkeleton } from './Skeleton';
+import type { RideFix } from '../data/rideDetection';
 import { TripMap } from './TripMap';
 import { radii } from '../theme/shape';
 
@@ -99,6 +100,10 @@ type RouteResultsViewProps = {
   mapCamera?: TripMapCamera | null;
   onOpenTrip: (itinerary: Itinerary, resumeRequest: ResumePlanRequest) => void;
   onStartTrip: (itinerary: Itinerary) => void;
+  /** The rider's real GPS evidence, so an open trip can start itself once they're clearly taking it. */
+  followFix?: RideFix | null;
+  /** Starts the open trip without GO, the rider already being on their way. */
+  onAutoStartTrip?: (itinerary: Itinerary) => void;
   onToggleSaveDestination: () => void;
   /** The rider's real position for a "Current location" origin; null when unknown. */
   riderLocation: Coordinates | null;
@@ -157,6 +162,8 @@ export function RouteResultsView({
   onEditEndpoint,
   onOpenTrip,
   onStartTrip,
+  followFix,
+  onAutoStartTrip,
   onToggleSaveDestination,
   riderLocation,
   selectedItinerary,
@@ -271,6 +278,8 @@ export function RouteResultsView({
           onBack={onCloseTrip}
           onEnd={() => undefined}
           onStart={onStartTrip}
+          followFix={followFix}
+          onAutoStart={onAutoStartTrip}
           onToggleFavorite={onToggleSaveDestination}
           origin={origin}
           riderLocation={riderLocation}
@@ -624,7 +633,9 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     minWidth: 0,
     justifyContent: 'center',
   },
-  endpointInput: { minWidth: 0, flex: 1, paddingVertical: 7, color: colors.ink, ...typography.bodyStrong, fontSize: 14 },
+  // Centered on its dot on every platform: no stretching to the row's height, a line height close
+  // to the font size (iOS puts extra line height above the text), and no Android font padding.
+  endpointInput: { minWidth: 0, paddingVertical: 7, color: colors.ink, ...typography.bodyStrong, fontSize: 14, lineHeight: 18, includeFontPadding: false, textAlignVertical: 'center' },
   swapButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19, backgroundColor: colors.blueSoft },
   activePill: { borderColor: colors.primary, backgroundColor: colors.blueSoft },
   activePillText: { color: colors.primary },

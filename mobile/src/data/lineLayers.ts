@@ -14,6 +14,7 @@ export const LINE_LAYER_GROUPS = [
   { id: 'ferry', label: 'NYC Ferries', icon: 'ferry', agencies: ['nycferry', 'siferry'] },
   { id: 'nice', label: 'NICE Buses', icon: 'bus', agencies: ['nice'] },
   { id: 'suffolk', label: 'Suffolk Buses', icon: 'bus', agencies: ['suffolk'] },
+  { id: 'path', label: 'PATH', icon: 'subway', agencies: ['path'] },
 ] as const satisfies readonly { id: string; label: string; icon: string; agencies: readonly AgencyId[] }[];
 
 export type LineLayerGroupId = (typeof LINE_LAYER_GROUPS)[number]['id'];

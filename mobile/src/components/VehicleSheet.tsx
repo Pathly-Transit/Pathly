@@ -39,6 +39,8 @@ type VehicleSheetProps = {
   reportFix?: RideFix | null;
   reportSource?: Pick<LiveSource, 'agencyId' | 'routeId'>;
   color: string;
+  /** Text on the line color (dark on light colors); white when not given. */
+  onColor?: string;
   destination: string;
   lineName: string;
   /** The line's feed, for an admin to Ride Along with this vehicle. */
@@ -56,7 +58,7 @@ type VehicleSheetProps = {
 };
 
 /** A tapped vehicle, from the bottom: where it's going, how we know where it is, and who's on it. */
-export function VehicleSheet({ color, destination, lineName, liveSource, mode, onClaim, onClose, onBoardTripId = null, onDismiss, reportFix = null, reportSource, riderAt, ridingTripId, sharingEnabled, stops, vehicle }: VehicleSheetProps) {
+export function VehicleSheet({ color, onColor, destination, lineName, liveSource, mode, onClaim, onClose, onBoardTripId = null, onDismiss, reportFix = null, reportSource, riderAt, ridingTripId, sharingEnabled, stops, vehicle }: VehicleSheetProps) {
   const styles = useThemedStyles(createStyles);
   const { colors } = useTheme();
   const now = useNow(1000);
@@ -125,7 +127,7 @@ export function VehicleSheet({ color, destination, lineName, liveSource, mode, o
             </PressableScale>
           ) : canClaim ? (
             <PressableScale accessibilityRole="button" onPress={() => { onClaim(vehicle.tripId); onClose(); }} style={[styles.button, { backgroundColor: color }]} testID="vehicle-sheet-on">
-              <Text style={styles.primaryButtonText}>{`I’m on this ${NOUNS[mode]}`}</Text>
+              <Text style={[styles.primaryButtonText, onColor ? { color: onColor } : null]}>{`I’m on this ${NOUNS[mode]}`}</Text>
             </PressableScale>
           ) : null}
           {isAdmin && liveSource ? (

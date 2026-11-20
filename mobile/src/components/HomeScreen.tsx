@@ -56,7 +56,9 @@ import { fontFamilies } from '../theme/typography';
 import { ConfirmDialog } from './ConfirmDialog';
 import { CurrentLocationButton } from './CurrentLocationButton';
 import { DeparturesView } from './DeparturesView';
-import { EnrouteNavigationView, EnrouteRecoveryView, type EnrouteLocationState } from './EnrouteNavigationView';
+import { EnrouteRecoveryView, TripDemoControls, type EnrouteLocationState } from './EnrouteNavigationView';
+import { PlannedTripDetailView, type LiveTripFollow } from './PlannedTripDetailView';
+import { useHurryUp } from '../hooks/useHurryUp';
 import { RideGuideView } from './RideGuideView';
 import { GoogleMapView, type HomeMapCamera } from './GoogleMapView';
 import { LineLayersSheet } from './LineLayersSheet';
@@ -75,7 +77,7 @@ import { SavePlaceSheet, type SavePlaceRequest } from './SavePlaceSheet';
 import { SetPlacesPrompt } from './SetPlacesPrompt';
 import { ResumeTripCard } from './ResumeTripCard';
 import { CURRENT_LOCATION_LABEL, initialResultsCriteria, RouteResultsView, type ResultsCriteria } from './RouteResultsView';
-import type { TripMapCamera } from '../data/tripMap';
+import { navigationMapProgress, type TripMapCamera } from '../data/tripMap';
 import { useSupportPopup } from '../data/nudgePrompt';
 import { useSystemNotice } from '../data/systemNotices';
 import { SupportCard } from './SupportCard';
@@ -84,7 +86,7 @@ import { SystemNoticeBanner } from './SystemNoticeBanner';
 import { SearchHeader } from './SearchHeader';
 import { SearchView } from './SearchView';
 import { TransitSheet, type TransitTabId } from './TransitSheet';
-import { mapPageMapHeight } from './mapSheetLayout';
+import { mapPageMapHeight, SHEET_LOWER_DROP } from './mapSheetLayout';
 import { radii } from '../theme/shape';
 
 // Height reserved for the floating search header at the top of the map.
@@ -125,7 +127,8 @@ type ActiveView =
   // Route View's GO: one line from the rider's stop, to pick where they get off; back returns to `previous`.
   | { name: 'rideGuide'; request: RideGuideRequest; previous: ActiveView }
   | ResultsViewState
-  | { name: 'enroute' }
+  // The trip under way, followed on its Trip Details page.
+  | { name: 'activeTrip' }
   | { name: 'profile'; route?: 'places' }
   | { name: 'admin' };
 
@@ -264,7 +267,7 @@ export function HomeScreen() {
   }, []);
   const activeRideRequest = rideRequest && trip.active && isRideGuideTrip(rideRequest, trip.active.itinerary.id) ? rideRequest : null;
   const tripView = useMemo<ActiveView>(
-    () => (activeRideRequest ? { name: 'rideGuide', request: activeRideRequest, previous: { name: 'home' } } : { name: 'enroute' }),
+    () => (activeRideRequest ? { name: 'rideGuide', request: activeRideRequest, previous: { name: 'home' } } : { name: 'activeTrip' }),
     [activeRideRequest],
   );
   const activeView = useMemo<ActiveView>(() => requestedView ?? (
@@ -692,16 +695,20 @@ export function HomeScreen() {
     }
     showSearch();
   }, [activeView, showFavorites, showHome, showSearch]);
-  const startPlannedTrip = useCallback(async (itinerary: Itinerary) => {
+  // The trip that started itself because the rider was already taking it, for its notice.
+  const [autoStartedTripId, setAutoStartedTripId] = useState<string | null>(null);
+  const startPlannedTrip = useCallback(async (itinerary: Itinerary, automatic = false) => {
     if (activeView.name !== 'results' || !selectedTrip) {
-      setTripStartFailed(true);
+      if (!automatic) setTripStartFailed(true);
       return;
     }
     const { resumeRequest } = selectedTrip;
+    setAutoStartedTripId(automatic ? itinerary.id : null);
     const result = await startActiveTrip({ itinerary, origin: resumeRequest.origin, destination: resumeRequest.destination, resumeRequest });
     if (result === 'started') {
       setSelectedTrip(null);
-      setActiveView({ name: 'enroute' });
+      // GO keeps the rider on Trip Details: the same page, now following the trip.
+      setActiveView({ name: 'activeTrip' });
     } else if (result !== 'replacement-required') {
       setTripStartFailed(true);
     }
@@ -868,8 +875,8 @@ export function HomeScreen() {
               return;
             }
             setSelectedTrip(null);
-            // Route View's ride is followed on its own page.
-            if (activeView.name !== 'rideGuide') setActiveView({ name: 'enroute' });
+            // Route View's ride is followed on its own page; any other trip on Trip Details.
+            if (activeView.name !== 'rideGuide') setActiveView({ name: 'activeTrip' });
           });
         }}
         testID="replace-active-trip-confirm"
@@ -899,39 +906,72 @@ export function HomeScreen() {
         ? trip.locationState
         : 'located';
 
+  // How the trip page follows the trip under way, whichever page (Trip Details or Route View's ride) shows it.
+  const hurryUp = useHurryUp(trip.active ?? null, navigationFix, enrouteLocationState === 'located');
+  const activeTrip = trip.status === 'active' ? trip.active : null;
+  const followPoint = activeTrip && followEvidence?.sessionId === activeTrip.sessionId ? followEvidence.fix.point : null;
+  const followProgress = useMemo(
+    () => (activeTrip ? navigationMapProgress(activeTrip.plan, activeTrip.cursor, followPoint) : null),
+    // The point's coordinates, not its object, decide when the progress changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTrip?.plan, activeTrip?.cursor, followPoint?.lat, followPoint?.lng],
+  );
+  const firstCheckpoint = activeTrip?.plan.checkpoints[0];
+  const liveFollow: LiveTripFollow | null = activeTrip && followProgress ? {
+    progress: followProgress,
+    followLocation: followPoint,
+    userLocation: navigationFix ? navigationFix.point : null,
+    userLocationStale: enrouteLocationState !== 'located',
+    hurry: hurryUp,
+    ride: tripRide,
+    startedAutomatically: autoStartedTripId === activeTrip.itinerary.id,
+    rideFix: rideFixFrom(navigationFix, enrouteLocationState === 'stale' || enrouteLocationState === 'unavailable' || enrouteLocationState === 'loading'),
+    ...(tripLeg ? { currentRoute: tripLeg } : {}),
+    ...(isAdmin ? {
+      adminPanel: (
+        <TripDemoControls
+          checkpoints={activeTrip.plan.checkpoints}
+          initialIndex={activeTrip.cursor.checkpointOrdinal}
+          onCheckpoint={(checkpoint) => setMockLocation({ label: checkpoint.label, latitude: checkpoint.point.lat, longitude: checkpoint.point.lng })}
+          onReset={() => {
+            void resetTripForAdmin().then((reset) => {
+              if (reset && firstCheckpoint) setMockLocation({ label: firstCheckpoint.label, latitude: firstCheckpoint.point.lat, longitude: firstCheckpoint.point.lng });
+            });
+          }}
+        />
+      ),
+    } : {}),
+  } : null;
+
   // Holds Home back so it can't flash before a trip in progress takes over; looks like the rest of startup.
   if (trip.status === 'hydrating') {
     return <LoadingScreen />;
   }
 
-  if (activeView.name === 'enroute') {
-    if (trip.status === 'active' && trip.active) {
-      const session = trip.active;
-      const firstCheckpoint = session.plan.checkpoints[0];
+  if (activeView.name === 'activeTrip') {
+    if (activeTrip) {
       return screen(
-        <EnrouteNavigationView
-          cursor={session.cursor}
-          fix={navigationFix}
-          followFix={followEvidence?.sessionId === session.sessionId ? followEvidence.fix : null}
-          isAdmin={isAdmin}
-          locationState={enrouteLocationState}
-          onBack={showHome}
-          onDemoCheckpoint={isAdmin ? (checkpoint) => setMockLocation({ label: checkpoint.label, latitude: checkpoint.point.lat, longitude: checkpoint.point.lng }) : undefined}
-          onEnd={() => {
-            void endTrip().then((ended) => {
-              if (!ended) return;
-              showHome();
-            });
-          }}
-          onResetDemo={isAdmin ? () => {
-            void resetTripForAdmin().then((reset) => {
-              if (reset && firstCheckpoint) setMockLocation({ label: firstCheckpoint.label, latitude: firstCheckpoint.point.lat, longitude: firstCheckpoint.point.lng });
-            });
-          } : undefined}
-          plan={session.plan}
-          ride={tripRide}
-          session={session}
-        />,
+        <>
+          <PlannedTripDetailView
+            destination={activeTrip.destination.label}
+            isActive={true}
+            isFavorite={false}
+            itinerary={activeTrip.itinerary}
+            live={liveFollow}
+            onBack={showHome}
+            onEnd={() => {
+              void endTrip().then((ended) => {
+                if (!ended) return;
+                showHome();
+              });
+            }}
+            onStart={() => undefined}
+            onToggleFavorite={() => undefined}
+            origin={activeTrip.origin.label}
+            showFavorite={false}
+          />
+          {tripStartDialogs}
+        </>,
       );
     }
     if (trip.status === 'recovery' && trip.recovery) {
@@ -1101,6 +1141,7 @@ export function HomeScreen() {
     return screen(
       <>
         <RideGuideView
+          follow={rideTrip ? liveFollow : null}
           live={rideTrip}
           onBack={closeCurrentView}
           onEnd={() => {
@@ -1139,7 +1180,10 @@ export function HomeScreen() {
           onCloseTrip={closePlannedTrip}
           onEditEndpoint={(field, mapCamera) => setActiveView({ name: 'search', editing: { field, results: { ...activeView, mapCamera } } })}
           onOpenTrip={showPlannedTrip}
-          onStartTrip={startPlannedTrip}
+          onStartTrip={(itinerary) => void startPlannedTrip(itinerary)}
+          // Only real GPS counts as being on the way; another trip under way still asks first.
+          followFix={rideFixFrom(navigationFix, Boolean(navigationStale))}
+          onAutoStartTrip={(itinerary) => void startPlannedTrip(itinerary, true)}
           onToggleSaveDestination={() => toggleSavedPlace(destinationPlaceOf(activeView.criteria))}
           riderLocation={riderLocation(location, locationStatus)}
           selectedItinerary={selectedTrip?.itinerary ?? null}
@@ -1209,8 +1253,9 @@ export function HomeScreen() {
 
   const homeMap = (
       <>
-        {/* The map stays fixed while the sheet scrolls over it; its fixed height keeps the legal credits above the resting sheet. */}
-        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: mapHeight }} testID="home-map-viewport">
+        {/* The map stays fixed while the sheet scrolls over it, filling the window TransitSheet gives it, which reaches one card below the resting sheet for a sheet dragged lower.
+            Google's logo and credits must stay visible: on phones the bottom padding lifts them above the resting sheet; on web, where they can't be moved, TransitSheet ends the map's window at the sheet's edge. */}
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} testID="home-map-viewport">
         <GoogleMapView
           initialCamera={homeCamera}
           lines={mapLines}
@@ -1225,7 +1270,7 @@ export function HomeScreen() {
           }}
           onOrientationChange={setMapOrientation}
           onSavedLocationPress={openSavedLocationFromMap}
-          padding={{ top: homeHeaderInset, bottom: 0 }}
+          padding={{ top: homeHeaderInset, bottom: Platform.OS === 'web' ? 0 : SHEET_LOWER_DROP }}
           recenterRequest={recenterRequest}
           reorientRequest={reorientRequest}
           savedLocations={savedLocations}

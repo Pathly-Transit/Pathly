@@ -1,14 +1,20 @@
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { SvgXml } from 'react-native-svg';
 
 import { useRouteColor } from '../data/routeColors';
 import { useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
 import { fontFamilies } from '../theme/typography';
+import { PATH_MARK } from './agencyLogoSvgs';
 
 export type TransitMode = 'subway' | 'bus' | 'rail' | 'ferry';
 
+/** PATH, by Pathly's name for it or Google's ("Port Authority Trans-Hudson"). */
+export const isPath = (agency: string) => /^path$|port authority trans[\s-]*hudson/i.test(agency.trim());
+
 export function transitModeForAgency(agency: string): TransitMode {
-  if (agency === 'MTA Subway') return 'subway';
+  // PATH rides like the subway.
+  if (agency === 'MTA Subway' || isPath(agency)) return 'subway';
   if (agency === 'LIRR' || /metro[\s-]*north|\bmnr\b/i.test(agency)) return 'rail';
   if (agency === 'NYC Ferry' || agency === 'Staten Island Ferry') return 'ferry';
   return 'bus';
@@ -55,6 +61,8 @@ const MAX_ROUTE_CODE = 7;
 export function badgeLabel(route: { agency: string; shortName: string }): string {
   // Select Bus Service is signed the MTA's way: `M15+`, not `M15-SBS`.
   if (/-SBS$/i.test(route.shortName)) return `${route.shortName.replace(/-SBS$/i, '')}+`;
+  // PATH's line codes (NWK-WTC, JSQ-HOB-33) are what its signs say; shortened they'd name nothing.
+  if (isPath(route.agency)) return route.shortName;
   const name = route.shortName.replace(/\s+(Branch|Line|Service)$/i, '').trim();
   if (route.agency === 'LIRR' && LIRR_BRANCH_CODES[name]) return LIRR_BRANCH_CODES[name];
   if (/metro[\s-]*north|\bmnr\b/i.test(route.agency) && METRO_NORTH_BRANCH_CODES[name]) return METRO_NORTH_BRANCH_CODES[name];
@@ -94,6 +102,34 @@ type RouteBadgeProps = {
   testID?: string;
 };
 
+const [, , PATH_MARK_WIDTH, PATH_MARK_HEIGHT] = (/viewBox="([^"]+)"/.exec(PATH_MARK)?.[1] ?? '0 0 108 75').split(' ').map(Number) as [number, number, number, number];
+
+/**
+ * PATH's lines that join two others' tracks share a color with one of them in PATH's feed (Journal
+ * Square - 33rd Street via Hoboken is as orange as Journal Square - 33rd Street; World Trade Center
+ * - 33rd Street as green as Hoboken - WTC). Their P's lower arrow takes the 33rd Street line's
+ * blue, so no two lines look alike. Keyed by line code and by route_id.
+ */
+const PATH_SECOND_COLORS: Readonly<Record<string, string>> = {
+  'JSQ-HOB-33': '#4D92FB',
+  1024: '#4D92FB',
+  'WTC-33': '#4D92FB',
+  77285: '#4D92FB',
+};
+
+/**
+ * PATH's P (the two arrows of its logo) `height` tall, in `color`. With `line` (its code or
+ * route_id), a line that joins two others gets its second color on the lower arrow.
+ */
+export function PathMark({ color, height, line }: { color: string; height: number; line?: string }) {
+  const tint = useRouteColor();
+  const width = Math.round((height * PATH_MARK_WIDTH) / PATH_MARK_HEIGHT);
+  const second = line ? PATH_SECOND_COLORS[line] : undefined;
+  let arrow = 0;
+  const xml = PATH_MARK.replace(/#0095D3/g, () => (arrow++ === 0 || !second ? color : tint(second)));
+  return <SvgXml height={height} width={width} xml={xml} />;
+}
+
 /** Whether a `#RRGGBB` color is light enough that white text on it is hard to read. */
 function isLightColor(color: string): boolean {
   const hex = /^#([0-9a-f]{6})$/i.exec(color)?.[1];
@@ -126,6 +162,17 @@ export function RouteBadge({
       <Text style={[styles.alertMark, { fontSize: metrics.alertDot - 5 }]}>!</Text>
     </View>
   ) : null;
+
+  // PATH's lines are signed with its P, in the line's color; the code (NWK-WTC) is read aloud.
+  if (isPath(agency)) {
+    const width = Math.round((metrics.height * PATH_MARK_WIDTH) / PATH_MARK_HEIGHT);
+    return (
+      <View accessibilityLabel={`${shortName} PATH train${alertLabel}`} accessible={true} style={[styles.badge, { width, height: metrics.height }, style]} testID={testID}>
+        <PathMark color={routeColor} height={metrics.height} line={shortName} />
+        {alertDot}
+      </View>
+    );
+  }
 
   if (expressLine) {
     // A square turned 45° fills the same box as the line's circle; the letter stays upright.

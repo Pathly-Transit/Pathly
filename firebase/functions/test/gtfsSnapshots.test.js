@@ -96,13 +96,14 @@ const AGENCY_FIXTURES = {
   busco: [{ routeId: 'BXM10', stopIds: ['600', '601'] }],
   nycferry: [{ routeId: 'ER', stopIds: ['87', '20'] }],
   siferry: [{ routeId: 'SIF', stopIds: ['stgeorge', 'whitehall'] }],
+  path: [{ routeId: '862', stopIds: ['26733', '26734'] }],
 };
 
 function currentAgencyFiles(agencyId) {
   if (agencyId === 'lirr') return currentLirrFiles();
   const fallbacks = AGENCY_FIXTURES[agencyId];
   const routes = fallbacks
-    .map(({ routeId }) => `${routeId},${routeId},${agencyId} ${routeId},112233`)
+    .map(({ routeId, routeType = '3' }) => `${routeId},${routeId},${agencyId} ${routeId},112233,${routeType}`)
     .join('\n');
   const stopIds = [...new Set(fallbacks.flatMap(({ stopIds: ids }) => ids))];
   const stops = stopIds
@@ -117,7 +118,7 @@ function currentAgencyFiles(agencyId) {
   })).join('\n');
 
   return {
-    'routes.txt': strToU8(`route_id,route_short_name,route_long_name,route_color\n${routes}\n`),
+    'routes.txt': strToU8(`route_id,route_short_name,route_long_name,route_color,route_type\n${routes}\n`),
     'stops.txt': strToU8(`stop_id,stop_name,stop_lat,stop_lon\n${stops}\n`),
     'trips.txt': strToU8(`trip_id,route_id,service_id,direction_id,trip_headsign\n${trips}\n`),
     'stop_times.txt': strToU8(

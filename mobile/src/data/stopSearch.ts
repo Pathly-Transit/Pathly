@@ -41,6 +41,7 @@ const nearPoint = (near?: { latitude: number; longitude: number } | null) => (ne
  * agency is left to the route badges beside it, which already show whose lines stop there.
  */
 export function stopKindLabel(mode: StopSuggestion['mode'], agencyLabel: string): string {
+  if (agencyLabel === 'PATH') return 'PATH station';
   if (mode === 'subway') return 'Subway station';
   if (mode === 'bus') return 'Bus stop';
   if (mode === 'ferry') return 'Ferry landing';

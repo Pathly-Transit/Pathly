@@ -6,7 +6,7 @@ import { GOOGLE_MAPS_LIBRARIES, GOOGLE_MAPS_SCRIPT_ID } from '../data/googleMaps
 import { beanAvatarSvg, type BeanAvatarConfig } from '../avatars/beanAvatar';
 import { formatAge, visibleTrains } from '../data/liveTrains';
 import { googleMapStyle } from '../data/mapStyle';
-import { approachingVehicle, ARROW_ZOOM_SLACK, directionArrowAt, focusStopIndex, metersPerPixel, middleDirectionArrowAt, riderNearStop, splitPathAtStop } from '../data/routeDirection';
+import { approachingVehicle, ARROW_ZOOM_SLACK, directionArrowAt, focusStopIndex, metersPerPixel, middleDirectionArrowAt, riderNearStop, splitPathAtStop, withMinimumFitSpan } from '../data/routeDirection';
 import { stopRevealZoom } from '../data/stopDeclutter';
 import type { RouteLiveVehicle } from '../data/transitLive';
 import type { Coordinates } from '../hooks/useCurrentLocation';
@@ -206,7 +206,8 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
   // The purple dot is always framed: its walk and stop are the point of the page.
   const nearRider = walkOrigin && focusStop && (exploreFrom != null || riderNearStop(walkOrigin, focusStop)) ? { lat: walkOrigin.latitude, lng: walkOrigin.longitude } : null;
   const frameStop = (target: google.maps.Map, stop: GeometryStop, extra: readonly google.maps.LatLngLiteral[]) => {
-    const points = [{ lat: stop.lat, lng: stop.lon }, ...extra];
+    // Never closer than ~1.3 km, so a rider right by the stop doesn't open the map at street level.
+    const points = extra.length > 0 ? withMinimumFitSpan([{ lat: stop.lat, lng: stop.lon }, ...extra]) : [{ lat: stop.lat, lng: stop.lon }];
     if (points.length === 1) {
       target.panTo(points[0]!);
       if ((target.getZoom() ?? 0) < FOCUS_ZOOM) target.setZoom(FOCUS_ZOOM);
@@ -234,8 +235,7 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, exploreF
       loadedMap.setZoom(FOCUS_ZOOM);
       if (nearRider) {
         const bounds = new google.maps.LatLngBounds();
-        bounds.extend({ lat: focusStop.lat, lng: focusStop.lon });
-        bounds.extend(nearRider);
+        for (const point of withMinimumFitSpan([{ lat: focusStop.lat, lng: focusStop.lon }, nearRider])) bounds.extend(point);
         loadedMap.fitBounds(bounds, ROUTE_FIT_PADDING);
       }
       return;

@@ -1,22 +1,18 @@
-import { act, fireEvent, render, within } from '@testing-library/react-native';
+import { fireEvent, render } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import {
-  EnrouteNavigationView,
-  EnrouteRecoveryView,
-  type EnrouteLocationState,
-} from '../src/components/EnrouteNavigationView';
-import {
-  initialNavigationCursor,
-  normalizeItinerary,
-  type ActiveTripRuntime,
-  type NavigationCursor,
-  type NormalizedNavigationPlan,
-} from '../src/data/enrouteNavigation';
-import { formatTripClock, type Itinerary, type LatLng, type TransitStep, type WalkStep } from '../src/data/tripPlanning';
+import { ActiveTripNotices } from '../src/components/ActiveTripNotices';
+import { EnrouteRecoveryView, TripDemoControls } from '../src/components/EnrouteNavigationView';
+import { PlannedTripDetailView, type LiveTripFollow } from '../src/components/PlannedTripDetailView';
+import { initialNavigationCursor, normalizeItinerary } from '../src/data/enrouteNavigation';
+import { navigationMapProgress } from '../src/data/tripMap';
+import type { Itinerary, LatLng, TransitStep, WalkStep } from '../src/data/tripPlanning';
 import type { RideTracking } from '../src/data/rideTracking';
 import { AppSettingsProvider } from '../src/theme/AppSettings';
+
+// The trip's vehicles come from the backend; none here.
+jest.mock('../src/lib/firebase', () => ({ callable: () => () => Promise.resolve({ data: { vehicles: [] } }) }));
 
 const baseTime = Date.UTC(2026, 9, 15, 13);
 const at = (minutes: number) => new Date(baseTime + minutes * 60_000).toISOString();
@@ -90,267 +86,102 @@ function TestProviders({ children }: { children: ReactNode }) {
   );
 }
 
-function cursorAt(checkpointPlan: NormalizedNavigationPlan, predicate: (kind: string, label: string) => boolean): NavigationCursor {
-  const checkpoint = checkpointPlan.checkpoints.find((candidate) => predicate(candidate.kind, candidate.label));
-  if (!checkpoint) throw new Error('Expected navigation checkpoint was not normalized');
+const sharing = (dismiss = jest.fn()): RideTracking => ({ ridingTripId: 'bus-1', sharingEnabled: true, claim: jest.fn(), dismiss });
+
+function liveFollow(overrides: Partial<LiveTripFollow> = {}): LiveTripFollow {
   return {
-    checkpointOrdinal: checkpoint.ordinal,
-    lastAdvancedAt: baseTime,
-    phase: checkpoint.phase,
-    stepIndex: checkpoint.stepIndex,
+    progress: navigationMapProgress(plan, initialNavigationCursor(plan, baseTime)),
+    followLocation: null,
+    userLocation: origin,
+    userLocationStale: false,
+    hurry: null,
+    rideFix: null,
+    ...overrides,
   };
 }
 
-function runtime(checkpointPlan: NormalizedNavigationPlan, trip: Itinerary, cursor: NavigationCursor): ActiveTripRuntime {
-  return {
-    cursor,
-    destination: { kind: 'place', label: checkpointPlan.destinationName, placeId: 'destination-place-id' },
-    evidence: null,
-    itinerary: trip,
-    origin: { kind: 'coordinate', label: 'Demo origin', point: origin, savedAt: baseTime },
-    plan: checkpointPlan,
-    selection: checkpointPlan.selection,
-    sessionId: 'session-1',
-    startedAt: baseTime,
-    uid: 'rider-1',
-    updatedAt: baseTime,
-  };
-}
+describe('the live trip on Trip Details', () => {
+  function renderLive(live: LiveTripFollow, onEnd = jest.fn()) {
+    const screen = render(
+      <TestProviders>
+        <PlannedTripDetailView
+          destination="Demo destination"
+          isActive={true}
+          isFavorite={false}
+          itinerary={itinerary}
+          live={live}
+          onBack={jest.fn()}
+          onEnd={onEnd}
+          onStart={jest.fn()}
+          onToggleFavorite={jest.fn()}
+          origin="Demo origin"
+          showFavorite={false}
+        />
+      </TestProviders>,
+    );
+    return { onEnd, screen };
+  }
 
-type RenderNavigationOptions = {
-  checkpointPlan?: NormalizedNavigationPlan;
-  isAdmin?: boolean;
-  locationState?: EnrouteLocationState;
-  onDemoCheckpoint?: jest.Mock;
-  onEnd?: jest.Mock;
-  onResetDemo?: jest.Mock;
-  ride?: RideTracking;
-  trip?: Itinerary;
-};
-
-function renderNavigation(cursor: NavigationCursor, options: RenderNavigationOptions = {}) {
-  const checkpointPlan = options.checkpointPlan ?? plan;
-  const trip = options.trip ?? itinerary;
-  const onEnd = options.onEnd ?? jest.fn();
-  const screen = render(
-    <TestProviders>
-      <EnrouteNavigationView
-        cursor={cursor}
-        fix={null}
-        isAdmin={options.isAdmin ?? false}
-        locationState={options.locationState ?? 'located'}
-        onBack={jest.fn()}
-        onDemoCheckpoint={options.onDemoCheckpoint}
-        onEnd={onEnd}
-        onResetDemo={options.onResetDemo}
-        plan={checkpointPlan}
-        ride={options.ride}
-        session={runtime(checkpointPlan, trip, cursor)}
-      />
-    </TestProviders>,
-  );
-  return { onEnd, screen };
-}
-
-describe('EnrouteNavigationView ride sharing', () => {
-  it('says when a ride is shared, and lets the rider say they are not on it', () => {
-    const dismiss = jest.fn();
-    const { screen } = renderNavigation(cursorAt(plan, (_kind, label) => label === 'First Street'), { ride: { ridingTripId: 'bus-1', sharingEnabled: true, claim: jest.fn(), dismiss } });
-    expect(screen.getByTestId('enroute-ride-sharing')).toBeTruthy();
-    // The spoken summary must not swallow the separately actionable sharing controls.
-    expect(within(screen.getByTestId('enroute-guidance')).queryByRole('button')).toBeNull();
-    fireEvent.press(screen.getByTestId('enroute-ride-not-on'));
-    expect(dismiss).toHaveBeenCalledWith('bus-1');
-  });
-
-  it('shows nothing when no ride is shared', () => {
-    const { screen } = renderNavigation(cursorAt(plan, (_kind, label) => label === 'First Street'));
-    expect(screen.queryByTestId('enroute-ride-sharing')).toBeNull();
-  });
-});
-
-describe('EnrouteNavigationView guidance', () => {
-  afterEach(() => {
-    jest.useRealTimers();
-  });
-
-  it('renders walking, waiting, riding, transferring, and arrived states from the normalized cursor', () => {
-    const walking = renderNavigation(initialNavigationCursor(plan, baseTime)).screen;
-    expect(walking.getByTestId('enroute-current-action').props.children).toBe('Walk to 10 origin');
-    walking.unmount();
-
-    const waitingCursor = cursorAt(plan, (kind, label) => kind === 'board' && label === '10 origin');
-    const waiting = renderNavigation(waitingCursor).screen;
-    expect(waiting.getByTestId('enroute-current-action').props.children).toBe('Board 10 at 10 origin');
-    expect(waiting.getByTestId('enroute-remaining-stops').props.children).toBe('2 stops remaining');
-    waiting.unmount();
-
-    const ridingCursor = cursorAt(plan, (_kind, label) => label === 'First Street');
-    const riding = renderNavigation(ridingCursor).screen;
-    expect(riding.getByTestId('enroute-current-action').props.children).toBe('Ride 10 toward Downtown via 10');
-    expect(riding.getByTestId('enroute-remaining-stops').props.children).toBe('1 stop remaining');
-    riding.unmount();
-
-    const transferCursor = cursorAt(plan, (kind, label) => kind === 'alight' && label === '10 terminal');
-    const transferring = renderNavigation(transferCursor).screen;
-    expect(transferring.getByTestId('enroute-current-action').props.children).toBe('Transfer toward 20 origin');
-    transferring.unmount();
-
-    const arrivedCursor = cursorAt(plan, (kind) => kind === 'destination');
-    const arrived = renderNavigation(arrivedCursor).screen;
-    expect(arrived.getByTestId('enroute-current-action').props.children).toBe('You’ve arrived at Demo destination');
-    expect(arrived.queryByTestId('enroute-next-card')).toBeNull();
-    expect(arrived.queryByTestId('enroute-next-action')).toBeNull();
-  });
-
-  it('is honest about a sparse transit leg with no known intermediate stops', () => {
-    const sparseTrip: Itinerary = {
-      arrivalTime: at(20),
-      departureTime: at(0),
-      durationSeconds: 20 * 60,
-      id: 'sparse-trip',
-      steps: [transit('S', origin, destination, 0, 20)],
-      transfers: 0,
-    };
-    const sparsePlan = normalizeItinerary(sparseTrip);
-    const sparseCursor = initialNavigationCursor(sparsePlan, baseTime);
-    const screen = renderNavigation(sparseCursor, { checkpointPlan: sparsePlan, trip: sparseTrip }).screen;
-
-    expect(screen.getByTestId('enroute-current-action').props.children).toBe('Board S at S origin');
-    expect(screen.getByTestId('enroute-next-action').props.children).toBe('Arrive at S terminal');
-    expect(screen.queryByTestId('enroute-remaining-stops')).toBeNull();
-  });
-
-  it('shows the selected departure while waiting and ages it from the app clock', () => {
-    jest.useFakeTimers();
-    jest.setSystemTime(baseTime);
-    const waitingCursor = cursorAt(plan, (kind, label) => kind === 'board' && label === '10 origin');
-    const screen = renderNavigation(waitingCursor).screen;
-
-    expect(screen.getByTestId('enroute-departure-time').props.children).toBe(`Departs ${formatTripClock(at(5))}, in 5 min`);
-    expect(screen.getByTestId('enroute-eta').props.children.replaceAll('\u00a0', ' ')).toBe(`Arrive ${formatTripClock(at(45))}, in 45 min`);
-    expect(screen.getByTestId('enroute-guidance').props.accessibilityLabel)
-      .toContain(`Selected departure ${formatTripClock(at(5))}, in 5 minutes.`);
-
-    act(() => jest.advanceTimersByTime(60_000));
-    expect(screen.getByTestId('enroute-departure-time').props.children).toBe(`Departs ${formatTripClock(at(5))}, in 4 min`);
-    expect(screen.getByTestId('enroute-eta').props.children.replaceAll('\u00a0', ' ')).toBe(`Arrive ${formatTripClock(at(45))}, in 44 min`);
-  });
-
-  it('shows meaningful distance and duration metadata while walking and transferring', () => {
-    const walking = renderNavigation(initialNavigationCursor(plan, baseTime)).screen;
-    expect(walking.getByTestId('enroute-step-metadata').props.children).toBe('0.2 mi, 5 min');
-    expect(walking.getByTestId('enroute-guidance').props.accessibilityLabel)
-      .toContain('Walking distance 0.2 miles. estimated walking time 5 minutes.');
-    walking.unmount();
-
-    const transferCursor = cursorAt(plan, (kind, label) => kind === 'alight' && label === '10 terminal');
-    const transferring = renderNavigation(transferCursor).screen;
-    expect(transferring.getByTestId('enroute-step-metadata').props.children).toBe('0.2 mi, 4 min');
-    expect(transferring.getByTestId('enroute-guidance').props.accessibilityLabel)
-      .toContain('Transfer distance 0.2 miles. estimated transfer time 4 minutes.');
-  });
-
-  it('formats long upcoming and past navigation times in hours with natural spoken labels', () => {
-    jest.useFakeTimers();
-    jest.setSystemTime(baseTime);
-    const shift = (iso: string) => new Date(Date.parse(iso) + 120 * 60_000).toISOString();
-    const trip: Itinerary = {
-      ...itinerary,
-      departureTime: shift(itinerary.departureTime),
-      arrivalTime: shift(itinerary.arrivalTime),
-      steps: itinerary.steps.map((step) => step.kind === 'walk' ? step : {
-        ...step, from: { ...step.from, time: shift(step.from.time) }, to: { ...step.to, time: shift(step.to.time) },
-        ...(step.stops ? { stops: step.stops.map((item) => ({ ...item, time: shift(item.time) })) } : {}),
-      }),
-    };
-    const checkpointPlan = normalizeItinerary(trip);
-    const cursor = cursorAt(checkpointPlan, (kind, label) => kind === 'board' && label === '10 origin');
-    const future = renderNavigation(cursor, { checkpointPlan, trip }).screen;
-    expect(future.getByTestId('enroute-departure-time').props.children).toBe(`Departs ${formatTripClock(at(125))}, in 2hr 5m`);
-    expect(future.getByTestId('enroute-guidance').props.accessibilityLabel).toContain('in 2 hours 5 minutes.');
-    expect(future.getByTestId('enroute-guidance').props.accessibilityLabel).toContain('in 2 hours 45 minutes.');
-    expect(future.getByTestId('enroute-eta').props.children.replaceAll('\u00a0', ' ')).toBe(`Arrive ${formatTripClock(at(165))}, in 2hr 45m`);
-    future.unmount();
-
-    jest.setSystemTime(baseTime + 250 * 60_000);
-    const past = renderNavigation(cursor, { checkpointPlan, trip }).screen;
-    expect(past.getByTestId('enroute-departure-time').props.children).toBe(`Departs ${formatTripClock(at(125))}, 2hr 5m ago`);
-    expect(past.getByTestId('enroute-guidance').props.accessibilityLabel).toContain('2 hours 5 minutes ago.');
-    expect(past.getByTestId('enroute-eta').props.children.replaceAll('\u00a0', ' ')).toBe(`Arrive ${formatTripClock(at(165))}, 1hr 25m ago`);
-  });
-
-  it('combines current, next, remaining-stop, and arrival guidance in one screen-reader label', () => {
-    const waitingCursor = cursorAt(plan, (kind, label) => kind === 'board' && label === '10 origin');
-    const screen = renderNavigation(waitingCursor).screen;
-    const label = screen.getByTestId('enroute-guidance').props.accessibilityLabel;
-
-    expect(label).toContain('Board 10 at 10 origin.');
-    expect(label).toContain('Next: Continue to First Street.');
-    expect(label).toContain('2 stops remaining.');
-    expect(label).toContain(`Arrive ${formatTripClock(plan.arrivalTime)}`);
-  });
-
-  it('keeps confirmed guidance visible when location is unavailable', () => {
-    const screen = renderNavigation(initialNavigationCursor(plan, baseTime), { locationState: 'unavailable' }).screen;
-
-    expect(screen.getByTestId('enroute-current-action').props.children).toBe('Walk to 10 origin');
-    expect(screen.getByTestId('enroute-location-unavailable')).toBeTruthy();
-    expect(screen.getByText('Live location is unavailable. Keeping your last confirmed step.')).toBeTruthy();
-  });
-});
-
-describe('EnrouteNavigationView controls', () => {
-  it('keeps End trip outside the scroller and requires confirmation, with cancel preserving the trip', () => {
-    const { onEnd, screen } = renderNavigation(initialNavigationCursor(plan, baseTime));
-
-    expect(within(screen.getByTestId('enroute-footer')).getByRole('button', { name: 'End current trip' })).toBeTruthy();
-    expect(within(screen.getByTestId('enroute-scroll')).queryByTestId('enroute-end')).toBeNull();
-    expect(within(screen.getByTestId('enroute-footer')).getByTestId('enroute-destination').props.children).toBe('Demo destination');
-    expect(within(screen.getByTestId('enroute-scroll')).queryByTestId('enroute-trip-summary')).toBeNull();
-    expect(within(screen.getByTestId('enroute-trip-summary')).queryByRole('button')).toBeNull();
-    expect(screen.getByText('End trip')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('enroute-end'));
-    expect(screen.getByTestId('enroute-end-confirm')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('enroute-end-confirm-cancel'));
+  it('turns GO into END, which ends the trip only once confirmed', () => {
+    const { onEnd, screen } = renderLive(liveFollow());
+    expect(screen.queryByTestId('search-trip-go')).toBeNull();
+    fireEvent.press(screen.getByTestId('search-trip-end'));
+    fireEvent.press(screen.getByTestId('search-trip-end-confirm-cancel'));
     expect(onEnd).not.toHaveBeenCalled();
-
-    fireEvent.press(screen.getByTestId('enroute-end'));
-    fireEvent.press(screen.getByTestId('enroute-end-confirm-confirm'));
+    fireEvent.press(screen.getByTestId('search-trip-end'));
+    fireEvent.press(screen.getByTestId('search-trip-end-confirm-confirm'));
     expect(onEnd).toHaveBeenCalledTimes(1);
   });
 
-  it('lets an admin select, step through, and reset deterministic checkpoints', () => {
-    const onDemoCheckpoint = jest.fn();
-    const onResetDemo = jest.fn();
-    const screen = renderNavigation(initialNavigationCursor(plan, baseTime), {
-      isAdmin: true,
-      onDemoCheckpoint,
-      onResetDemo,
-    }).screen;
-
-    expect(screen.getByTestId('enroute-demo-controls')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('enroute-demo-checkpoint-2'));
-    expect(onDemoCheckpoint).toHaveBeenLastCalledWith(plan.checkpoints[2], 2);
-    fireEvent.press(screen.getByTestId('enroute-demo-next'));
-    expect(onDemoCheckpoint).toHaveBeenLastCalledWith(plan.checkpoints[3], 3);
-    fireEvent.press(screen.getByTestId('enroute-demo-previous'));
-    expect(onDemoCheckpoint).toHaveBeenLastCalledWith(plan.checkpoints[2], 2);
-    fireEvent.press(screen.getByTestId('enroute-demo-reset'));
-    expect(onResetDemo).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('enroute-demo-checkpoint-0').props.accessibilityState).toEqual({ selected: true });
+  it('follows the rider on the map from the start', () => {
+    const { screen } = renderLive(liveFollow({ followLocation: origin }));
+    expect(screen.getByTestId('search-trip-location').props.accessibilityState).toMatchObject({ selected: true });
   });
 
-  it('does not expose admin checkpoint controls to a rider', () => {
-    const screen = renderNavigation(initialNavigationCursor(plan, baseTime), {
-      isAdmin: false,
-      onDemoCheckpoint: jest.fn(),
-      onResetDemo: jest.fn(),
-    }).screen;
+  it('says to hurry and that a ride is shared, above the steps', () => {
+    const dismiss = jest.fn();
+    const { screen } = renderLive(liveFollow({ hurry: { title: 'Hurry to your stop', body: 'The 10 leaves in 2 min' }, ride: sharing(dismiss) }));
+    expect(screen.getByTestId('active-trip-hurry-up')).toBeTruthy();
+    expect(screen.getByText('Hurry to your stop')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('active-trip-ride-not-on'));
+    expect(dismiss).toHaveBeenCalledWith('bus-1');
+  });
 
-    expect(screen.queryByTestId('enroute-demo-controls')).toBeNull();
-    expect(screen.queryByTestId('enroute-demo-reset')).toBeNull();
-    expect(screen.queryByTestId(/^enroute-demo-checkpoint-/)).toBeNull();
+  it('shows the admin checkpoint stepper only when given one', () => {
+    const admin = renderLive(liveFollow({ adminPanel: <TripDemoControls checkpoints={plan.checkpoints} initialIndex={0} onCheckpoint={jest.fn()} onReset={jest.fn()} /> })).screen;
+    expect(admin.getByTestId('trip-demo-controls')).toBeTruthy();
+    admin.unmount();
+    const rider = renderLive(liveFollow()).screen;
+    expect(rider.queryByTestId('trip-demo-controls')).toBeNull();
+  });
+});
+
+describe('ActiveTripNotices', () => {
+  it('shows nothing when there is nothing to say', () => {
+    const screen = render(<TestProviders><ActiveTripNotices hurry={null} reportTripId={null} rideFix={null} /></TestProviders>);
+    expect(screen.queryByTestId('active-trip-notices')).toBeNull();
+  });
+
+  it('never claims a shared ride the rider is not sharing', () => {
+    const screen = render(<TestProviders><ActiveTripNotices hurry={null} reportTripId={null} ride={{ ...sharing(), ridingTripId: null }} rideFix={null} /></TestProviders>);
+    expect(screen.queryByTestId('active-trip-ride-sharing')).toBeNull();
+  });
+});
+
+describe('TripDemoControls', () => {
+  it('lets an admin select, step through, and reset deterministic checkpoints', () => {
+    const onCheckpoint = jest.fn();
+    const onReset = jest.fn();
+    const screen = render(<TestProviders><TripDemoControls checkpoints={plan.checkpoints} initialIndex={0} onCheckpoint={onCheckpoint} onReset={onReset} /></TestProviders>);
+    fireEvent.press(screen.getByTestId('trip-demo-checkpoint-2'));
+    expect(onCheckpoint).toHaveBeenLastCalledWith(plan.checkpoints[2], 2);
+    fireEvent.press(screen.getByTestId('trip-demo-next'));
+    expect(onCheckpoint).toHaveBeenLastCalledWith(plan.checkpoints[3], 3);
+    fireEvent.press(screen.getByTestId('trip-demo-previous'));
+    expect(onCheckpoint).toHaveBeenLastCalledWith(plan.checkpoints[2], 2);
+    fireEvent.press(screen.getByTestId('trip-demo-reset'));
+    expect(onReset).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('trip-demo-checkpoint-0').props.accessibilityState).toEqual({ selected: true });
   });
 });
 

@@ -66,6 +66,8 @@ const googleMapsApiKey = defineSecret('GOOGLE_MAPS_API_KEY');
 const swiftlyApiKey = defineSecret('SWIFTLY_API_KEY');
 /** Set once with: firebase functions:secrets:set MTA_BUS_TIME_API_KEY. MTA Bus Time's live feed for every NYC city bus. */
 const mtaBusTimeApiKey = defineSecret('MTA_BUS_TIME_API_KEY');
+/** Every secret a live feed may need. */
+const liveFeedSecrets = [swiftlyApiKey, mtaBusTimeApiKey];
 
 // Keep false until web and native releases are producing valid App Check tokens. This is
 // version-controlled deliberately so a deploy from a machine missing local config cannot
@@ -276,7 +278,7 @@ type RouteLiveStatusRequest = { agencyId: AgencyId; routeId: string; direction1S
  * (For agencies where one stop_id serves a station regardless of direction, pass the same id
  * for both direction1StopId and direction0StopId.)
  */
-export const getRouteLiveStatus = onCall<RouteLiveStatusRequest>({ ...liveStatusCallableOptions, secrets: [swiftlyApiKey, mtaBusTimeApiKey] }, async (request) => {
+export const getRouteLiveStatus = onCall<RouteLiveStatusRequest>({ ...liveStatusCallableOptions, secrets: liveFeedSecrets }, async (request) => {
   const uid = await enforceCallableSecurity(request, 'getRouteLiveStatus', RATE_LIMITS.getRouteLiveStatus);
   const data = request.data ?? ({} as RouteLiveStatusRequest);
   await prepareAgencyStaticData(requiredAgencyId(data.agencyId));
@@ -316,7 +318,7 @@ type ReportRideRequest = { agencyId: AgencyId; routeId: string; tripId: string; 
  * with an accurate fix near where the agency's own feed puts that vehicle; anything else ends the
  * rider's session instead. Client call: httpsCallable(functions, 'reportRide')({ agencyId, routeId, tripId, lat, lon, accuracyMeters }).
  */
-export const reportRide = onCall<ReportRideRequest>({ ...liveStatusCallableOptions, secrets: [swiftlyApiKey, mtaBusTimeApiKey] }, async (request) => {
+export const reportRide = onCall<ReportRideRequest>({ ...liveStatusCallableOptions, secrets: liveFeedSecrets }, async (request) => {
   const uid = await enforceCallableSecurity(request, 'reportRide', RATE_LIMITS.reportRide);
   // Anyone can mint a guest session, so guests can't place vehicles for other riders.
   if (request.auth?.token.firebase?.sign_in_provider === 'anonymous') throw new HttpsError('permission-denied', 'Create an account to share rides.');
@@ -343,7 +345,7 @@ type ReportRideConditionRequest = ReportRideRequest & { kind: RideReportKind };
  * A rider says how their ride is going (rideReports.ts). Like reportRide it needs an accurate fix
  * near that vehicle, so only someone on it can report; the fix is checked, not stored.
  */
-export const reportRideCondition = onCall<ReportRideConditionRequest>({ ...liveStatusCallableOptions, secrets: [swiftlyApiKey, mtaBusTimeApiKey] }, async (request) => {
+export const reportRideCondition = onCall<ReportRideConditionRequest>({ ...liveStatusCallableOptions, secrets: liveFeedSecrets }, async (request) => {
   const uid = await enforceCallableSecurity(request, 'reportRideCondition', RATE_LIMITS.reportRideCondition);
   if (request.auth?.token.firebase?.sign_in_provider === 'anonymous') throw new HttpsError('permission-denied', 'Create an account to report on rides.');
   const data = request.data ?? ({} as ReportRideConditionRequest);
@@ -406,7 +408,7 @@ type RoutesLiveStatusRequest = { routes: Omit<RouteLiveStatusRequest, 'lat' | 'l
  * Client call: httpsCallable(functions, 'getRoutesLiveStatus')({ routes: [{ agencyId, routeId, direction1StopId, direction0StopId }, ...], lat, lon }).
  */
 // minInstances 0 stated outright, so a deploy clears the earlier always-on setting (it billed while idle).
-export const getRoutesLiveStatus = onCall<RoutesLiveStatusRequest>({ ...liveStatusCallableOptions, minInstances: 0, secrets: [swiftlyApiKey, mtaBusTimeApiKey] }, async (request) => {
+export const getRoutesLiveStatus = onCall<RoutesLiveStatusRequest>({ ...liveStatusCallableOptions, minInstances: 0, secrets: liveFeedSecrets }, async (request) => {
   const uid = await enforceCallableSecurity(request, 'getRoutesLiveStatus', RATE_LIMITS.getRoutesLiveStatus);
   const data = request.data ?? ({} as RoutesLiveStatusRequest);
   if (!Array.isArray(data.routes) || data.routes.length === 0 || data.routes.length > MAX_BATCH_ROUTES) {
@@ -447,7 +449,7 @@ const FULL_DEPARTURES_LIMIT = 200;
  * Client call: httpsCallable(functions, 'getStopDepartures')({ agencyId, routeId, direction1StopId, direction0StopId, directionId }).
  */
 // Reads the same live feeds as getRouteLiveStatus, so it shares that instance's feed cache and quota.
-export const getStopDepartures = onCall<StopDeparturesRequest>({ ...liveStatusCallableOptions, secrets: [swiftlyApiKey, mtaBusTimeApiKey] }, async (request) => {
+export const getStopDepartures = onCall<StopDeparturesRequest>({ ...liveStatusCallableOptions, secrets: liveFeedSecrets }, async (request) => {
   await enforceCallableSecurity(request, 'getStopDepartures', RATE_LIMITS.getStopDepartures);
   const data = request.data ?? ({} as StopDeparturesRequest);
   const agencyId = requiredAgencyId(data.agencyId);
@@ -841,7 +843,7 @@ async function prepareTripStaticData(agencies: ReadonlySet<AgencyId>, deadlineMs
  */
 export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary[] }>>(
   // The bus feeds' keys too: the live check reads NYC, Suffolk, and NICE buses (tripLive.ts).
-  { ...protectedCallableOptions, secrets: [googleMapsApiKey, swiftlyApiKey, mtaBusTimeApiKey], timeoutSeconds: 30 },
+  { ...protectedCallableOptions, secrets: [googleMapsApiKey, ...liveFeedSecrets], timeoutSeconds: 30 },
   async (request) => {
     await enforceCallableSecurity(request, 'planTrip', RATE_LIMITS.planTrip);
     const nowMs = Date.now();
@@ -988,7 +990,7 @@ export const reverseGeocode = onCall<ReverseGeocodeRequest>(
  * last scheduled refresh, whether its live feed answers, and the caller's own rate-limit allowance.
  * Client call: httpsCallable(functions, 'getBackendStatus')().
  */
-export const getBackendStatus = onCall({ ...protectedCallableOptions, secrets: [swiftlyApiKey, mtaBusTimeApiKey] }, async (request) => {
+export const getBackendStatus = onCall({ ...protectedCallableOptions, secrets: liveFeedSecrets }, async (request) => {
   const uid = await enforceCallableSecurity(request, 'getBackendStatus', RATE_LIMITS.getBackendStatus);
   requireAdmin(request);
   const [agencies, myRateLimits] = await Promise.all([collectBackendStatus(), peekRateLimits(uid, RATE_LIMITS)]);

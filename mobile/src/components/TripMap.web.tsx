@@ -247,7 +247,9 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
           }] : undefined;
           return (
             <Polyline
-              key={`leg-${index}`}
+              // Redrawn when a piece turns from walk to ride (a moved trip re-splits its route):
+              // setOptions merges, so a reused line would keep the walk's dots over the ride.
+              key={`leg-${index}-${leg.walk ? 'walk' : 'ride'}`}
               options={leg.walk
                 ? { strokeOpacity: 0, icons: progressWalkIcons, zIndex: current ? 3 : 1, clickable: false }
                 : {

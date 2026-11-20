@@ -1,0 +1,5 @@
+service_id,date,holiday_name,exception_type
+c_71335_b_none_d_0,20250607,NWK Roof & GRV Platform Work – Saturday,1
+c_71142_b_84435_d_32,20250607,NWK Roof & GRV Platform Work – Saturday,2
+c_71336_b_none_d_0,20250608,NWK Roof & GRV Platform Work – Sunday,1
+c_71142_b_84435_d_64,20250608,NWK Roof & GRV Platform Work – Sunday,2

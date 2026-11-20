@@ -23,7 +23,14 @@ jest.mock('@react-google-maps/api', () => {
   };
   const Marker = (props: object) => <MockView {...props} testID="web-marker" />;
   const OverlayViewF = ({ children }: { children: React.ReactNode }) => <MockView testID="web-overlay">{children}</MockView>;
-  const Polyline = (props: object) => <MockView {...props} testID="web-polyline" />;
+  // Counts mounts, so a test can tell a line drawn fresh from one reused with new options.
+  const mockPolylineMounts = { count: 0 };
+  const Polyline = (props: object) => {
+    React.useEffect(() => {
+      mockPolylineMounts.count += 1;
+    }, []);
+    return <MockView {...props} testID="web-polyline" />;
+  };
   return {
     FLOAT_PANE: 'floatPane',
     GoogleMap,
@@ -31,6 +38,7 @@ jest.mock('@react-google-maps/api', () => {
     OverlayViewF,
     Polyline,
     mockMap,
+    mockPolylineMounts,
     useJsApiLoader: () => ({ isLoaded: true }),
   };
 });
@@ -338,6 +346,25 @@ describe('web active TripMap', () => {
     expect(lines[0]!.props.options).toMatchObject({ strokeOpacity: 0.45, strokeWeight: 4 });
     expect(lines[1]!.props.options.icons[0].icon.scale).toBe(4.25);
     expect(lines[2]!.props.options).toMatchObject({ strokeColor: '#F26A21', strokeOpacity: 1, strokeWeight: 6 });
+  });
+
+  it('draws a piece fresh when it turns from walk to ride, so the walk dots leave the ride', async () => {
+    const mounts = (jest.requireMock('@react-google-maps/api') as { mockPolylineMounts: { count: number } }).mockPolylineMounts;
+    const props = { destination: DESTINATION, interactive: true, origin: ORIGIN, testID: 'web-moved-map' };
+    const screen = render(<WebTripMap {...props} navigationProgress={progress} />);
+    await act(async () => undefined);
+    const before = mounts.count;
+    // A moved trip re-split: the second piece is now the ride, not the walk.
+    const moved: TripMapProgress = {
+      ...progress,
+      segments: [progress.segments[1]!, { ...progress.segments[2]!, state: 'current' }],
+    };
+    screen.rerender(<WebTripMap {...props} navigationProgress={moved} />);
+    await act(async () => undefined);
+    expect(mounts.count).toBe(before + 2);
+    const lines = screen.getAllByTestId('web-polyline', { includeHiddenElements: true });
+    expect(lines[1]!.props.options.icons).toBeUndefined();
+    expect(lines[1]!.props.options).toMatchObject({ strokeColor: '#F26A21', strokeWeight: 8 });
   });
 
   it('follows mock movement, pauses on pan or zoom, and resumes from locate', async () => {

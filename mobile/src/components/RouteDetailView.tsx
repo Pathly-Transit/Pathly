@@ -37,7 +37,7 @@ import { useOnBoardVehicle } from '../hooks/useTripRide';
 import { RouteMap } from './RouteMap';
 import { pointAlong, routeFocus, RouteLines, VehicleMarker, type MapLeg } from './RouteMapOverlay';
 import { AgencyLogo } from './AgencyLogo';
-import { badgeLabel, RouteBadge, transitModeForAgency } from './RouteBadge';
+import { badgeLabel, isPath, PathMark, RouteBadge, transitModeForAgency } from './RouteBadge';
 import { MAP_CONTROL_SIZE, MapControlButton } from './MapControlButton';
 import { mapPageMapHeight } from './mapSheetLayout';
 import { PressableScale } from './PressableScale';
@@ -208,6 +208,7 @@ const OWN_TRANSFER_KIND: Record<NonNullable<RouteDetail['liveSource']>['agencyId
   busco: { agency: 'MTA Bus', mode: 'bus' },
   nycferry: { agency: 'NYC Ferry', mode: 'ferry' },
   siferry: { agency: 'Staten Island Ferry', mode: 'ferry' },
+  path: { agency: 'PATH', mode: 'subway' },
 };
 
 const isLineTransfer = (transfer: StationTransfer | LineTransfer): transfer is LineTransfer => 'routeId' in transfer;
@@ -221,10 +222,12 @@ function TransferChip({ onOpen, stopName, testID, transfer }: { onOpen?: (transf
   const color = transferHue ? tint(transferHue) : null;
   // Recolored buses are white-on-color, like every bus badge; rail keeps its own text color.
   const textColor = color && color !== transfer.color ? colors.white : transfer.textColor ?? colors.white;
-  const chipStyle = [styles.transferChip, transfer.mode === 'subway' && styles.subwayChip, { backgroundColor: color ?? colors.surfaceMuted }];
+  const pathLine = isPath(transfer.agency);
+  // PATH's lines are its P in the line's color, on no chip of their own.
+  const chipStyle = pathLine ? styles.pathChip : [styles.transferChip, transfer.mode === 'subway' && styles.subwayChip, { backgroundColor: color ?? colors.surfaceMuted }];
   const labelColor = color ? textColor : colors.ink;
   // MTA-style signs: subway bullets and bus badges are text only; rail and ferries carry their mode's glyph.
-  const label = (
+  const label = pathLine ? <PathMark color={color ?? colors.ink} height={22} line={isLineTransfer(transfer) ? transfer.routeId : transfer.name} /> : (
     <>
       {transfer.mode === 'rail' || transfer.mode === 'ferry' ? <Icon color={labelColor} name={transfer.mode} size={13} /> : null}
       <Text numberOfLines={1} style={[styles.transferText, transfer.mode === 'subway' && styles.subwayText, { color: labelColor }]}>{transfer.name}</Text>
@@ -244,13 +247,14 @@ function TransferChip({ onOpen, stopName, testID, transfer }: { onOpen?: (transf
       </PressableScale>
     );
   }
-  return <View style={chipStyle} testID={testID}>{label}</View>;
+  return <View accessibilityLabel={pathLine ? `PATH ${transfer.name}` : undefined} accessible={pathLine || undefined} style={chipStyle} testID={testID}>{label}</View>;
 }
 
 // Chip widths, from transferChip/subwayChip/transferText below, to fit one row without measuring each.
 const CHIP_GAP = 5;
 const MORE_CHIP_WIDTH = 36;
 function transferChipWidth(transfer: StationTransfer | LineTransfer): number {
+  if (isPath(transfer.agency)) return 32;
   if (transfer.mode === 'subway') return 24;
   const icon = transfer.mode === 'rail' || transfer.mode === 'ferry' ? 17 : 0;
   return Math.max(24, 16 + icon + transfer.name.length * 7.5);
@@ -386,6 +390,8 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
   // large, bold labels); only a line too dark for the dark sheet is lightened.
   const routeText = isDark ? readableColor(routeColor, colors.surface, 3) : routeColor;
   // Saved, the star is a white star on the route's color (dark on pale lines like the N/Q/R/W).
+  // One text color on the line's color everywhere in this view (the switch, the chosen departure,
+  // the save button, "I'm on this train"): dark on light colors like PATH's orange, white on the rest.
   const favoriteTint = { color: routeColor, onColor: contrastRatio(colors.white, routeColor) >= 2.2 ? colors.white : '#1A1A1A' };
   // Departure tiles: filled with the route color, lightly (solid for the one picked), no outline.
   const tileFill = withAlpha(routeColor, isDark ? 0.28 : 0.16);
@@ -647,7 +653,9 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
   const labelBottom = insets.top + MAP_BADGE_TOP + MAP_BUS_LABEL_HEIGHT + MAP_AGENCY_LOGO_ROOM;
   const glowHeight = Math.min(labelBottom + 140, Math.max(labelBottom + 70, mapHeight * 0.55));
   const glowWidth = Math.min(300, width * 0.62);
-  const mapGlow = vehicleIcon !== 'subway' ? <MapLabelGlow color={colors.surface} height={glowHeight} width={glowWidth} /> : null;
+  // PATH's P and the Port Authority's logo sit on the map like a bus name, so they get the glow too.
+  const pathRoute = isPath(route.agency);
+  const mapGlow = vehicleIcon !== 'subway' || pathRoute ? <MapLabelGlow color={colors.surface} height={glowHeight} width={glowWidth} /> : null;
   const mapBadge = vehicleIcon !== 'subway' ? (
     <>
       <View
@@ -667,7 +675,7 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
         color={routeColor}
         shortName={badgeLabel(route)}
         size="xlarge"
-        style={[styles.mapRouteBadge, { top: insets.top + MAP_BADGE_TOP }]}
+        style={[styles.mapRouteBadge, pathRoute && styles.mapPathMark, { top: insets.top + MAP_BADGE_TOP }]}
         testID="route-detail-badge"
       />
       <AgencyLogo agencyId={route.liveSource?.agencyId} style={[styles.mapAgencyLogo, { top: insets.top + MAP_BADGE_TOP + MAP_ROUTE_BADGE_HEIGHT + 8 }]} testID="route-detail-agency-logo" />
@@ -783,6 +791,7 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
             color={routeColor}
             labels={[directionDestination(route.directions[0]!.direction), directionDestination(route.directions[1]!.direction)]}
             onChange={setActiveDirectionIndex}
+            textColor={favoriteTint.onColor}
           />
         ) : (
           <FitText accessibilityRole="header" style={styles.title} testID="route-detail-destination">{activeDestination}</FitText>
@@ -927,6 +936,7 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
       />
       <VehicleSheet
         color={routeColor}
+        onColor={favoriteTint.onColor}
         destination={activeDestination}
         lineName={badgeLabel(route)}
         liveSource={route.liveSource}
@@ -1036,6 +1046,8 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   // Bus routes name themselves in the route's color straight on the map, haloed so it reads over streets.
   // The agency's logo, smaller, under the route's name or sign.
   mapAgencyLogo: { position: 'absolute', left: 16 },
+  // The P is drawn on no sign, so a sign's shadow would show as a box around it.
+  mapPathMark: { shadowOpacity: 0, elevation: 0 },
   mapBusLabel: {
     position: 'absolute',
     left: 16,
@@ -1389,6 +1401,8 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     paddingHorizontal: 8,
     borderRadius: 10,
   },
+  // PATH's P, sized like the other signs.
+  pathChip: { height: 24, justifyContent: 'center' },
   // Subway bullets are round, as on MTA signage.
   subwayChip: {
     width: 24,

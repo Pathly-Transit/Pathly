@@ -11,13 +11,16 @@
 
 import type { GtfsSnapshotLimits } from './gtfsSnapshots';
 
-export type AgencyId = 'lirr' | 'metronorth' | 'subway' | 'nice' | 'suffolk' | BusAgencyId | 'nycferry' | 'siferry';
+export type AgencyId = 'lirr' | 'metronorth' | 'subway' | 'nice' | 'suffolk' | BusAgencyId | 'nycferry' | 'siferry' | 'path';
 /** NYC Transit's five borough bus feeds and MTA Bus Company: one agency per published feed. */
 export type BusAgencyId = 'bx' | 'bk' | 'mn' | 'qn' | 'si' | 'busco';
 export const MTA_BUS_AGENCY_IDS: readonly BusAgencyId[] = ['bx', 'bk', 'mn', 'qn', 'si', 'busco'];
 
 /** One GTFS-RT feed to fetch and merge in — most agencies need just one (an agency-wide feed that already bundles trip updates and vehicle positions); Swiftly-hosted agencies publish those as two separate feeds instead. */
-export type FeedRequest = { url: string; headers?: Record<string, string> };
+export type FeedRequest = {
+  url: string;
+  headers?: Record<string, string>;
+};
 
 /** A latitude/longitude rectangle. */
 export type StopBounds = { south: number; north: number; west: number; east: number };
@@ -36,6 +39,12 @@ export type AgencyConfig = {
    * each trip's stops and publishes the filled-in feed (see fillTripDirections in gtfsSnapshots.ts).
    */
   fillTripDirections?: boolean;
+  /**
+   * stop_times.txt names platforms but the live feed names their stations (PATH): the refresh job
+   * replaces each platform with its parent station (see gtfsTransforms.ts), so one stop serves a
+   * station in both directions, as live predictions see it.
+   */
+  stationStops?: boolean;
   /**
    * Every trip runs from one terminal to the other with no stops between (the Staten Island
    * Ferry): a direction is offered only from the terminal its trips leave, never as arrivals at
@@ -178,6 +187,14 @@ function mtaBusConfig(id: BusAgencyId, feed: string, stopBounds: StopBounds): Ag
   };
 }
 
+/**
+ * PATH has no official live feed. This one is a community GTFS-RT feed (path.transitdata.nyc, from
+ * github.com/jamespfennell/path-train-gtfs-realtime) built on the Port Authority's own RidePATH
+ * arrivals: public, no key, and its route_ids and (station) stop_ids are the static feed's. It has
+ * no real trips: each entry is one train's arrival at one station, with a made-up trip_id.
+ */
+const PATH_FEED_URL = 'https://path.transitdata.nyc/gtfsrt';
+
 export const AGENCY_CONFIGS: Record<AgencyId, AgencyConfig> = {
   lirr: {
     id: 'lirr',
@@ -305,6 +322,23 @@ export const AGENCY_CONFIGS: Record<AgencyId, AgencyConfig> = {
     onDemandRouteFiles: true,
     stopBounds: { south: 40.64, north: 40.71, west: -74.08, east: -74.01 },
     feedRequestsForRoute: () => [],
+  },
+  path: {
+    id: 'path',
+    displayName: 'PATH',
+    dataDir: 'path',
+    // The Port Authority's feed, as its publisher (Trillium) hosts it. The latest one (checked
+    // 2026-11-18) ran out on 2026-06-01, so the refresh rejects it until a new one is published;
+    // until then PATH shows live arrivals and its stations and lines, but no timetable times.
+    staticFeedUrl: 'http://data.trilliumtransit.com/gtfs/path-nj-us/path-nj-us.zip',
+    stationStops: true,
+    // Newark - World Trade Center at Newark (station 26733, once platforms are stations).
+    requiredStaticFallbacks: [{ routeId: '862', stopIds: ['26733'] }],
+    // With stationStops a station is one stop_id for both directions; direction_id decides.
+    directionalStops: false,
+    realtimeTripIdsMatchStatic: false,
+    stopBounds: { south: 40.70, north: 40.76, west: -74.17, east: -73.98 },
+    feedRequestsForRoute: () => [{ url: PATH_FEED_URL }],
   },
 };
 

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Animated, Platform, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollViewInstance, type ViewStyle, } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Animated, PanResponder, Platform, StyleSheet, Text, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollViewInstance, type ViewStyle, } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { applyRouteLive, isInactiveRoute } from '../data/applyRouteLive';
@@ -18,6 +18,7 @@ import { NearbySkeleton } from './Skeleton';
 import { TransitCard } from './TransitCard';
 import { PressableScale } from './PressableScale';
 import { SHEET_AT_REST_TOLERANCE, SheetHandle } from './SheetHandle';
+import { SHEET_LOWER_DROP } from './mapSheetLayout';
 import { Icon } from './Icon';
 
 export type TransitTabId = 'nearby' | 'favorites';
@@ -59,6 +60,30 @@ const TAB_GAP = 4;
 const TRANSIT_CARD_HEIGHT = 104;
 // Expanded = sheet scrolled up to just below the fixed search header (HomeScreen's 80pt top inset).
 const EXPANDED_TOP = 80;
+/** A sideways swipe on the list switches tabs past this distance (or a flick past FLICK_VELOCITY). */
+const TAB_SWIPE_DISTANCE = 60;
+const TAB_SWIPE_FLICK_VELOCITY = 0.5;
+/** A drag is a tab swipe once it's this far sideways and clearly more sideways than up or down. */
+const TAB_SWIPE_CLAIM = 12;
+const TAB_SWIPE_SLOPE = 1.5;
+
+/** The tab a sideways swipe goes to (left: the next, right: the previous), or null at either end. */
+export function swipedTab(current: TransitTabId, dx: number, vx: number, order: readonly TransitTabId[]): TransitTabId | null {
+  const index = order.indexOf(current);
+  const step = dx < -TAB_SWIPE_DISTANCE || vx < -TAB_SWIPE_FLICK_VELOCITY ? 1 : dx > TAB_SWIPE_DISTANCE || vx > TAB_SWIPE_FLICK_VELOCITY ? -1 : 0;
+  if (step === 0 || index < 0) return null;
+  return order[index + step] ?? null;
+}
+
+/** How long web scrolling must pause before the sheet settles (there are no drag-end events). */
+const WEB_SNAP_DELAY_MS = 140;
+
+/** The snap point a sheet left at `offset` settles on, or null once it's scrolled past the last (the list itself). */
+export function nearestSnap(offset: number, offsets: readonly number[]): number | null {
+  const last = offsets[offsets.length - 1] ?? 0;
+  if (offset >= last) return null;
+  return offsets.reduce((best, candidate) => (Math.abs(candidate - offset) < Math.abs(best - offset) ? candidate : best), offsets[0] ?? 0);
+}
 
 /** How long after a scroll or layout change the visible cards are recomputed. */
 const VISIBILITY_THROTTLE_MS = 150;
@@ -136,14 +161,19 @@ export function TransitSheet({
   const pageScrollRef = useRef<ScrollViewInstance>(null);
   useTouchScroll(pageScrollRef);
   const scrollOffset = useRef(0);
-  const expandedOffset = Math.max(0, mapHeight - EXPANDED_TOP);
-  // The sheet is rebuilt at the top each time Home is shown (e.g. back from a route), but
+  // The page starts two cards down: scrolling above that drags the sheet below its resting height,
+  // over more map. Rest stays where it always was on screen.
+  const restOffset = SHEET_LOWER_DROP;
+  const expandedOffset = restOffset + Math.max(0, mapHeight - EXPANDED_TOP);
+  // Where a released sheet settles: lowered, at rest, or open. Past open the list scrolls freely.
+  const snapOffsets = [0, restOffset, expandedOffset];
+  // The sheet is rebuilt at rest each time Home is shown (e.g. back from a route), but
   // HomeScreen keeps `scrollY`; without resetting it, a page scrolled before opening a route left
   // the location button faded out and shifted up on return.
   useEffect(() => {
-    scrollY.setValue(0);
-    scrollOffset.current = 0;
-  }, [scrollY]);
+    scrollY.setValue(restOffset);
+    scrollOffset.current = restOffset;
+  }, [restOffset, scrollY]);
   useEffect(() => {
     const id = scrollY.addListener(({ value }) => {
       scrollOffset.current = value;
@@ -166,6 +196,82 @@ export function TransitSheet({
     sections: new Map<string, number>(),
     cards: new Map<string, { section: string; y: number; height: number }>(),
   });
+  // Android and web ignore `contentOffset`, so the page is moved to rest by hand: once the page
+  // and its content both have a size, and only if the rider hasn't moved it yet. A scrollTo before
+  // the content is tall enough to scroll that far is dropped, so it waits for both sizes.
+  const placedAtRest = useRef(false);
+  const contentHeight = useRef(0);
+  const placeAtRest = useCallback(() => {
+    if (placedAtRest.current) return;
+    const viewport = layout.current.viewport;
+    if (viewport === 0 || contentHeight.current < viewport + restOffset) return;
+    placedAtRest.current = true;
+    pageScrollRef.current?.scrollTo({ y: restOffset, animated: false });
+  }, [restOffset]);
+  // Web's scroll view doesn't report its sizes here, so its page is placed at rest directly, on the
+  // first moment it can scroll that far (the cards load in a moment after Home appears).
+  useEffect(() => {
+    if (Platform.OS !== 'web') return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let tries = 0;
+    const place = () => {
+      const node = (pageScrollRef.current as unknown as { getScrollableNode?: () => HTMLElement | null } | null)?.getScrollableNode?.();
+      if (!placedAtRest.current && node && node.scrollHeight >= node.clientHeight + restOffset) {
+        placedAtRest.current = true;
+        node.scrollTop = restOffset;
+        return;
+      }
+      // A timer, not a frame callback: frames don't run while the tab is in the background.
+      if (!placedAtRest.current && tries++ < 200) timer = setTimeout(place, 25);
+    };
+    place();
+    return () => clearTimeout(timer);
+  }, [restOffset]);
+  // Native scroll views snap by themselves (snapToOffsets below); web's doesn't, so there the sheet
+  // settles once scrolling pauses: at the nearest of lowered, rest, and open.
+  const snapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (Platform.OS !== 'web') return undefined;
+    const id = scrollY.addListener(({ value }) => {
+      if (snapTimer.current != null) clearTimeout(snapTimer.current);
+      snapTimer.current = setTimeout(() => {
+        snapTimer.current = null;
+        const target = nearestSnap(value, snapOffsets);
+        if (target != null && Math.abs(target - value) > 1) pageScrollRef.current?.scrollTo({ y: target, animated: !reducedMotionActive });
+      }, WEB_SNAP_DELAY_MS);
+    });
+    return () => {
+      scrollY.removeListener(id);
+      if (snapTimer.current != null) clearTimeout(snapTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the offsets are numbers derived from these
+  }, [scrollY, restOffset, expandedOffset, reducedMotionActive]);
+  // Tabs swipe like pages: the list follows the finger a little, then the next tab comes in. Bubble
+  // phase only, so a two-direction route card (which claims sideways drags first) keeps its swipe.
+  const [tabSlide] = useState(() => new Animated.Value(0));
+  const tabRef = useRef({ activeTab, onTabChange, reducedMotionActive });
+  useEffect(() => {
+    tabRef.current = { activeTab, onTabChange, reducedMotionActive };
+  });
+  const tabSwipe = useMemo(() => {
+    const settle = () => Animated.spring(tabSlide, { toValue: 0, speed: 20, bounciness: 0, useNativeDriver }).start();
+    return PanResponder.create({
+      onMoveShouldSetPanResponder: (_event, gesture) => Math.abs(gesture.dx) > TAB_SWIPE_CLAIM && Math.abs(gesture.dx) > Math.abs(gesture.dy) * TAB_SWIPE_SLOPE,
+      onPanResponderTerminationRequest: () => false,
+      // A third of the drag, so it reads as "this moves" without pulling the whole list across.
+      onPanResponderMove: (_event, gesture) => tabSlide.setValue(gesture.dx / 3),
+      onPanResponderRelease: (_event, gesture) => {
+        const next = swipedTab(tabRef.current.activeTab, gesture.dx, gesture.vx, tabs.map((tab) => tab.id));
+        if (next) {
+          tabRef.current.onTabChange(next);
+          // The new tab slides in from the side it was swiped toward (or just appears, with less motion).
+          tabSlide.setValue(tabRef.current.reducedMotionActive ? 0 : gesture.dx < 0 ? 40 : -40);
+        }
+        settle();
+      },
+      onPanResponderTerminate: settle,
+    });
+  }, [tabSlide]);
   const shownCardIds = useRef<readonly string[]>([]);
   const recheckCardIds = useRef<readonly string[]>([]);
   const reportedVisibleKey = useRef<string | null>(null);
@@ -225,7 +331,8 @@ export function TransitSheet({
   }, [scheduleVisible]);
 
   const toggleExpanded = () => {
-    const target = scrollOffset.current <= SHEET_AT_REST_TOLERANCE ? expandedOffset : 0;
+    // At rest it opens; opened, or dragged below rest, it goes back to rest.
+    const target = Math.abs(scrollOffset.current - restOffset) <= SHEET_AT_REST_TOLERANCE ? expandedOffset : restOffset;
     // Recorded up front: the scrollY listener can't be relied on for natively driven scroll
     // values, and on short lists the page stops short of `target` anyway (still off rest).
     scrollOffset.current = target;
@@ -240,7 +347,15 @@ export function TransitSheet({
       // box-none it swallows drags there (always on web) and the map underneath can't pan.
       contentContainerStyle={webMap ? undefined : styles.pageContent}
       contentInsetAdjustmentBehavior="never"
-      onLayout={(event) => recordLayout('viewport', event)}
+      contentOffset={{ x: 0, y: restOffset }}
+      onContentSizeChange={(_width, height) => {
+        contentHeight.current = height;
+        placeAtRest();
+      }}
+      onLayout={(event) => {
+        recordLayout('viewport', event);
+        placeAtRest();
+      }}
       onMomentumScrollEnd={onPageScroll}
       onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
         useNativeDriver: Platform.OS !== 'web',
@@ -251,6 +366,10 @@ export function TransitSheet({
       ref={pageScrollRef}
       scrollEventThrottle={16}
       showsVerticalScrollIndicator={false}
+      // A released sheet settles lowered, at rest, or open; past open the list scrolls freely.
+      decelerationRate="fast"
+      snapToEnd={false}
+      snapToOffsets={snapOffsets}
       // Web pins the map with CSS `sticky`; native pins it as the scroller's sticky header.
       stickyHeaderIndices={webMap && Platform.OS !== 'web' ? [0] : undefined}
       style={styles.pageScroll}
@@ -258,10 +377,23 @@ export function TransitSheet({
     >
       {webMap ? (
         <>
-          <View style={[styles.stickyMap, { height: mapHeight }]} testID="transit-map-window">{webMap}</View>
-          <View pointerEvents="box-none" style={[styles.mapButtonsOverSticky, { height: mapHeight, marginTop: -mapHeight }]}>{mapButtons}</View>
+          <View style={[styles.stickyMap, { height: mapHeight + restOffset }]} testID="transit-map-window">
+            {Platform.OS === 'web' ? (
+              // Google's logo and credits sit at the web map's bottom edge and must stay visible, so
+              // there the map ends at the sheet's top edge, growing as the sheet is dragged below rest.
+              <Animated.View style={[styles.webMapWindow, { height: scrollY.interpolate({ inputRange: [0, restOffset], outputRange: [mapHeight + restOffset, mapHeight], extrapolate: 'clamp' }) }]}>{webMap}</Animated.View>
+            ) : webMap}
+          </View>
+          {/* The map buttons sit just above the sheet, so their box ends where the sheet's top edge does. */}
+          <View pointerEvents="box-none" style={[styles.mapButtonsOverSticky, { height: mapHeight + restOffset, marginTop: -(mapHeight + restOffset), paddingTop: restOffset }]}>
+            <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}</View>
+          </View>
         </>
-      ) : <View pointerEvents="box-none" style={{ height: mapHeight }} testID="transit-map-window">{mapButtons}</View>}
+      ) : (
+        <View pointerEvents="box-none" style={{ height: mapHeight + restOffset, paddingTop: restOffset }} testID="transit-map-window">
+          <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}</View>
+        </View>
+      )}
       <SafeAreaView
         edges={['bottom']}
         onLayout={(event) => recordLayout('sheet', event)}
@@ -298,6 +430,8 @@ export function TransitSheet({
           })}
         </View>
 
+        {/* Swiping sideways switches Nearby and Favorites; a route card with two directions keeps its own swipe. */}
+        <Animated.View {...tabSwipe.panHandlers} style={{ transform: [{ translateX: tabSlide }] }} testID="transit-tab-pages">
         {activeTab === 'nearby' ? (
             <View onLayout={(event) => recordLayout('content', event)} style={[styles.tabContent, { minHeight: tabContentMinHeight }]} testID="nearby-route-content">
               {savedRoutes.length > 0 ? (
@@ -403,6 +537,7 @@ export function TransitSheet({
               </View>
             )
           )}
+        </Animated.View>
       </SafeAreaView>
     </Animated.ScrollView>
   );
@@ -433,6 +568,8 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   stickyMap: { ...(Platform.OS === 'web' ? { position: 'sticky', top: 0 } : null), overflow: 'hidden' } as unknown as ViewStyle,
   // Above a native sticky header, which React Native draws at zIndex 10.
   mapButtonsOverSticky: { zIndex: 11 },
+  mapButtonsBox: { flex: 1 },
+  webMapWindow: { position: 'absolute', top: 0, left: 0, right: 0 },
   sheetOverStickyMap: { zIndex: 12 },
   pageContent: {
     pointerEvents: 'box-none',

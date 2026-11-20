@@ -10,7 +10,8 @@ type AgencyId = LiveSource['agencyId'];
 export type IndexedLine = { agencyId: AgencyId; agencyDisplayName: string; routeId: string; shortName: string; routeName: string; color: string };
 
 // v2: indexes saved before the backend dropped trip-less route copies point SIM buses at the Bronx feed.
-const INDEX_KEY = 'pathly.lineIndex.v2';
+// v3: indexes saved before PATH's lines had codes name every one of them "PATH".
+const INDEX_KEY = 'pathly.lineIndex.v3';
 // Lines change with timetable updates, a few times a year; a week-old index is still right.
 const INDEX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -75,16 +76,19 @@ type Mode = 'subway' | 'bus' | 'rail' | 'ferry';
 const AGENCY_MODE: Record<AgencyId, Mode> = {
   subway: 'subway', lirr: 'rail', metronorth: 'rail', nycferry: 'ferry', siferry: 'ferry',
   nice: 'bus', suffolk: 'bus', bx: 'bus', bk: 'bus', mn: 'bus', qn: 'bus', si: 'bus', busco: 'bus',
+  // PATH rides like the subway.
+  path: 'subway',
 };
 // Rail, subway and ferry lines come first: they're what people search for by name.
 const MODE_RANK: Record<Mode, number> = { subway: 0, rail: 0, ferry: 1, bus: 2 };
 
 /** Words that say which kind of line is meant, and the agencies or modes they narrow to. */
 const FILTER_WORDS: { words: readonly string[]; keep: (line: IndexedLine) => boolean }[] = [
-  { words: ['subway', 'train', 'trains', 'metro', 'mta subway'], keep: (line) => line.agencyId === 'subway' || line.agencyId === 'lirr' || line.agencyId === 'metronorth' },
+  { words: ['subway', 'train', 'trains', 'metro', 'mta subway'], keep: (line) => line.agencyId === 'subway' || line.agencyId === 'lirr' || line.agencyId === 'metronorth' || line.agencyId === 'path' },
   { words: ['lirr', 'long island rail road', 'long island railroad'], keep: (line) => line.agencyId === 'lirr' },
   { words: ['metro north', 'metronorth', 'mnr'], keep: (line) => line.agencyId === 'metronorth' },
   { words: ['rail', 'railroad', 'commuter rail'], keep: (line) => line.agencyId === 'lirr' || line.agencyId === 'metronorth' },
+  { words: ['path', 'path train', 'port authority trans hudson'], keep: (line) => line.agencyId === 'path' },
   { words: ['bus', 'buses'], keep: (line) => AGENCY_MODE[line.agencyId] === 'bus' },
   { words: ['ferry', 'ferries', 'boat'], keep: (line) => AGENCY_MODE[line.agencyId] === 'ferry' },
   { words: ['nice', 'n i c e', 'nassau'], keep: (line) => line.agencyId === 'nice' },

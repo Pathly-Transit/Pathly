@@ -50,7 +50,7 @@ export function clearRouteTransfersCache(): void {
 }
 
 function transferMode(agencyId: LiveSource['agencyId']): TransferMode {
-  if (agencyId === 'subway') return 'subway';
+  if (agencyId === 'subway' || agencyId === 'path') return 'subway';
   if (agencyId === 'lirr' || agencyId === 'metronorth') return 'rail';
   if (agencyId === 'nycferry' || agencyId === 'siferry') return 'ferry';
   return 'bus';

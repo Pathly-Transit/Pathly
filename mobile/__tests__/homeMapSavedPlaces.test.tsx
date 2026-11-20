@@ -31,11 +31,14 @@ function settings(child: React.ReactNode) {
 describe('home map saved-place markers', () => {
   it('allows browsing beyond service coverage and gives web a soft boundary', () => {
     const screen = render(settings(<WebGoogleMapView location={{ latitude: 40.7, longitude: -73.9 }} />));
-    expect(screen.getByTestId('web-google-map').props.options).toMatchObject({ restriction: { latLngBounds: MAP_EXPLORATION_BOUNDS, strictBounds: false }, minZoom: 8 });
+    expect(screen.getByTestId('web-google-map').props.options).toMatchObject({ restriction: { latLngBounds: MAP_EXPLORATION_BOUNDS, strictBounds: false }, minZoom: 6 });
     expect(MAP_EXPLORATION_BOUNDS.north).toBeGreaterThan(SERVICE_AREA_BOUNDS.north);
     expect(MAP_EXPLORATION_BOUNDS.south).toBeLessThan(SERVICE_AREA_BOUNDS.south);
     expect(MAP_EXPLORATION_BOUNDS.east).toBeGreaterThan(SERVICE_AREA_BOUNDS.east);
     expect(MAP_EXPLORATION_BOUNDS.west).toBeLessThan(SERVICE_AREA_BOUNDS.west);
+    // Room past Metro-North's reach: Wassaic (41.81) to the north, Port Jervis (-74.69) to the west.
+    expect(MAP_EXPLORATION_BOUNDS.north).toBeGreaterThanOrEqual(42.8);
+    expect(MAP_EXPLORATION_BOUNDS.west).toBeLessThanOrEqual(-75.2);
   });
   beforeAll(() => {
     class Point { constructor(public x: number, public y: number) {} }

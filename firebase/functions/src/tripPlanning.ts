@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 
 import { simplifyPath } from './gtfsGeometry';
 import { displayStepColor } from './routeColors';
-import { agencyIdsForStep } from './tripAgencies';
+import { agencyIdsForStep, modeForAgency } from './tripAgencies';
 import { displayTransitName } from './transitNames';
 
 /**
@@ -248,10 +248,13 @@ function transitStep(step: GoogleStep): TransitStep {
   const agency = line.agencies?.[0];
   const departure = stops.departureTime ?? '';
   const arrival = stops.arrivalTime ?? '';
-  const mode = modeForVehicle(line.vehicle?.type);
   const agencyName = agency?.name ?? 'Transit';
+  const stepLine = { name: line.name, shortName: line.nameShort };
+  // PATH rides as rapid transit whatever vehicle type Google gives it, so the mode filters treat
+  // it like the subway.
+  const mode = modeForAgency({ agency: { name: agencyName }, mode: modeForVehicle(line.vehicle?.type), line: stepLine });
   // Buses get the same colors as everywhere else in Pathly (routeColors.ts), not Google's.
-  const busColor = displayStepColor(agencyIdsForStep({ agency: { name: agencyName }, mode }), { name: line.name, shortName: line.nameShort, color: line.color });
+  const busColor = displayStepColor(agencyIdsForStep({ agency: { name: agencyName }, mode, line: stepLine }), { name: line.name, shortName: line.nameShort, color: line.color });
   return {
     kind: 'transit',
     mode,

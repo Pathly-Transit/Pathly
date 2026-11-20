@@ -249,7 +249,9 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
           const current = progressState === 'current';
           return (
             <Polyline
-              key={`leg-${index}`}
+              // Redrawn when a piece turns from walk to ride (a moved trip re-splits its route): a
+              // line that keeps its key keeps its dashes, since a cleared lineDashPattern isn't undone.
+              key={`leg-${index}-${leg.walk ? 'walk' : 'ride'}`}
               coordinates={leg.path.map((point) => ({ latitude: point.lat, longitude: point.lng }))}
               lineCap={leg.walk ? 'round' : undefined}
               lineDashPattern={leg.walk ? WALK_DASH : undefined}

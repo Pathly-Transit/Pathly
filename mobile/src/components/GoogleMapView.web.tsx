@@ -19,7 +19,8 @@ import { HeadingBeamMarker } from './HeadingBeamMarker';
 import { centerOffsetFrom, glideMapTo } from './webMapGlide';
 
 const ZOOM = 14;
-const MIN_ZOOM = 8;
+// Far enough out to see the whole region at once, from Montauk to Poughkeepsie.
+const MIN_ZOOM = 6;
 
 const containerStyle = { width: '100%', height: '100%' };
 

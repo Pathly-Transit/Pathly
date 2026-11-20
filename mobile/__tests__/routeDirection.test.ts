@@ -1,4 +1,4 @@
-import { approachingVehicle, bearingDegrees, directionArrowAt, splitPathAtStop, withAlpha } from '../src/data/routeDirection';
+import { approachingVehicle, bearingDegrees, directionArrowAt, MIN_FIT_SPAN, splitPathAtStop, withAlpha, withMinimumFitSpan } from '../src/data/routeDirection';
 
 // A straight east-west line along 40.9°N: 21 points about 84 m apart.
 const line = Array.from({ length: 21 }, (_, index) => ({ lat: 40.9, lon: -73.2 + index * 0.001 }));
@@ -83,5 +83,25 @@ describe('route direction helpers', () => {
   it('adds an alpha channel to hex colors', () => {
     expect(withAlpha('#A626AA', 0.35)).toBe('#A626AA59');
     expect(withAlpha('rgb(1, 2, 3)', 0.35)).toBe('rgb(1, 2, 3)');
+  });
+});
+
+describe('framing a stop with a rider right beside it', () => {
+  // The 4 train's Grand Central-42 St platform and a rider about 30 m away, in the terminal.
+  const stop = { lat: 40.751776, lng: -73.976848 };
+  const rider = { lat: 40.7525, lng: -73.9768 };
+
+  it('widens the frame to about 1.3 km, so the map never opens at street level', () => {
+    const framed = withMinimumFitSpan([stop, rider]);
+    const lats = framed.map((point) => point.lat);
+    const lngs = framed.map((point) => point.lng);
+    expect(Math.max(...lats) - Math.min(...lats)).toBeCloseTo(MIN_FIT_SPAN, 6);
+    expect(Math.max(...lngs) - Math.min(...lngs)).toBeCloseTo(MIN_FIT_SPAN, 6);
+    expect(framed.slice(0, 2)).toEqual([stop, rider]);
+  });
+
+  it('leaves a frame that is already wide enough alone', () => {
+    const farRider = { lat: 40.77, lng: -73.96 };
+    expect(withMinimumFitSpan([stop, farRider])).toEqual([stop, farRider]);
   });
 });

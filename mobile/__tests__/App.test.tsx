@@ -8,6 +8,7 @@ import { Linking, ScrollView, StyleSheet, View } from 'react-native';
 import mockSafeAreaContext from 'react-native-safe-area-context/jest/mock';
 
 import App from '../App';
+import { SHEET_LOWER_DROP } from '../src/components/mapSheetLayout';
 import { RouteDetailView } from '../src/components/RouteDetailView';
 import { AppSettingsProvider } from '../src/theme/AppSettings';
 import { autocompletePlaces, fetchPlaceDetails, getPlacesApiKey } from '../src/data/placesSearch';
@@ -195,12 +196,18 @@ describe('Pathly prototype navigation', () => {
 
     fireEvent.press(screen.getByTestId('transit-sheet-handle'));
     const expandedY = (scrollTo.mock.calls.at(-1)?.[0] as { y: number }).y;
-    expect(expandedY).toBeGreaterThan(0);
+    // Rest is one card down the page (room to drag the sheet lower); expanded is above it.
+    expect(expandedY).toBeGreaterThan(SHEET_LOWER_DROP);
 
     // The page may stop short of the expanded offset when the list is short; any offset off rest still resets.
-    fireEvent.scroll(list, { nativeEvent: { contentOffset: { x: 0, y: Math.min(expandedY, 120) } } });
+    fireEvent.scroll(list, { nativeEvent: { contentOffset: { x: 0, y: Math.min(expandedY, SHEET_LOWER_DROP + 120) } } });
     fireEvent.press(screen.getByTestId('transit-sheet-handle'));
-    expect(scrollTo.mock.calls.at(-1)?.[0]).toMatchObject({ y: 0 });
+    expect(scrollTo.mock.calls.at(-1)?.[0]).toMatchObject({ y: SHEET_LOWER_DROP });
+
+    // Dragged below rest (where the drag ends), the handle brings it back to rest too.
+    fireEvent(list, 'scrollEndDrag', { nativeEvent: { contentOffset: { x: 0, y: 0 } } });
+    fireEvent.press(screen.getByTestId('transit-sheet-handle'));
+    expect(scrollTo.mock.calls.at(-1)?.[0]).toMatchObject({ y: SHEET_LOWER_DROP });
   });
 
   it('keeps the transit list scrolling natural, with a drag handle and a route visible at rest', async () => {
@@ -212,6 +219,10 @@ describe('Pathly prototype navigation', () => {
     expect(sheetScroll.props.onResponderMove).toBeUndefined();
     expect(sheetScroll.props.bounces).toBe(false);
     expect(sheetScroll.props.overScrollMode).toBe('never');
+    // A released sheet settles lowered, at rest, or open; past open the list scrolls freely.
+    expect(sheetScroll.props.snapToOffsets.slice(0, 2)).toEqual([0, SHEET_LOWER_DROP]);
+    expect(sheetScroll.props.snapToOffsets[2]).toBeGreaterThan(SHEET_LOWER_DROP);
+    expect(sheetScroll.props.snapToEnd).toBe(false);
     // Single-scroll page: the sheet rests below a transparent map window inside the same scroll.
     expect(StyleSheet.flatten(screen.getByTestId('transit-map-window').props.style).height).toBeGreaterThan(0);
     expect(screen.getByTestId('transit-sheet')).toBeTruthy();
@@ -739,8 +750,8 @@ describe('Pathly prototype navigation', () => {
     const screen = await openResults();
     fireEvent.press(screen.getByTestId(`search-result-view-${LIRR_TRIP.id}`));
     fireEvent.press(screen.getByTestId('search-trip-go'));
-    await screen.findByTestId('enroute-navigation-view');
-    fireEvent.press(screen.getByTestId('enroute-back'));
+    await screen.findByTestId('active-trip-detail');
+    fireEvent.press(screen.getByTestId('search-trip-back'));
     expect(await screen.findByTestId('resume-active-trip')).toBeTruthy();
 
     // A refresh that no longer lists the started trip doesn't end or replace it.
@@ -760,7 +771,7 @@ describe('Pathly prototype navigation', () => {
     fireEvent.press(screen.getByTestId('results-back'));
     fireEvent.press(screen.getByLabelText('Back from search'));
     fireEvent.press(await screen.findByTestId('resume-active-trip'));
-    expect(await screen.findByTestId('enroute-navigation-view')).toBeTruthy();
+    expect(await screen.findByTestId('active-trip-detail')).toBeTruthy();
   });
 
   it('lists a planned trip step by step: walk, ride, transfer with the wait, ride', async () => {
@@ -1007,19 +1018,21 @@ describe('Pathly prototype navigation', () => {
 
     fireEvent.press(screen.getByTestId(`search-result-view-${LIRR_TRIP.id}`));
     fireEvent.press(screen.getByTestId('search-trip-go'));
-    expect(await screen.findByTestId('enroute-end')).toBeTruthy();
-    expect(screen.getByText('End trip')).toBeTruthy();
+    expect(await screen.findByTestId('search-trip-end')).toBeTruthy();
+    // GO keeps the rider on Trip Details, now following the trip.
+    expect(screen.getByTestId('active-trip-detail')).toBeTruthy();
+    expect(screen.getByText('END')).toBeTruthy();
 
-    fireEvent.press(screen.getByTestId('enroute-back'));
+    fireEvent.press(screen.getByTestId('search-trip-back'));
     fireEvent.press(await screen.findByTestId('resume-active-trip'));
-    expect(await screen.findByTestId('enroute-end')).toBeTruthy();
+    expect(await screen.findByTestId('search-trip-end')).toBeTruthy();
     // Ending asks first; cancelling keeps the trip going.
-    fireEvent.press(screen.getByTestId('enroute-end'));
+    fireEvent.press(screen.getByTestId('search-trip-end'));
     expect(screen.getByText('End this trip?')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('enroute-end-confirm-cancel'));
-    expect(screen.getByTestId('enroute-end')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('enroute-end'));
-    fireEvent.press(screen.getByTestId('enroute-end-confirm-confirm'));
+    fireEvent.press(screen.getByTestId('search-trip-end-confirm-cancel'));
+    expect(screen.getByTestId('search-trip-end')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('search-trip-end'));
+    fireEvent.press(screen.getByTestId('search-trip-end-confirm-confirm'));
     expect(await screen.findByTestId('tab-nearby')).toBeTruthy();
   });
 
@@ -1759,10 +1772,10 @@ describe('Pathly prototype navigation', () => {
         const routeIdOf = (cardId: string) => cardId.split(':')[1]!;
         const layout = (testID: string, y: number, height: number) => fireEvent(screen.getByTestId(testID), 'layout', { nativeEvent: { layout: { x: 0, y, width: 390, height } } });
 
-        // A 600 pt window over the page: cards start 350 pt down and are 104 pt tall, so the
-        // first three are on screen.
+        // A 600 pt window over the page, resting one card down it: cards start 350 pt below the
+        // window's top and are 104 pt tall, so the first three are on screen.
         layout('nearby-route-list', 0, 600);
-        layout('transit-sheet', 300, 2000);
+        layout('transit-sheet', 300 + SHEET_LOWER_DROP, 2000);
         layout('nearby-route-content', 50, 1500);
         layout('nearby-routes', 0, 1500);
         slots.forEach((cardId, index) => layout(`card-slot-${cardId}`, index * 104, 104));
@@ -1777,7 +1790,7 @@ describe('Pathly prototype navigation', () => {
 
         // Scrolling down 300 pt brings cards 4–6 into view; they're fetched right away.
         liveCall().mockClear();
-        fireEvent(screen.getByTestId('nearby-route-list'), 'momentumScrollEnd', { nativeEvent: { contentOffset: { x: 0, y: 300 } } });
+        fireEvent(screen.getByTestId('nearby-route-list'), 'momentumScrollEnd', { nativeEvent: { contentOffset: { x: 0, y: 300 + SHEET_LOWER_DROP } } });
         await act(async () => {
           jest.advanceTimersByTime(200);
         });
@@ -2067,7 +2080,7 @@ describe('Pathly prototype navigation', () => {
       await act(async () => {});
       expect(screen.queryByTestId('replace-active-trip-confirm')).toBeNull();
       expect(screen.getByTestId('ride-guide-end')).toBeTruthy();
-      expect(screen.queryByTestId('enroute-navigation-view')).toBeNull();
+      expect(screen.queryByTestId('active-trip-detail')).toBeNull();
 
       fireEvent.press(screen.getByTestId('ride-guide-end'));
       fireEvent.press(screen.getByTestId('ride-guide-end-confirm-confirm'));

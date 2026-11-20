@@ -13,6 +13,7 @@ import { unzipSync, zipSync, type Zippable } from 'fflate';
 import { AGENCY_CONFIGS, type AgencyId } from './gtfsAgencies';
 import { DERIVED_DIR, DERIVED_VERSION } from './gtfsDerived';
 import { buildDerivedData } from './gtfsDerivedBuild';
+import { transformSourceArchive } from './gtfsTransforms';
 
 const SNAPSHOT_SCHEMA_VERSION = 1;
 const SNAPSHOT_ROOT = 'gtfs/v1';
@@ -1304,7 +1305,9 @@ export async function refreshGtfsSnapshot(agencyId: AgencyId): Promise<'publishe
   const limits = snapshotLimitsFor(agencyId);
   const downloaded = await downloadArchive(config.staticFeedUrl, limits.archiveBytes, config.staticFeedHeaders);
   const { sourceLastModified } = downloaded;
-  const archive = config.fillTripDirections ? fillTripDirections(downloaded.archive) : downloaded.archive;
+  const filled = config.fillTripDirections ? fillTripDirections(downloaded.archive) : downloaded.archive;
+  // PATH's platforms as stations (gtfsTransforms.ts).
+  const archive = transformSourceArchive(config, filled);
   const extracted = extractGtfsArchive(archive, { limits });
   if (gtfsFeedShouldWaitForStart(extracted, current.manifest?.serviceEndDate)) {
     logger.info('Keeping the published GTFS snapshot until the new feed starts', { agencyId, event: 'gtfs_feed_not_started' });

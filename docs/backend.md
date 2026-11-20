@@ -42,8 +42,8 @@ Optional timetable preparation and intermediate-stop matching share a three-seco
 
 ## Live data sources
 
-- **Real-time vehicles and departures:** each agency's GTFS-RT feed. Metro-North and LIRR use their MTA railroad feeds; the MTA Bus Time, Swiftly, and NYC Ferry feeds serve their configured agencies. Agencies without a live feed, such as the Staten Island Ferry, show timetable departures only.
-- **Service alerts:** MTA's public GTFS-RT alerts feed (subway, city buses, LIRR, and Metro-North). Route detail lists these alerts under the departure times. If the alerts feed fails, the route shows no alerts instead of failing.
+- **Real-time vehicles and departures:** each agency's GTFS-RT feed. Metro-North and LIRR use their MTA railroad feeds; the MTA Bus Time, Swiftly, and NYC Ferry feeds serve their configured agencies. PATH uses a community GTFS-RT feed (path.transitdata.nyc, built on the Port Authority's RidePATH arrivals; PATH publishes no official one). Agencies without a live feed, such as the Staten Island Ferry, show timetable departures only.
+- **Service alerts:** MTA's public GTFS-RT alerts feed (subway, city buses, LIRR, and Metro-North). PATH has no alerts feed. Route detail lists these alerts under the departure times. If the alerts feed fails, the route shows no alerts instead of failing.
 
 ## Secrets
 
@@ -65,7 +65,7 @@ Don't create or share Firebase Admin service-account JSON keys for routine devel
 
 ## Static GTFS refresh
 
-Every day at 04:00 `America/New_York`, the deployed backend refreshes the official static GTFS feeds for every agency: Metro-North, LIRR, subway, NICE Bus, Suffolk County Transit, MTA city buses (five boroughs and MTA Bus Company), NYC Ferry, and the Staten Island Ferry. A successful run works like this:
+Every day at 04:00 `America/New_York`, the deployed backend refreshes the official static GTFS feeds for every agency: Metro-North, LIRR, subway, NICE Bus, Suffolk County Transit, MTA city buses (five boroughs and MTA Bus Company), NYC Ferry, the Staten Island Ferry, and PATH. A successful run works like this:
 
 1. It validates the full feed.
 2. It uploads an immutable ZIP to `gtfs/v1/<agency>/versions/<archive-sha256>.zip`.
@@ -78,6 +78,10 @@ Each snapshot also gets a prepared-index archive at `gtfs/v1/<agency>/derived/<v
 The city bus and ferry agencies are too large to copy into every instance, so their prepared timetable is split. A small core archive holds the indexes and `route-files.json`, and each route gets its own object under `gtfs/v1/<agency>/derived/<version>/<format>/`. Instances fetch and verify a route's object the first time they need it. These agencies have no bundled copy, so each one is skipped until its first snapshot is published.
 
 The Staten Island Ferry's feed leaves `direction_id` blank, so the refresh fills in each trip's direction from its first and last stops before publishing.
+
+Some feeds are reshaped before they're validated (`gtfsTransforms.ts`). PATH's timetable names platforms while its live feed names stations, so each platform becomes its parent station. To refresh a committed copy by hand, download the agency's `staticFeedUrl` and run `node scripts/import-static-feed.js <agency> <zip>` after `npm run build`.
+
+PATH's published feed (Trillium's copy of the Port Authority's) ended its service on 2026-06-01, and no newer one was published as of 2026-11-18. The refresh rejects it as expired, so PATH shows its stations, lines and live arrivals but no timetable times until a new feed appears.
 
 **Retention.** Once the version a publication replaced has been current for a day, the publication deletes the version from two publications back: its ZIP, prepared archive, and route files. The two live versions are never touched. Deletion is by name from the manifests, so the writer needs no list permission. Logs show `gtfs_snapshot_retired`, or `gtfs_snapshot_retire_failed` with the reason.
 

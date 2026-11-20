@@ -21,6 +21,24 @@ export function riderNearStop(rider: { latitude: number; longitude: number }, st
   return distanceMeters({ lat: rider.latitude, lon: rider.longitude }, stop) <= RIDER_NEAR_STOP_METERS;
 }
 
+/**
+ * The least span (degrees, ~1.3 km) the route map frames a stop with the rider or a vehicle at.
+ * Closer than that, a fit would zoom to street level, where the line's shape (drawn between a
+ * handful of points) visibly cuts across the streets it runs under.
+ */
+export const MIN_FIT_SPAN = 0.012;
+
+/** `points`, plus two corners around their middle when they're closer together than MIN_FIT_SPAN. */
+export function withMinimumFitSpan(points: readonly { lat: number; lng: number }[]): { lat: number; lng: number }[] {
+  if (points.length === 0) return [];
+  const lats = points.map((point) => point.lat);
+  const lngs = points.map((point) => point.lng);
+  const [minLat, maxLat, minLng, maxLng] = [Math.min(...lats), Math.max(...lats), Math.min(...lngs), Math.max(...lngs)];
+  if (maxLat - minLat >= MIN_FIT_SPAN || maxLng - minLng >= MIN_FIT_SPAN) return [...points];
+  const [lat, lng, half] = [(minLat + maxLat) / 2, (minLng + maxLng) / 2, MIN_FIT_SPAN / 2];
+  return [...points, { lat: lat - half, lng: lng - half }, { lat: lat + half, lng: lng + half }];
+}
+
 /** Compass bearing from `a` to `b`, in degrees clockwise from north (0–360). */
 export function bearingDegrees(a: LatLon, b: LatLon): number {
   const x = (b.lon - a.lon) * Math.cos(((a.lat + b.lat) / 2) * (Math.PI / 180));

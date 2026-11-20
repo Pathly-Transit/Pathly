@@ -5,7 +5,7 @@ import MapView, { Callout, Marker, Polyline, type Region } from 'react-native-ma
 import { BeanAvatar } from '../avatars/BeanAvatarImage';
 import { formatAge, visibleTrains } from '../data/liveTrains';
 import { googleMapStyle } from '../data/mapStyle';
-import { approachingVehicle, ARROW_ZOOM_SLACK, directionArrowAt, focusStopIndex, metersPerPixel, middleDirectionArrowAt, riderNearStop, splitPathAtStop, withAlpha } from '../data/routeDirection';
+import { approachingVehicle, ARROW_ZOOM_SLACK, directionArrowAt, focusStopIndex, metersPerPixel, middleDirectionArrowAt, MIN_FIT_SPAN, riderNearStop, splitPathAtStop, withAlpha } from '../data/routeDirection';
 import { stopRevealZoom, zoomForRegion } from '../data/stopDeclutter';
 import type { RouteLiveVehicle } from '../data/transitLive';
 import type { Coordinates } from '../hooks/useCurrentLocation';
@@ -28,8 +28,6 @@ const CENTER_ANCHOR = { x: 0.5, y: 0.5 };
 const FOCUS_DELTA = { latitudeDelta: 0.06, longitudeDelta: 0.06 };
 const FOCUS_ANIMATION_MS = 400;
 const ROUTE_FIT_PADDING = { top: 90, right: 40, bottom: 60, left: 40 };
-/** The least span (degrees, ~1.3 km) a fit may zoom to, so a bus right by the stop isn't framed at street level. */
-const MIN_FIT_SPAN = 0.012;
 
 type LatLngPoint = { latitude: number; longitude: number };
 

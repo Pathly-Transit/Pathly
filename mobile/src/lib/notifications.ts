@@ -149,7 +149,10 @@ export async function registerForRouteAlerts(uid: string): Promise<boolean> {
     const { data: token } = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
     await setDoc(doc(db, 'users', uid), { pushTokens: arrayUnion(token) }, { merge: true });
     return true;
-  } catch {
+  } catch (error) {
+    // Said out loud: an Android build without Firebase's config (google-services.json) fails
+    // here, and quietly returning false hid that no Android phone was ever getting alerts.
+    console.warn('Could not register for route alert pushes', error);
     return false;
   }
 }

@@ -19,6 +19,7 @@ import { FitText } from './FitText';
 import { Icon } from './Icon';
 import { LIVE_SIGNAL_WIDTH, LiveSignal } from './LiveSignal';
 import { PressableScale } from './PressableScale';
+import { isPath, PathMark } from './RouteBadge';
 import { afterClick } from './afterClick';
 import { useSkeletonPulse } from './Skeleton';
 import { usesWebMouseDrag } from './webMouseDrag';
@@ -69,9 +70,16 @@ function PageBody({ index, item, route, styles }: {
   return (
     <>
       <View style={styles.copy}>
-        <FitText style={styles.routeName} testID={`transit-${route.id}-title`}>
-          {route.shortName || route.routeName}
-        </FitText>
+        {isPath(route.agency) ? (
+          // PATH's lines are signed with its P; white on the line's color, like the other cards' names.
+          <View accessibilityLabel={`PATH ${route.routeName}`} accessible={true} style={styles.pathMark} testID={`transit-${route.id}-title`}>
+            <PathMark color="#FFFFFF" height={29} />
+          </View>
+        ) : (
+          <FitText style={styles.routeName} testID={`transit-${route.id}-title`}>
+            {route.shortName || route.routeName}
+          </FitText>
+        )}
         <FitText style={styles.direction}>{directionDestination(item.direction)}</FitText>
         <Text numberOfLines={1} style={styles.stopName}>{item.stopName}</Text>
       </View>
@@ -256,6 +264,7 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   },
   copy: { minWidth: 0, flex: 1 },
   routeName: { color: colors.white, ...typography.displayTime },
+  pathMark: { alignSelf: 'flex-start', height: 29, justifyContent: 'center' },
   direction: {
     marginTop: 3,
     color: colors.white,
