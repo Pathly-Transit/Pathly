@@ -860,6 +860,7 @@ const CREDITS: readonly { id: string; label: string; detail: string; url?: strin
   { id: 'census', label: 'Map data: U.S. Census Bureau', detail: 'TIGER/Line streets, water, parks, and places; population estimates', url: 'https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html' },
   { id: 'usgs', label: 'Place names: U.S. Geological Survey', detail: 'Geographic Names Information System', url: 'https://www.usgs.gov/us-board-on-geographic-names/domestic-names' },
   { id: 'nyc', label: 'Buildings: City of New York', detail: 'NYC Open Data building footprints', url: 'https://data.cityofnewyork.us/d/5zhs-2jue' },
+  { id: 'microsoft', label: 'Buildings outside NYC: Microsoft', detail: 'Global ML Building Footprints, Open Database License', url: 'https://github.com/microsoft/GlobalMLBuildingFootprints' },
   { id: 'natural-earth', label: 'Made with Natural Earth', detail: 'Coastlines and cities around the region', url: 'https://www.naturalearthdata.com' },
   {
     id: 'maplibre',
@@ -904,7 +905,7 @@ export function LegalSettings({ onFeedback }: PageProps) {
           />
         ))}
         {/* Walking distances (Nearby and trip plans) come from OpenStreetMap, whose license (ODbL) requires this credit. */}
-        <SettingRow detail="Open Database License" label="Walking routes © OpenStreetMap contributors" onPress={() => void openLink(OSM_COPYRIGHT_URL, onFeedback)} testID="about-osm" />
+        <SettingRow detail="Open Database License" label="Footpaths and walking routes © OpenStreetMap contributors" onPress={() => void openLink(OSM_COPYRIGHT_URL, onFeedback)} testID="about-osm" />
       </Card>
     </>
   );

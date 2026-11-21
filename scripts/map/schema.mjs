@@ -5,9 +5,10 @@
 //   water       lakes, rivers, bays, and the sea near shore, merged into one surface
 //   landuse     kind: airport, cemetery, hospital, university, school, military, commercial,
 //               industrial, theme_park, zoo; airport names as points (kind airport, name)
-//   park        kind: park, national_park, golf_course; park names as points (kind park, name)
+//   park        kind: park, national_park, golf_course, pitch (sports fields); park names as points (kind park, name)
 //   building    building outlines
-//   road        kind: motorway, primary, secondary, tertiary, minor, service, path; link (ramps),
+//   road        kind: motorway, primary, secondary, tertiary, minor, service, path; trail (an
+//               informal or unpaved path), stub (a short dead-end path: last zoom only), link (ramps),
 //               brunnel (bridge/tunnel), name, ref (route number)
 //   rail        railroads
 //   waterway    kind: river, canal, stream; name

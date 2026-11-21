@@ -80,7 +80,7 @@ function polygonsArea(polygons) {
   return area;
 }
 
-function clipPolygons(polygons, box) {
+export function clipPolygons(polygons, box) {
   const out = [];
   for (const polygon of polygons) {
     if (boxContainsBox(box, ringBounds(polygon[0]))) out.push(polygon);
@@ -96,7 +96,7 @@ function clipPolygons(polygons, box) {
  */
 const DETAILED_SURFACES_ZOOM = 9;
 
-function addPolygons(store, layer, minzoom, props, polygons, maxzoom) {
+export function addPolygons(store, layer, minzoom, props, polygons, maxzoom) {
   if (polygons.length === 0 || minzoom > MAX_ZOOM) return -1;
   const parts = [];
   const outer = [];
@@ -451,7 +451,8 @@ function roadProps(list) {
   let link = false;
   switch (best.mtfcc) {
     case 'S1100': kind = 'motorway'; minzoom = 4; break;
-    case 'S1630': kind = 'motorway'; minzoom = 10; link = true; break;
+    // Ramps wait for street level, like Google's (further out they were scattered dashes).
+    case 'S1630': kind = 'motorway'; minzoom = 12; link = true; break;
     case 'S1200':
       if (routes.some((a) => a.rttyp === 'I' || a.rttyp === 'U' || a.rttyp === 'S')) { kind = 'primary'; minzoom = 7; } else { kind = 'secondary'; minzoom = 9; }
       break;
@@ -473,13 +474,57 @@ function roadProps(list) {
   return { props, minzoom };
 }
 
+/** An avenue (by name) shorter than this end to end is a side street: a suburb's short Maple Ave. */
+const AVENUE_MIN_METERS = 2500;
+
+/** A line's length in meters (its coordinates are longitude, latitude). */
+function lineMeters(line) {
+  let meters = 0;
+  for (let i = 2; i < line.length; i += 2) {
+    const kx = 111320 * Math.cos((((line[i - 1] + line[i + 1]) / 2) * Math.PI) / 180);
+    meters += Math.hypot((line[i] - line[i - 2]) * kx, (line[i + 1] - line[i - 1]) * 110574);
+  }
+  return meters;
+}
+
+/**
+ * Streets count as avenues (shown from further out) by name, so a short residential "Ave" showed far
+ * out as a stray dash while the streets around it waited. Like Google's, only an avenue that runs a
+ * good way (its pieces of the same name joined end to end) shows that far out; the rest are streets.
+ */
+function shortAvenuesToStreets(lines) {
+  const parent = lines.map((_, i) => i);
+  const find = (i) => {
+    while (parent[i] !== i) i = parent[i] = parent[parent[i]];
+    return i;
+  };
+  const atEnd = new Map();
+  lines.forEach(({ props, line }, i) => {
+    if (props.kind !== 'tertiary') return;
+    for (const at of [0, line.length - 2]) {
+      const key = `${props.name}|${line[at].toFixed(6)},${line[at + 1].toFixed(6)}`;
+      const other = atEnd.get(key);
+      if (other === undefined) atEnd.set(key, i);
+      else parent[find(i)] = find(other);
+    }
+  });
+  const total = new Map();
+  lines.forEach(({ props, line }, i) => {
+    if (props.kind === 'tertiary') total.set(find(i), (total.get(find(i)) ?? 0) + lineMeters(line));
+  });
+  return lines.map((entry, i) => (entry.props.kind === 'tertiary' && total.get(find(i)) < AVENUE_MIN_METERS
+    ? { ...entry, props: { ...entry.props, kind: 'minor' }, minzoom: 12 }
+    : entry));
+}
+
 export function addRoads(store, countyDir, log) {
   let count = 0;
   for (const file of countyFiles(countyDir, 'roads')) {
     const records = readShapefileZip(file)
       .filter(({ shape }) => shape && shape.type === 'line')
       .map(({ shape, props }) => ({ parts: shape.parts, attrs: { mtfcc: props.MTFCC, rttyp: props.RTTYP, name: props.FULLNAME } }));
-    for (const { props, minzoom, line } of joinedLines(records, roadProps, DETAIL)) if (addLines(store, 'road', minzoom, props, [line], DETAIL) >= 0) count += 1;
+    const lines = shortAvenuesToStreets(joinedLines(records, roadProps, DETAIL));
+    for (const { props, minzoom, line } of lines) if (addLines(store, 'road', minzoom, props, [line], DETAIL) >= 0) count += 1;
   }
   log(`  roads: ${count} lines`);
 }
@@ -499,7 +544,9 @@ const PARK = { lo: 7, px: 4 };
 const LANDMARKS = {
   K2180: ['park', 'park', PARK], K2183: ['park', 'park', PARK], K2184: ['park', 'park', PARK], K2185: ['park', 'park', PARK],
   K2186: ['park', 'park', PARK], K2187: ['park', 'park', PARK], K2188: ['park', 'park', PARK], K2189: ['park', 'park', PARK], K2190: ['park', 'park', PARK],
-  K2181: ['park', 'national_park', { lo: 6, px: 4 }], K2182: ['park', 'national_park', { lo: 6, px: 4 }],
+  // National parks (Gateway's spans most of Jamaica Bay) wait for the detailed water that covers their
+  // bays: further out they filled the water with a park's green.
+  K2181: ['park', 'national_park', { lo: DETAILED_SURFACES_ZOOM, px: 4 }], K2182: ['park', 'national_park', { lo: DETAILED_SURFACES_ZOOM, px: 4 }],
   K2561: ['park', 'golf_course', { lo: 10, px: 4 }],
   K2582: ['landuse', 'cemetery', { lo: 11, px: 4 }],
   K2540: ['landuse', 'university', { lo: 11, px: 4 }],

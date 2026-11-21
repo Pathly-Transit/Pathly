@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { StyleSheet, View } from 'react-native';
 
 import { useTheme } from '../theme/AppSettings';
+import { MapCredit } from './MapCredit';
 import { mapLandColor, overlaySlotId, pathlyMapStyle } from './mapStyle';
 import {
   boundsForMaxZoom,
@@ -84,7 +85,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       bearing: initialCamera.bearing ?? 0,
       pitch: initialCamera.pitch ?? 0,
       ...(minZoom !== undefined ? { minZoom: toMapLibreZoom(minZoom) } : {}),
-      // No attribution control of the renderer's own (the base map's data is public domain and needs no credit).
+      // The map's credit is added below, on the left.
       attributionControl: false,
       interactive,
       dragRotate: interactive && rotateEnabled,
@@ -210,6 +211,8 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
     <View style={[StyleSheet.absoluteFill, { backgroundColor: mapLandColor(isDark, mapTheme) }]} testID={testID}>
       <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
       {context ? <MapContext.Provider value={context}>{children}</MapContext.Provider> : null}
+      {/* The map's credit, in the app's own button style (MapLibre's is turned off above). */}
+      <MapCredit />
     </View>
   );
 });

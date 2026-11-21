@@ -8,6 +8,18 @@
       "port": 8081
     },
     {
+      "name": "maptiles-local",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:/Users/sc3vv/AppData/Local/Temp/claude/890c8eef64c72229/6521599e-957e-4803-b1fb-e74ce2b9b028/scratchpad/tileserver.mjs", "maptiles/tiles", "8090"],
+      "port": 8090
+    },
+    {
+      "name": "pathly-web-local-tiles",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set EXPO_PUBLIC_MAP_TILES_URL=http://localhost:8090/{z}/{x}/{y}.pbf&& npm run web --workspace @pathly/mobile -- --port 8097"],
+      "port": 8097
+    },
+    {
       "name": "pathly-site",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["--yes", "firebase-tools@15.32.1", "serve", "--only", "hosting", "--port", "5050"],

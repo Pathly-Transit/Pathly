@@ -464,11 +464,11 @@ describe('Settings', () => {
       openURL.mockRestore();
     });
 
-    it('credits OpenStreetMap for walking distances and links to its copyright page', async () => {
+    it('credits OpenStreetMap for footpaths and walking distances and links to its copyright page', async () => {
       const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
       const screen = renderSettings();
       await openPage(screen, 'about');
-      expect(screen.getByText('Walking routes © OpenStreetMap contributors')).toBeTruthy();
+      expect(screen.getByText('Footpaths and walking routes © OpenStreetMap contributors')).toBeTruthy();
       await act(async () => {
         fireEvent.press(screen.getByTestId('about-osm'));
       });

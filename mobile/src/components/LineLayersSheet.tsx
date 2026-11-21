@@ -1,6 +1,6 @@
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { LINE_LAYER_GROUPS, lineLayerRouteKey, type LineLayerChoice, type LineLayerGroupId, type LineLayerRoute } from '../data/lineLayers';
+import { LINE_LAYER_GROUPS, LINE_LAYER_MODES, lineLayerRouteKey, type LineLayerChoice, type LineLayerGroupId, type LineLayerRoute } from '../data/lineLayers';
 import { useTheme, useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
 import { typography } from '../theme/typography';
@@ -21,14 +21,17 @@ type LineLayersSheetProps = {
 };
 
 /**
- * The home map's line layers: switch on every line of a mode (all subway lines, all buses) or
- * single lines. Only the home map draws them; route view always shows just its own line.
+ * The home map's line layers: switch on every line an agency runs (sorted under Trains, Buses, and
+ * Ferries, each with a switch-all), or single lines. Only the home map draws them; route view always shows just its own line.
  */
 export function LineLayersSheet({ choice, lines, onChange, onClose, visible }: LineLayersSheetProps) {
   const styles = useThemedStyles(createStyles);
   const { colors } = useTheme();
   const shownRoutes = new Set(choice.routes.map(lineLayerRouteKey));
-  const toggleGroup = (id: LineLayerGroupId, on: boolean) => onChange({ ...choice, groups: on ? [...choice.groups, id] : choice.groups.filter((group) => group !== id) });
+  const setGroups = (ids: readonly LineLayerGroupId[], on: boolean) => onChange({
+    ...choice,
+    groups: on ? [...choice.groups, ...ids.filter((id) => !choice.groups.includes(id))] : choice.groups.filter((group) => !ids.includes(group)),
+  });
   const toggleRoute = (route: LineLayerRoute, on: boolean) => onChange({
     ...choice,
     routes: on
@@ -53,15 +56,32 @@ export function LineLayersSheet({ choice, lines, onChange, onClose, visible }: L
             <PressableScale accessibilityLabel="Close" accessibilityRole="button" hitSlop={8} onPress={onClose} testID="line-layers-close"><Icon name="close" size={26} /></PressableScale>
           </View>
           <ScrollView bounces={false} style={styles.list}>
-            {/* Every line an agency runs, switched on all at once. */}
-            <Text accessibilityRole="header" style={styles.sectionLabel} testID="line-layers-agency-heading">Show agency lines</Text>
-            {LINE_LAYER_GROUPS.map((group) => {
-              const on = choice.groups.includes(group.id);
+            {/* Every line an agency runs, switched on all at once; agencies sorted by mode. */}
+            {LINE_LAYER_MODES.map((mode) => {
+              const groups = LINE_LAYER_GROUPS.filter((group) => group.mode === mode.id);
+              const ids = groups.map((group) => group.id);
+              const allOn = ids.every((id) => choice.groups.includes(id));
               return (
-                <View key={group.id} style={styles.row}>
-                  <View style={styles.modeIcon}><Icon color={colors.primary} name={group.icon as IconName} size={18} /></View>
-                  <Text style={styles.rowText}>{group.label}</Text>
-                  <AnimatedSwitch accessibilityLabel={`Show every ${group.label} line`} onValueChange={(value) => toggleGroup(group.id, value)} testID={`line-layer-group-${group.id}`} value={on} />
+                <View key={mode.id}>
+                  <View style={styles.sectionHeader}>
+                    <Text accessibilityRole="header" style={[styles.sectionLabel, styles.sectionTitle]} testID={`line-layers-mode-${mode.id}`}>{mode.label}</Text>
+                    <PressableScale
+                      accessibilityLabel={`${allOn ? 'Hide' : 'Show'} all ${mode.label.toLowerCase()}`}
+                      accessibilityRole="button"
+                      hitSlop={8}
+                      onPress={() => setGroups(ids, !allOn)}
+                      testID={`line-layers-mode-${mode.id}-all`}
+                    >
+                      <Text style={styles.sectionAction}>{allOn ? 'Hide all' : 'Show all'}</Text>
+                    </PressableScale>
+                  </View>
+                  {groups.map((group) => (
+                    <View key={group.id} style={styles.row}>
+                      <View style={styles.modeIcon}><Icon color={colors.primary} name={group.icon as IconName} size={18} /></View>
+                      <Text style={styles.rowText}>{group.label}</Text>
+                      <AnimatedSwitch accessibilityLabel={`Show every ${group.label} line`} onValueChange={(value) => setGroups([group.id], value)} testID={`line-layer-group-${group.id}`} value={choice.groups.includes(group.id)} />
+                    </View>
+                  ))}
                 </View>
               );
             })}
@@ -93,6 +113,9 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   clear: { color: colors.primary, ...typography.bodyStrong, fontSize: 14 },
   list: { flexGrow: 0, marginTop: 6 },
   sectionLabel: { marginTop: 16, marginBottom: 4, color: colors.mutedInk, ...typography.label },
+  sectionHeader: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 },
+  sectionTitle: { flex: 1 },
+  sectionAction: { marginBottom: 4, color: colors.primary, ...typography.bodyStrong, fontSize: 13 },
   row: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   modeIcon: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: colors.blueSoft },
   rowText: { flex: 1, minWidth: 0, color: colors.ink, ...typography.bodyStrong, fontSize: 15 },

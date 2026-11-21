@@ -12,6 +12,7 @@ import { createContext, forwardRef, useContext, useImperativeHandle, useMemo, us
 import { StyleSheet, View, type NativeSyntheticEvent } from 'react-native';
 
 import { useTheme } from '../theme/AppSettings';
+import { MapCredit } from './MapCredit';
 import { mapLandColor, overlaySlotId, pathlyMapStyle } from './mapStyle';
 import {
   boundsForMaxZoom,
@@ -162,7 +163,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       testID={testID}
     >
       <Map
-        // No logo or attribution control of the renderer's own (the base map's data is public domain and needs no credit).
+        // No logo, and the map's credit is MapCredit below, in the app's own button style.
         attribution={false}
         compass={false}
         contentInset={contentInset}
@@ -203,6 +204,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
         />
         <BearingContext.Provider value={bearingStore}><ZoomContext.Provider value={zoomStore}>{children}</ZoomContext.Provider></BearingContext.Provider>
       </Map>
+      <MapCredit />
     </View>
   );
 });
