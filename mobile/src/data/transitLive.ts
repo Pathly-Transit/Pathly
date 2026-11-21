@@ -2,7 +2,7 @@
 import { isRideReportKind, type VehicleReport } from './rideReports';
 import { normalizeBeanAvatar, type BeanAvatarConfig } from '../avatars/beanAvatar';
 import type { Coordinates } from '../hooks/useCurrentLocation';
-import { callable } from '../lib/firebase';
+import { auth, callable } from '../lib/firebase';
 import { directionStop, type NearestDirectionResponse, type NearestRouteStop } from './nearestRouteStop';
 import type { LiveSource, ServiceAlert } from './transit';
 
@@ -85,19 +85,55 @@ const getRouteLiveStatus = callable<
   RouteLiveStatusResponse & { nearestStop?: NearestStopResponse }
 >('getRouteLiveStatus');
 
+const LIVE_READ_FRESH_MS = 1_000;
+const MAX_LIVE_READS = 32;
+type LiveRead = { promise: Promise<RouteLiveData>; fetchedAt?: number };
+const liveReads = new Map<string, LiveRead>();
+let liveReadOwner: string | null | undefined;
+
+/** Test/session reset; late requests cannot repopulate the cleared cache. */
+export function clearRouteLiveReads(): void {
+  liveReads.clear();
+  liveReadOwner = undefined;
+}
+
 /**
- * Upcoming departures (both directions) and live vehicle positions for one route on any
- * configured agency (LIRR, NYC Subway, ...) — one function for every agency rather than one
- * per agency, since the backend already unifies them behind a single callable. For agencies
- * where one stop_id serves a station regardless of direction, `source.direction1StopId` and
- * `.direction0StopId` are the same value.
+ * Upcoming departures and vehicles. Identical map/sharing reads share an in-flight request and
+ * a one-second fresh result; every 15-second poll still fetches current data. Direction stop IDs
+ * and exact rider coordinates remain part of the key, along with the current account scope.
  */
-export async function fetchRouteLiveData(source: LiveSource, location?: Coordinates): Promise<RouteLiveData> {
-  const { data } = await getRouteLiveStatus({
+export function fetchRouteLiveData(source: LiveSource, location?: Coordinates): Promise<RouteLiveData> {
+  const owner = auth?.currentUser?.uid ?? null;
+  if (owner !== liveReadOwner) {
+    liveReads.clear();
+    liveReadOwner = owner;
+  }
+  const request = {
     ...routeRequest(source),
     ...(location ? { lat: location.latitude, lon: location.longitude } : {}),
-  });
-  return toRouteLiveData(data);
+  };
+  // Responses include account-specific rider overlays and stop/location-specific predictions.
+  // Share only identical reads; never approximate coordinates or reuse another owner's result.
+  const key = JSON.stringify(request);
+  const cached = liveReads.get(key);
+  const age = cached?.fetchedAt === undefined ? null : Date.now() - cached.fetchedAt;
+  if (cached && (age === null || (age >= 0 && age < LIVE_READ_FRESH_MS))) return cached.promise;
+  const read: LiveRead = {
+    promise: getRouteLiveStatus(request).then(({ data }) => {
+      if ((auth?.currentUser?.uid ?? null) !== owner) throw new Error('Live status account changed');
+      if (data.routeId !== request.routeId) throw new Error('Live status did not match the requested route');
+      const result = toRouteLiveData(data);
+      if (liveReadOwner === owner && liveReads.get(key) === read) read.fetchedAt = result.fetchedAt;
+      return result;
+    }).catch((error) => {
+      if (liveReads.get(key) === read) liveReads.delete(key);
+      throw error;
+    }),
+  };
+  liveReads.delete(key);
+  liveReads.set(key, read);
+  while (liveReads.size > MAX_LIVE_READS) liveReads.delete(liveReads.keys().next().value!);
+  return read.promise;
 }
 
 type RouteRequest = { agencyId: string; routeId: string; direction1StopId: string; direction0StopId: string };
@@ -128,16 +164,20 @@ export class BatchUnavailableError extends Error {}
  * data, or null if that route alone failed.
  */
 export async function fetchRoutesLiveData(sources: readonly LiveSource[], location?: Coordinates): Promise<(RouteLiveData | null)[]> {
+  const owner = auth?.currentUser?.uid ?? null;
+  const routes = sources.map(routeRequest);
   try {
     const { data } = await getRoutesLiveStatus({
-      routes: sources.map(routeRequest),
+      routes,
       ...(location ? { lat: location.latitude, lon: location.longitude } : {}),
     });
-    return sources.map((_, index) => {
+    if ((auth?.currentUser?.uid ?? null) !== owner) throw new Error('Live status account changed');
+    return routes.map((route, index) => {
       const result = data.results[index];
-      return result?.ok ? toRouteLiveData(result.data) : null;
+      return result?.ok && result.data.routeId === route.routeId ? toRouteLiveData(result.data) : null;
     });
   } catch (error) {
+    if ((auth?.currentUser?.uid ?? null) !== owner) throw new Error('Live status account changed');
     // A backend deployed before batching has no such function.
     if ((error as { code?: string } | null)?.code === 'functions/not-found') throw new BatchUnavailableError();
     throw error;

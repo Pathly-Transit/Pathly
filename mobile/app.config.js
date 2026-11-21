@@ -87,6 +87,10 @@ module.exports = {
         'expo-location',
         {
           locationWhenInUsePermission: 'Pathly uses your location to center the map on you and show nearby transit.',
+          locationAlwaysAndWhenInUsePermission: 'Pathly uses your location during an active trip to update stop alerts while your phone is locked. Tracking stops when the trip ends or trip notifications are turned off.',
+          isIosBackgroundLocationEnabled: true,
+          isAndroidBackgroundLocationEnabled: true,
+          isAndroidForegroundServiceEnabled: true,
         },
       ],
       [

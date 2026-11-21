@@ -1,6 +1,7 @@
 import { createUserWithEmailAndPassword, GoogleAuthProvider, sendEmailVerification, signInAnonymously, signInWithCredential, signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile, type User, type UserCredential } from 'firebase/auth';
 
 import { auth } from '../lib/firebase';
+import { unregisterRouteAlerts } from '../lib/routeAlertRegistration';
 import { createUserProfile } from './userProfile';
 
 export async function signUpWithEmail(email: string, password: string, displayName: string): Promise<UserCredential> {
@@ -54,6 +55,7 @@ export function signInWithGoogleIdToken(idToken: string): Promise<UserCredential
   return signInWithCredential(auth, GoogleAuthProvider.credential(idToken));
 }
 
-export function signOutUser(): Promise<void> {
+export async function signOutUser(): Promise<void> {
+  await unregisterRouteAlerts();
   return signOut(auth);
 }

@@ -9,6 +9,7 @@ import { announcementFor, tripNotificationContent } from '../src/data/tripAnnoun
 import { DEFAULT_PREFERENCES, type UserPreferences } from '../src/data/userPreferences';
 import { useTripGuidanceAlerts } from '../src/hooks/useTripGuidanceAlerts';
 import { clearTripNotification, registerForRouteAlerts, showTripNotification, TRIP_NOTIFICATION_ID } from '../src/lib/notifications';
+import { setRouteAlertOwner } from '../src/lib/routeAlertRegistration';
 
 const ARRIVE = '2026-11-12T18:42:00-05:00';
 
@@ -249,8 +250,9 @@ describe('trip guidance lifecycle regressions', () => {
   it('also prepares the saved-line channel before an Android permission query', async () => {
     const original = Platform.OS;
     Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
-    permissions.mockResolvedValueOnce({ granted: false, canAskAgain: false });
+    permissions.mockResolvedValue({ granted: false, canAskAgain: false });
     try {
+      await setRouteAlertOwner({ uid: 'isolated-test-user' });
       expect(await registerForRouteAlerts('isolated-test-user')).toBe(false);
       const firstChannel = (Notifications.setNotificationChannelAsync as jest.Mock).mock.invocationCallOrder[0];
       expect(firstChannel).toBeLessThan(permissions.mock.invocationCallOrder[0]!);

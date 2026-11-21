@@ -6,6 +6,7 @@ import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 
 import { getRouteAlerts, type RouteAlert } from './gtfsAlerts';
 import { AGENCY_CONFIGS, type AgencyId } from './gtfsAgencies';
+import { ownedPushTokens } from './pushInstallations';
 
 /** Mirrors mobile/src/data/savedRoutes.ts's RouteAlertSetting. 'peak' is kept for lines saved before Custom hours. */
 export type RouteAlertSetting = 'all' | 'peak' | 'custom' | 'off';
@@ -155,11 +156,11 @@ export async function sendSavedRouteAlerts(now = new Date()): Promise<{ sent: nu
     await Promise.all(alerts.map((alert) => inbox.doc(sentKey(route, alert)).create({ ...alertInboxEntry(route, alert, now), sentAt: FieldValue.serverTimestamp() }).catch(() => undefined)));
     if (!wantsAlertsNow(route.alerts, now, route.alertHours)) continue;
     if (!pushTokensByUser.has(uid)) {
-      pushTokensByUser.set(uid, firestore.collection('users').doc(uid).get().then((user) => {
+      pushTokensByUser.set(uid, firestore.collection('users').doc(uid).get().then(async (user) => {
         // Settings' "Allow notifications" or "Service alerts" is off on the rider's phone.
         if (user.data()?.routeAlertsPaused === true) return [];
         const tokens = user.data()?.pushTokens;
-        return Array.isArray(tokens) ? tokens.filter((token): token is string => typeof token === 'string') : [];
+        return ownedPushTokens(firestore, uid, tokens);
       }));
     }
     const tokens = await pushTokensByUser.get(uid)!;

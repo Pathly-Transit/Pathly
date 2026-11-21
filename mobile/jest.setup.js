@@ -10,7 +10,7 @@ const { routeById: mockRouteById, routes: mockRoutes, stopsForDirection: mockSto
 
 // Firebase needs real project config (unavailable in Jest) and hits the network on init;
 // stub it so existing screens still render as if a user is already signed in.
-const mockUser = { uid: 'test-uid', email: 'rider@example.com', displayName: 'Pathly Rider', providerData: [{ providerId: 'password' }] };
+const mockUser = { uid: 'test-uid', email: 'rider@example.com', emailVerified: true, displayName: 'Pathly Rider', providerData: [{ providerId: 'password' }] };
 // Tests sign in as the admin by changing this email (jest.setupAfterEnv.js resets it).
 globalThis.__mockAuthUser = mockUser;
 
@@ -55,6 +55,8 @@ jest.mock('expo-notifications', () => ({
   AndroidNotificationVisibility: { PUBLIC: 1 },
   dismissNotificationAsync: jest.fn(() => Promise.resolve()),
   getExpoPushTokenAsync: jest.fn(() => Promise.resolve({ data: 'ExponentPushToken[test]' })),
+  addPushTokenListener: jest.fn(() => ({ remove: jest.fn() })),
+  unregisterForNotificationsAsync: jest.fn(() => Promise.resolve()),
   getPermissionsAsync: jest.fn(() => Promise.resolve({ granted: false, canAskAgain: false })),
   requestPermissionsAsync: jest.fn(() => Promise.resolve({ granted: false, canAskAgain: false })),
   scheduleNotificationAsync: jest.fn(() => Promise.resolve('notification')),

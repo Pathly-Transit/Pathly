@@ -1,6 +1,7 @@
 import { agencyConfig, type AgencyId } from './gtfsAgencies';
 import { gtfsTimeToSeconds, isServiceRunningOn, loadAgencyStaticData, loadRouteStopTimes } from './gtfsStaticData';
 import type { GtfsTripStatus } from './gtfsStatus';
+import { gtfsServiceDaysFor, type GtfsServiceDay } from './gtfsServiceTime';
 
 export type DirectionPrediction = {
   minutes: number;
@@ -25,42 +26,8 @@ export type StopPredictions = {
   towardDirection0: readonly DirectionPrediction[];
 };
 
-const EASTERN_TIME_ZONE = 'America/New_York';
-/** Tiles shown per direction on route detail (and the minimum the next-day lookahead aims for). */
+/** Tiles shown per direction on route detail. */
 const PREDICTIONS_PER_DIRECTION = 6;
-
-type ServiceDay = { dateKey: string; dayOfWeek: number };
-
-function easternNowParts(): { dateKey: string; secondsSinceMidnight: number; dayOfWeek: number; tomorrow: ServiceDay } {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', {
-      timeZone: EASTERN_TIME_ZONE,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date()).map((part) => [part.type, part.value]),
-  );
-  const year = Number(parts.year);
-  const month = Number(parts.month);
-  const day = Number(parts.day);
-  return {
-    dateKey: `${parts.year}${parts.month}${parts.day}`,
-    secondsSinceMidnight: Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second),
-    // Computed from the Eastern calendar date via Date.UTC (not `new Date().getDay()`, which
-    // would use the server's own timezone — wrong near a UTC/Eastern midnight boundary).
-    dayOfWeek: new Date(Date.UTC(year, month - 1, day)).getUTCDay(),
-    tomorrow: serviceDayAt(new Date(Date.UTC(year, month - 1, day + 1))),
-  };
-}
-
-function serviceDayAt(utcDate: Date): ServiceDay {
-  const dateKey = `${utcDate.getUTCFullYear()}${String(utcDate.getUTCMonth() + 1).padStart(2, '0')}${String(utcDate.getUTCDate()).padStart(2, '0')}`;
-  return { dateKey, dayOfWeek: utcDate.getUTCDay() };
-}
 
 type Entry = { tripId: string; minutes: number; peakOffpeak: boolean | null; delayMinutes: number | null; headsign: string | null };
 /** A tracked trip at the asked-for stop, before its delay is resolved. */
@@ -82,7 +49,7 @@ const feedDelayMinutes = (delaySeconds: number | null) => (delaySeconds == null 
  * of direction, so direction1StopId === direction0StopId is expected and correct there).
  *
  * Live predictions are padded with the real published timetable (never a placeholder) for
- * every agency, looking into the next service day when today has too few departures left.
+ * every agency, including overlapping overnight and next-date service.
  * Where realtime and static trip_ids match (`realtimeTripIdsMatchStatic`), a tracked trip's
  * timetable entry is dropped by id; otherwise only timetable departures after the last live
  * one are added (see gtfsAgencies.ts).
@@ -132,29 +99,31 @@ export async function getStopPredictions(
     }
   }
 
-  // The published timetable pads live predictions for every agency, today and (when today
-  // has too few left) the next service day, so each direction can show a few departures even
-  // with one or no vehicle tracked.
+  // The published timetable pads live predictions across neighboring service dates, so each
+  // direction can show actual departures even with one or no vehicle tracked.
   const direction1Static: Entry[] = [];
   const direction0Static: Entry[] = [];
-  const seenTripIds = new Set([...direction1Live, ...direction0Live].map((entry) => entry.tripId));
+  const liveEntries = [...direction1Live, ...direction0Live];
+  const seenTripIds = new Set(liveEntries.map((entry) => entry.tripId));
   const { byStop, byTrip } = await loadRouteStopTimes(agencyId, routeId);
   // A shuttle's trip ends at the other terminal: arriving there isn't a departure from it.
   const endsTripHere = (stopTime: { tripId: string; stopSequence: number }) => config.terminalShuttle === true
     && (byTrip.get(stopTime.tripId) ?? []).every((other) => other.stopSequence <= stopTime.stopSequence);
-  const nowParts = easternNowParts();
+  const serviceDays = gtfsServiceDaysFor(now, [-1, 0, 1]);
 
   // A tracked trip the feed gives no delay for is compared with its own timetable time at the stop,
-  // when the live trip_ids are the timetable's. The trip may have started yesterday (a time past
-  // 24:00:00), so the nearer of today's and yesterday's service day is taken.
+  // when the live trip_ids are the timetable's. Compare plausible runs on their own calendar
+  // dates: overnight service and a DST-adjusted next day can overlap the current civil date.
   if (config.realtimeTripIdsMatchStatic) {
-    const midnightMs = now - nowParts.secondsSinceMidnight * 1000;
-    for (const entry of [...direction1Live, ...direction0Live]) {
+    for (const entry of liveEntries) {
       if (entry.delayMinutes !== null) continue;
       const stopTime = (byStop.get(entry.stopId) ?? []).find((candidate) => candidate.tripId === entry.tripId);
       if (!stopTime) continue;
       const scheduledSeconds = gtfsTimeToSeconds(stopTime.departureTime || stopTime.arrivalTime);
-      const delays = [0, 1].map((daysBack) => Math.round((entry.atMs - (midnightMs + (scheduledSeconds - daysBack * 86_400) * 1000)) / 60_000));
+      const trip = tripsById.get(entry.tripId);
+      const delays = serviceDays.filter((day) => trip && isServiceRunningOn(agencyId, trip.serviceId, day.dateKey, day.dayOfWeek))
+        .map((day) => Math.round((entry.atMs - (day.startMs + scheduledSeconds * 1000)) / 60_000));
+      if (!delays.length) continue;
       const delay = delays.reduce((best, candidate) => (Math.abs(candidate) < Math.abs(best) ? candidate : best));
       if (Math.abs(delay) <= MAX_PLAUSIBLE_DELAY_MINUTES) entry.delayMinutes = delay;
     }
@@ -163,18 +132,20 @@ export async function getStopPredictions(
   // (direction1StopId === direction0StopId) and the trip's direction_id decides.
   const stopIds = config.directionalStops ? [...new Set([direction1StopId, direction0StopId])] : [direction1StopId];
 
-  const collectStatic = (day: ServiceDay, dayOffsetSeconds: number) => {
+  const collectStatic = (day: GtfsServiceDay) => {
     for (const stopId of stopIds) {
       for (const stopTime of byStop.get(stopId) ?? []) {
-        if (config.realtimeTripIdsMatchStatic && seenTripIds.has(stopTime.tripId)) continue;
         const trip = tripsById.get(stopTime.tripId);
         if (!trip || trip.routeId !== routeId) continue;
         if (endsTripHere(stopTime)) continue;
         if (!isServiceRunningOn(agencyId, trip.serviceId, day.dateKey, day.dayOfWeek)) continue;
 
-        const eventSeconds = gtfsTimeToSeconds(stopTime.departureTime || stopTime.arrivalTime) + dayOffsetSeconds;
-        const minutes = Math.round((eventSeconds - nowParts.secondsSinceMidnight) / 60);
+        const eventMs = day.startMs + gtfsTimeToSeconds(stopTime.departureTime || stopTime.arrivalTime) * 1000;
+        const minutes = Math.round((eventMs - now) / 60_000);
         if (minutes < 0) continue;
+        if (config.realtimeTripIdsMatchStatic && seenTripIds.has(stopTime.tripId)
+          && liveEntries.some((entry) => entry.tripId === stopTime.tripId
+            && Math.abs(entry.atMs - eventMs) <= MAX_PLAUSIBLE_DELAY_MINUTES * 60_000)) continue;
 
         const isDirection1 = config.directionalStops && direction1StopId !== direction0StopId ? stopId === direction1StopId : trip.directionId === 1;
         (isDirection1 ? direction1Static : direction0Static).push({ tripId: stopTime.tripId, minutes, peakOffpeak: trip.peakOffpeak, delayMinutes: null, headsign: trip.headsign || null });
@@ -182,11 +153,9 @@ export async function getStopPredictions(
     }
   };
 
-  collectStatic(nowParts, 0);
-  const needsMore = (live: Entry[], staticEntries: Entry[]) => live.length + staticEntries.length < Math.min(limit, PREDICTIONS_PER_DIRECTION);
-  if (needsMore(direction1Live, direction1Static) || needsMore(direction0Live, direction0Static)) {
-    collectStatic(nowParts.tomorrow, 24 * 3600);
-  }
+  // Prior service can run past 24:00, and a DST-adjusted next service day can start before civil midnight.
+  // Collect all three calendar dates and sort by actual instants rather than assuming 24h boundaries.
+  for (const day of serviceDays) collectStatic(day);
 
   const merge = (live: Entry[], staticEntries: Entry[]): DirectionPrediction[] => {
     // Without matching trip_ids, a tracked trip's own timetable entry can't be identified, so

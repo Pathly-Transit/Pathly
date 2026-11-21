@@ -1,4 +1,6 @@
 import { logger } from 'firebase-functions';
+import { getApps, initializeApp } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
 import { defineSecret } from 'firebase-functions/params';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
@@ -33,6 +35,7 @@ import { availableAgencyIds, isAgencyAvailable, loadAgencyStaticData, loadGlobal
 import { nearbyIndexSource, saveNearbyIndex } from './gtfsNearbyIndex';
 import { getRouteAlerts } from './gtfsAlerts';
 import { sendSavedRouteAlerts } from './routeAlerts';
+import { parsePushInstallationRequest, updatePushInstallation as savePushInstallation } from './pushInstallations';
 import { getRouteStatus } from './gtfsStatus';
 import { isInServiceArea } from './serviceArea';
 import { lookupStations, searchStops, type StationLookup } from './stopSearch';
@@ -1036,4 +1039,24 @@ export const searchTransitStops = onCall<SearchTransitStopsRequest>(protectedCal
   await prepareAllAgencyStaticData();
   if (stations) return { stations: await lookupStations(stations, point) };
   return { stops: await searchStops(query!, point) };
+});
+
+/** The private installation capability also permits cleanup after the Firebase user signed out. */
+export const updatePushInstallation = onCall(protectedCallableOptions, async (request) => {
+  const data = parsePushInstallationRequest(request.data);
+  if (data.token !== null && (!request.auth || request.auth.uid !== data.ownerUid || request.auth.token.firebase?.sign_in_provider === 'anonymous')) {
+    throw new HttpsError('unauthenticated', 'Sign in to register alerts.');
+  }
+  // Cleanup has no account session after sign-out. The unguessable capability is checked by the
+  // transaction; its own hash-keyed budget prevents one valid installation flooding cleanup.
+  if (!request.auth) {
+    // Also bound total unauthenticated tombstone creation: inventing capabilities must not
+    // provide an unbounded public Firestore write endpoint.
+    await enforceCallableSecurity({ ...request, auth: { uid: 'signed-out-push-cleanup', token: {} } } as typeof request,
+      'updatePushInstallation-global-cleanup', { userPerMinute: 300 });
+  }
+  const rateRequest = request.auth ? request : { ...request, auth: { uid: `push-installation:${data.capability}`, token: {} } } as typeof request;
+  await enforceCallableSecurity(rateRequest, 'updatePushInstallation', { userPerMinute: 30 });
+  const firestore = getFirestore(getApps()[0] ?? initializeApp());
+  return savePushInstallation(firestore, data, request.auth?.uid ?? null);
 });

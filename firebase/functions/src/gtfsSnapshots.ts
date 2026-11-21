@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { createReadStream, existsSync } from 'node:fs';
+import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, sep } from 'node:path';
 
@@ -1736,25 +1736,104 @@ async function tryLoadDerivedFiles(
   }
 }
 
-/**
- * Moves a staged snapshot directory into its content-addressed place. Windows reports an
- * existing target as EPERM rather than ENOTEMPTY, and can briefly lock just-written folders
- * (antivirus, search indexer), so a locked rename onto a missing target is retried.
- */
-async function renameIntoPlace(stagingDir: string, dataDir: string): Promise<void> {
+type HydratedFile = { size: number; sha256: string };
+const snapshotInstallations = new Map<string, Promise<void>>();
+
+/** A content-addressed name alone does not establish that a prior hydration completed. */
+async function cachedSnapshotMatches(dataDir: string, expected: ReadonlyMap<string, HydratedFile>): Promise<boolean> {
+  try {
+    if (!(await lstat(dataDir)).isDirectory()) return false;
+    let files = 0;
+    const checkDirectory = async (directory: string, prefix = ''): Promise<boolean> => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const name = join(prefix, entry.name);
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) {
+          if (!(await checkDirectory(path, name))) return false;
+          continue;
+        }
+        const file = expected.get(name);
+        if (!entry.isFile() || !file) return false;
+        const info = await lstat(path);
+        if (!info.isFile() || info.size !== file.size) return false;
+        const hash = createHash('sha256');
+        // Hash one file at a time without keeping another copy of a large timetable in memory.
+        for await (const chunk of createReadStream(path)) hash.update(chunk);
+        if (hash.digest('hex') !== file.sha256) return false;
+        files += 1;
+      }
+      return true;
+    };
+    return await checkDirectory(dataDir) && files === expected.size;
+  } catch {
+    return false;
+  }
+}
+
+const transientRenameError = (error: unknown) => ['EPERM', 'EBUSY', 'EACCES'].includes((error as NodeJS.ErrnoException | null)?.code ?? '');
+
+/** Install a fully written snapshot, repairing incomplete/corrupt destinations rather than trusting their name. */
+async function installSnapshot(stagingDir: string, dataDir: string, expected: ReadonlyMap<string, HydratedFile>): Promise<void> {
   for (let attempt = 0; ; attempt += 1) {
     try {
       await rename(stagingDir, dataDir);
       return;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException | null)?.code;
-      // Another hydration in this instance won the race for the same content-addressed path.
-      if (code === 'EEXIST' || code === 'ENOTEMPTY') return;
-      if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') throw error;
-      if (existsSync(dataDir)) return;
+      if (!['EEXIST', 'ENOTEMPTY', 'ENOTDIR', 'EISDIR'].includes(code ?? '') && !transientRenameError(error)) throw error;
+      if (await cachedSnapshotMatches(dataDir, expected)) return;
       if (attempt >= 10) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      // Do not merge files into a directory readers might observe half repaired. Move the invalid
+      // root aside, then publish the verified staging directory in one rename. A previous active
+      // snapshot has a different version/path and remains untouched until preparation activates us.
+      const invalidDir = join(dirname(dataDir), `.${basename(dataDir)}.${randomUUID()}.invalid`);
+      try {
+        await rename(dataDir, invalidDir);
+      } catch (moveError) {
+        if ((moveError as NodeJS.ErrnoException | null)?.code !== 'ENOENT' && !transientRenameError(moveError)) throw moveError;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        continue;
+      }
+      try {
+        await rename(stagingDir, dataDir);
+      } catch (installError) {
+        // Preserve the old directory if publishing the replacement failed. Another process may
+        // already have published its own valid copy; never remove that winner during rollback.
+        if (await cachedSnapshotMatches(dataDir, expected)) {
+          await removeInvalidSnapshot(invalidDir);
+          return;
+        }
+        if (!existsSync(dataDir)) await rename(invalidDir, dataDir);
+        if (!transientRenameError(installError)) throw installError;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        continue;
+      }
+      await removeInvalidSnapshot(invalidDir);
+      return;
     }
+  }
+}
+
+async function removeInvalidSnapshot(dataDir: string): Promise<void> {
+  try {
+    await rm(dataDir, { recursive: true, force: true });
+  } catch (error) {
+    logger.warn('Could not remove a replaced invalid GTFS snapshot cache', {
+      event: 'gtfs_snapshot_cache_prune_failed',
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/** Late timed-out hydrations can overlap a retry; serialize validation/repair of the same disk root. */
+async function renameIntoPlace(stagingDir: string, dataDir: string, expected: ReadonlyMap<string, HydratedFile>): Promise<void> {
+  const previous = snapshotInstallations.get(dataDir) ?? Promise.resolve();
+  const installation = previous.catch(() => undefined).then(() => installSnapshot(stagingDir, dataDir, expected));
+  snapshotInstallations.set(dataDir, installation);
+  try {
+    await installation;
+  } finally {
+    if (snapshotInstallations.get(dataDir) === installation) snapshotInstallations.delete(dataDir);
   }
 }
 
@@ -1786,14 +1865,16 @@ async function hydrateManifest(manifest: GtfsSnapshotManifest): Promise<Hydrated
     // With prepared files, leave the raw stop times out (as a deploy does): the loaders then read
     // only the prepared files, and /tmp (held in memory) stays about the size it was before.
     const rawFiles = [...extracted.files].filter(([name]) => !derivedFiles || name !== 'stop_times.txt');
+    const expectedFiles = new Map<string, HydratedFile>(rawFiles.map(([name, data]) => [name, { size: data.length, sha256: sha256(data) }]));
     await Promise.all(rawFiles.map(([name, data]) => writeFile(join(stagingDir, name), data)));
     if (derivedFiles) {
       for (const dir of new Set([...derivedFiles.keys()].map((name) => dirname(join(stagingDir, DERIVED_DIR, name))))) {
         await mkdir(dir, { recursive: true });
       }
       await Promise.all([...derivedFiles].map(([name, data]) => writeFile(join(stagingDir, DERIVED_DIR, name), data)));
+      for (const [name, data] of derivedFiles) expectedFiles.set(join(DERIVED_DIR, name), { size: data.length, sha256: sha256(data) });
     }
-    await renameIntoPlace(stagingDir, dataDir);
+    await renameIntoPlace(stagingDir, dataDir, expectedFiles);
   } finally {
     await rm(stagingDir, { recursive: true, force: true });
   }

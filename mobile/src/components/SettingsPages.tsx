@@ -1,5 +1,5 @@
 import * as Location from 'expo-location';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useAuth } from '../auth/AuthContext';
@@ -23,6 +23,7 @@ import type { FareType } from '../data/tripPlanning';
 import { clearSearchHistory } from '../data/userData';
 import { ALL_TRANSIT_MODES, useUserPreferences, WALK_LIMIT_OPTIONS, WALK_ONLY_OPTIONS } from '../data/userPreferences';
 import { registerForRouteAlerts } from '../lib/notifications';
+import { AccountWriteCancelled, useAccountWrites } from '../hooks/useAccountWrites';
 import { useAppSettings, useTheme, useThemedStyles, type TextSize } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
 import { fontFamilies, typography } from '../theme/typography';
@@ -218,31 +219,64 @@ export function InboxSettings() {
 
 export function NotificationSettings({ onFeedback }: PageProps) {
   const { profile } = useStyles();
-  const { preferences, updatePreferences } = useUserPreferences();
+  const { preferences, updatePreferences, savePreferences } = useUserPreferences();
   const { notifications } = preferences;
   const { user } = useAuth();
-  const uid = user?.uid;
+  const uid = user?.isAnonymous ? undefined : user?.uid;
+  const { run: writeAccount, isCurrent: isCurrentAccount } = useAccountWrites(user?.uid);
   // Each saved line's own alert setting, stored with it on the account (the backend reads it).
-  const [savedRoutes, setSavedRoutes] = useState<readonly SavedRoute[]>([]);
+  const [saved, setSaved] = useState<{ uid: string; routes: readonly SavedRoute[] } | null>(null);
+  const savedRoutes = saved && saved.uid === uid ? saved.routes : [];
   useEffect(() => {
     if (!uid) return undefined;
-    return subscribeToSavedRoutes(uid, setSavedRoutes);
+    return subscribeToSavedRoutes(uid, (routes) => setSaved({ uid, routes }));
   }, [uid]);
+  const notificationIntent = useRef(notifications);
+  const notificationVersions = useRef(new Map<string, number>());
+  const lineVersions = useRef(new Map<string, number>());
+  useEffect(() => { notificationIntent.current = notifications; }, [notifications]);
   const set = (key: keyof typeof notifications, value: boolean) => {
-    updatePreferences({ notifications: { [key]: value } });
-    if (uid && (key === 'enabled' || key === 'serviceAlerts')) {
-      const next = { ...notifications, [key]: value };
-      setRouteAlertsPaused(uid, !(next.enabled && next.serviceAlerts)).catch(() => undefined);
-    }
-    onFeedback('Notification preferences saved');
+    const next = { ...notificationIntent.current, [key]: value };
+    notificationIntent.current = next;
+    const controlsPause = key === 'enabled' || key === 'serviceAlerts';
+    const intentKey = controlsPause ? 'pause' : key;
+    const version = (notificationVersions.current.get(intentKey) ?? 0) + 1;
+    notificationVersions.current.set(intentKey, version);
+    const latestIntent = () => notificationVersions.current.get(intentKey) === version;
+    // Attach a rejection handler immediately while retaining optimistic switch behavior.
+    const local = savePreferences({ notifications: { [key]: value } }).then(() => ({ ok: true as const }), (error: unknown) => ({ ok: false as const, error }));
+    void writeAccount(`notification-preferences:${intentKey}`, async (owner) => {
+      const result = await local;
+      if (!result.ok) throw result.error;
+      if (uid && controlsPause) await setRouteAlertsPaused(owner, !(next.enabled && next.serviceAlerts));
+    }).then(async () => {
+      if (!isCurrentAccount() || !latestIntent()) return;
+      const needsRegistration = uid && controlsPause && value && next.enabled && next.serviceAlerts;
+      const ready = !needsRegistration || !uid || await registerForRouteAlerts(uid).catch(() => false);
+      if (isCurrentAccount() && latestIntent()) onFeedback(ready
+        ? 'Notification preferences saved'
+        : 'Notification preferences saved. Push notifications are not ready on this device. Check notification permissions.');
+    }, (error) => {
+      if (isCurrentAccount() && latestIntent() && !(error instanceof AccountWriteCancelled)) onFeedback('Notification preferences could not be saved. Check your connection and try again.');
+    });
   };
   // Custom hours open the route view's hours sheet, so the times can be set (or changed) here too.
   const [hoursPrompt, setHoursPrompt] = useState<(RouteAlertsRequest & { route: SavedRoute }) | null>(null);
-  const saveLineAlerts = (route: SavedRoute, setting: SavedRoute['alerts'], hours: SavedRoute['alertHours']) => {
+  const saveLineAlerts = async (route: SavedRoute, setting: SavedRoute['alerts'], hours: SavedRoute['alertHours']) => {
     if (!uid || !setting) return;
-    setRouteAlerts(uid, route.id, setting, hours).catch(() => undefined);
-    if (setting !== 'off') void registerForRouteAlerts(uid);
-    onFeedback(`${route.shortName || route.routeName} alerts: ${describeRouteAlerts(setting, hours)}`);
+    const version = (lineVersions.current.get(route.id) ?? 0) + 1;
+    lineVersions.current.set(route.id, version);
+    try {
+      await writeAccount(`line:${route.id}`, (owner) => setRouteAlerts(owner, route.id, setting, hours));
+      if (!isCurrentAccount() || lineVersions.current.get(route.id) !== version) return;
+      const readiness = setting === 'off' ? Promise.resolve(true) : registerForRouteAlerts(uid).catch(() => false);
+      void readiness.then((ready) => {
+        if (isCurrentAccount() && lineVersions.current.get(route.id) === version) onFeedback(`${route.shortName || route.routeName} alerts: ${describeRouteAlerts(setting, hours)}${ready ? '' : '. Preference saved; push notifications are not ready on this device. Check notification permissions.'}`);
+      });
+    } catch (error) {
+      if (isCurrentAccount() && lineVersions.current.get(route.id) === version && !(error instanceof AccountWriteCancelled)) onFeedback('Alert preference could not be saved. Check your connection and try again.');
+      throw error;
+    }
   };
   const setLineAlerts = (route: SavedRoute, label: string) => {
     const option = ROUTE_ALERT_OPTIONS.find((candidate) => candidate.label === label);
@@ -251,23 +285,35 @@ export function NotificationSettings({ onFeedback }: PageProps) {
       setHoursPrompt({ id: route.id, route, setting: 'custom', hours: route.alertHours });
       return;
     }
-    saveLineAlerts(route, option.value, route.alertHours);
+    void saveLineAlerts(route, option.value, route.alertHours).catch(() => undefined);
   };
   // Added here, a line is starred like the star in Route View, so it shows under Favorites too.
   const addLine = async (line: IndexedLine) => {
     if (!uid) return;
     const saved = { ...savedRouteFromLine(line), favorite: true };
-    await saveRoute(uid, saved);
-    void registerForRouteAlerts(uid);
-    onFeedback(`${badgeLabel({ agency: line.agencyDisplayName, shortName: line.shortName })} added to Favorite Lines, alerts: All times`);
+    try {
+      await writeAccount(`line:${saved.id}`, (owner) => saveRoute(owner, saved));
+      const ready = isCurrentAccount() && await registerForRouteAlerts(uid).catch(() => false);
+      if (isCurrentAccount()) onFeedback(`${badgeLabel({ agency: line.agencyDisplayName, shortName: line.shortName })} added to Favorite Lines, alerts: All times${ready ? '' : '. Push notifications are not ready on this device. Check notification permissions.'}`);
+    } catch (error) {
+      if (isCurrentAccount() && !(error instanceof AccountWriteCancelled)) onFeedback('Favorite line could not be saved. Check your connection and try again.');
+      throw error;
+    }
   };
   // Removing takes the line off Favorites and stops its alerts, after a confirm.
   const [removing, setRemoving] = useState<SavedRoute | null>(null);
+  const [promptOwner, setPromptOwner] = useState(uid);
+  if (promptOwner !== uid) {
+    setPromptOwner(uid);
+    if (hoursPrompt) setHoursPrompt(null);
+    if (removing) setRemoving(null);
+  }
   const removeLine = (route: SavedRoute) => {
     if (!uid) return;
-    removeSavedRoute(uid, route.id).then(
-      () => onFeedback(`${lineName(route)} removed from Favorite Lines`),
-      () => onFeedback(`${lineName(route)} could not be removed. Check your connection and try again.`),
+    lineVersions.current.set(route.id, (lineVersions.current.get(route.id) ?? 0) + 1);
+    void writeAccount(`line:${route.id}`, (owner) => removeSavedRoute(owner, route.id)).then(
+      () => { if (isCurrentAccount()) onFeedback(`${lineName(route)} removed from Favorite Lines`); },
+      (error) => { if (isCurrentAccount() && !(error instanceof AccountWriteCancelled)) onFeedback(`${lineName(route)} could not be removed. Check your connection and try again.`); },
     );
   };
   return (
@@ -305,7 +351,7 @@ export function NotificationSettings({ onFeedback }: PageProps) {
             route={route}
           />
         ))}
-        {uid ? <AddSavedLine onAdd={addLine} savedIds={savedRoutes.map((route) => route.id)} /> : null}
+        {uid ? <AddSavedLine key={uid} onAdd={addLine} savedIds={savedRoutes.map((route) => route.id)} /> : null}
       </Card>
       <ConfirmDialog
         body="It leaves your Favorites and you'll stop getting its service alerts. You can add it again anytime."
@@ -323,7 +369,12 @@ export function NotificationSettings({ onFeedback }: PageProps) {
       <Text style={profile.note} testID="notifications-not-sent">{"Line alerts arrive as push notifications in the Android and iOS app; the web app doesn't receive them."}</Text>
       <RouteAlertsPrompt
         onClose={() => setHoursPrompt(null)}
-        onDone={(setting, hours) => { if (hoursPrompt) saveLineAlerts(hoursPrompt.route, setting, hours); setHoursPrompt(null); }}
+        onDone={async (setting, hours) => {
+          const prompt = hoursPrompt;
+          if (!prompt) return;
+          await saveLineAlerts(prompt.route, setting, hours);
+          if (isCurrentAccount()) setHoursPrompt((current) => current === prompt ? null : current);
+        }}
         request={hoursPrompt}
       />
     </>
@@ -393,21 +444,27 @@ function AddSavedLine({ onAdd, savedIds }: { onAdd: (line: IndexedLine) => Promi
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [adding, setAdding] = useState<string | null>(null);
+  const pending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const index = useLineIndex(open);
   const trimmed = query.trim();
   const results = index && trimmed
     ? searchLineIndex(index, trimmed).filter((line) => !savedIds.includes(`${line.agencyId}:${line.routeId}`)).slice(0, MAX_LINE_RESULTS)
     : [];
   const add = async (line: IndexedLine) => {
+    if (pending.current) return;
+    pending.current = true;
     const id = `${line.agencyId}:${line.routeId}`;
     setAdding(id);
     try {
       await onAdd(line);
-      setQuery('');
+      if (mounted.current) setQuery('');
     } catch {
       // Offline or refused: the line just isn't added, and stays in the results to try again.
     } finally {
-      setAdding(null);
+      pending.current = false;
+      if (mounted.current) setAdding(null);
     }
   };
   const close = () => { setOpen(false); setQuery(''); };
@@ -425,6 +482,7 @@ function AddSavedLine({ onAdd, savedIds }: { onAdd: (line: IndexedLine) => Promi
             <Text style={page.lineSubtitle}>{"It's starred like a line saved in Route View, and its service alerts start at all times; change that under Favorite Lines."}</Text>
             <TextInput
               accessibilityLabel="Search lines"
+              editable={adding == null}
               autoCapitalize="none"
               autoCorrect={false}
               autoFocus={true}

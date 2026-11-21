@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 import { warmBackend } from '../data/backendWarmup';
 import { auth } from '../lib/firebase';
+import { observeRouteAlertRegistration, setRouteAlertOwner } from '../lib/routeAlertRegistration';
 import { DEFAULT_BEAN_AVATAR, normalizeBeanAvatar, type BeanAvatarConfig } from '../avatars/beanAvatar';
 import { ensureUserProfile, saveUserAvatar, subscribeUserAvatar } from './userProfile';
 
@@ -34,10 +35,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [avatarState, setAvatarState] = useState<{ uid: string; avatar: BeanAvatarConfig; loading: boolean; error: boolean } | null>(null);
   const [avatarRetry, setAvatarRetry] = useState(0);
   const currentUser = useRef(user);
+  useEffect(observeRouteAlertRegistration, []);
 
   useEffect(
     () =>
       onAuthStateChanged(auth, (nextUser) => {
+        void setRouteAlertOwner(nextUser);
         if (currentUser.current?.uid !== nextUser?.uid) {
           setAvatarState(nextUser ? { uid: nextUser.uid, avatar: { ...DEFAULT_BEAN_AVATAR }, loading: true, error: false } : null);
         }

@@ -1,4 +1,5 @@
 import { haversineMeters } from './geo';
+import { gtfsServiceDaysFor, type GtfsServiceDay } from './gtfsServiceTime';
 import type { AgencyId } from './gtfsAgencies';
 import { stationEntrances } from './stationEntrances';
 import {
@@ -28,7 +29,6 @@ const LINE_STOP_RADIUS_METERS = 600;
 const DEPARTURE_WINDOW_SECONDS = 120;
 /** A runner-up this much closer in time than the best makes the match ambiguous. */
 const CLEAR_WINNER_SECONDS = 60;
-const DAY_SECONDS = 24 * 60 * 60;
 /** Other departures offered for a matched leg: from a little before it to a few hours after. */
 const OPTIONS_BEFORE_SECONDS = 20 * 60;
 const OPTIONS_AFTER_SECONDS = 3 * 60 * 60;
@@ -39,52 +39,13 @@ const MAX_OPTIONS = 12;
  * within this window instead (the route's stop pattern), timed between Google's own times.
  */
 const BUS_PATTERN_WINDOW_SECONDS = 20 * 60;
-const TIME_ZONE = 'America/New_York';
-
-const nyParts = new Intl.DateTimeFormat('en-US', {
-  timeZone: TIME_ZONE,
-  hourCycle: 'h23',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  weekday: 'short',
-});
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-type ServiceDay = { dateKey: string; dayOfWeek: number; /** Seconds since that day's GTFS midnight. */ seconds: number; startMs: number };
-
-/** New York's calendar date, weekday, and seconds past midnight at `ms`. */
-function newYorkClock(ms: number) {
-  const parts = Object.fromEntries(nyParts.formatToParts(new Date(ms)).map((part) => [part.type, part.value]));
-  return {
-    dateKey: `${parts.year}${parts.month}${parts.day}`,
-    dayOfWeek: WEEKDAYS.indexOf(parts.weekday ?? ''),
-    seconds: Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second),
-  };
-}
-
 /**
- * The service days a departure at `ms` can belong to: its own date, and the day before (whose
- * trips run past midnight with GTFS times of 24:00 and later). GTFS "midnight" is noon minus 12 h,
- * which keeps times right on daylight-saving days.
+ * Match against today's calendar label, the prior overnight service, and the next service date.
+ * The next GTFS date can already be running before civil midnight on the spring-transition eve.
+ * Each date uses its own local-noon-minus-12h anchor rather than the current wall-clock offset.
  */
-export function serviceDaysFor(ms: number): ServiceDay[] {
-  const today = newYorkClock(ms);
-  const noonMs = (dateMs: number) => {
-    const clock = newYorkClock(dateMs);
-    return dateMs + (12 * 3600 - clock.seconds) * 1000;
-  };
-  const todayStart = noonMs(ms) - 12 * 3600 * 1000;
-  const yesterdayNoon = noonMs(ms - DAY_SECONDS * 1000);
-  const yesterday = newYorkClock(yesterdayNoon);
-  const yesterdayStart = yesterdayNoon - 12 * 3600 * 1000;
-  return [
-    { dateKey: today.dateKey, dayOfWeek: today.dayOfWeek, seconds: Math.round((ms - todayStart) / 1000), startMs: todayStart },
-    { dateKey: yesterday.dateKey, dayOfWeek: yesterday.dayOfWeek, seconds: Math.round((ms - yesterdayStart) / 1000), startMs: yesterdayStart },
-  ];
+export function serviceDaysFor(ms: number): GtfsServiceDay[] {
+  return gtfsServiceDaysFor(ms);
 }
 
 const childrenByParent = new Map<AgencyId, Map<string, string[]>>();

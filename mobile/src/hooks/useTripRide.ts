@@ -8,6 +8,7 @@ import { fetchRouteLiveData, type RouteLiveVehicle } from '../data/transitLive';
 import type { TripStep } from '../data/tripPlanning';
 import { useUserPreferences } from '../data/userPreferences';
 import { legSource } from './useTripVehicles';
+import { useAppActive } from './useAppActive';
 
 /** As often as useTripVehicles asks; the feeds themselves update every few seconds. */
 const POLL_MS = 15_000;
@@ -41,12 +42,14 @@ export function useOnBoardVehicle(vehicles: readonly RouteLiveVehicle[], fix: Ri
 export function useTripRide(step: TripStep | undefined, fix: RideFix | null): RideTracking {
   const { preferences } = useUserPreferences();
   const { user } = useAuth();
+  const appActive = useAppActive();
+  const owner = user?.uid ?? null;
   const liveRoute = step?.kind === 'transit' ? step.liveRoute : undefined;
-  const key = liveRoute ? `${liveRoute.agencyId}:${liveRoute.routeId}:${liveRoute.directionId ?? ''}` : null;
+  const key = liveRoute ? `${liveRoute.agencyId}:${liveRoute.routeId}:${liveRoute.directionId ?? ''}@${liveRoute.boardStopId}` : null;
   const source = useMemo(() => (liveRoute ? legSource(liveRoute) : undefined), [key]); // eslint-disable-line react-hooks/exhaustive-deps -- keyed on the line, not the step object
-  const [loaded, setLoaded] = useState<{ key: string; vehicles: readonly RouteLiveVehicle[] } | null>(null);
+  const [loaded, setLoaded] = useState<{ owner: string | null; key: string; vehicles: readonly RouteLiveVehicle[] } | null>(null);
   const directionId = liveRoute?.directionId;
-  const shouldPoll = preferences.shareRides && !user?.isAnonymous && source != null;
+  const shouldPoll = appActive && preferences.shareRides && Boolean(owner) && !user?.isAnonymous && source != null;
 
   useEffect(() => {
     if (!shouldPoll || !source || !key) return undefined;
@@ -54,7 +57,7 @@ export function useTripRide(step: TripStep | undefined, fix: RideFix | null): Ri
     const load = () => {
       void fetchRouteLiveData(source).then(
         (data) => {
-          if (!cancelled) setLoaded({ key, vehicles: visibleTrains(data.vehicles, directionId, Date.now()) });
+          if (!cancelled) setLoaded({ owner, key, vehicles: visibleTrains(data.vehicles, directionId, Date.now()) });
         },
         () => undefined, // Offline: the session expires by itself if this lasts.
       );
@@ -65,7 +68,7 @@ export function useTripRide(step: TripStep | undefined, fix: RideFix | null): Ri
       cancelled = true;
       clearInterval(timer);
     };
-  }, [directionId, key, shouldPoll, source]);
+  }, [directionId, key, owner, shouldPoll, source]);
 
-  return useRideTracking(source, loaded?.key === key ? loaded.vehicles : NO_VEHICLES, fix);
+  return useRideTracking(source, loaded?.owner === owner && loaded?.key === key ? loaded.vehicles : NO_VEHICLES, appActive ? fix : null);
 }

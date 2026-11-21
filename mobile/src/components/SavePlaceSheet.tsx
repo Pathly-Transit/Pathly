@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { addressAfterName, type SearchPlace } from '../data/placesSearch';
@@ -11,6 +11,7 @@ import { Icon } from './Icon';
 import { PressableScale } from './PressableScale';
 import { savedPlaceIcon } from './FavoritesStrip';
 import { radii } from '../theme/shape';
+import { Toast, type ToastMessage } from './Toast';
 
 const QUICK_NAMES = ['Home', 'Work'] as const;
 const ICON_NAMES: Record<SavedPlaceIcon, string> = {
@@ -43,8 +44,8 @@ type SavePlaceSheetProps = {
   groups?: readonly SavedPlaceGroup[];
   onCancel: () => void;
   /** `style.icon` is set only when the rider picked one (or joined a list); otherwise the icon follows the name. */
-  onSave: (label: string, style: SavedPlaceStyle) => void;
-  onRemove?: () => void;
+  onSave: (label: string, style: SavedPlaceStyle) => Promise<void> | void;
+  onRemove?: () => Promise<void> | void;
   /** Searches for a new address for the place being edited, keeping what's entered so far. */
   onChangeAddress?: (draft: SavePlaceRequest) => void;
 };
@@ -72,6 +73,11 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
   const [group, setGroup] = useState<string | undefined>(request.style?.group);
   // Typing a new list's name; null while choosing among the lists already made.
   const [newGroup, setNewGroup] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<ToastMessage | null>(null);
+  const pending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const label = name.trim();
   const derived = savedPlaceIcon(label);
   // Until one is picked, the icon follows the name ("Home" shows a house).
@@ -92,15 +98,29 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
     if (entry?.icon) setPickedIcon(entry.icon);
     if (entry?.color) setPickedColor(entry.color);
   };
-  const save = () => onSave(label, {
+  const write = async (action: () => Promise<void> | void, failure: string) => {
+    if (pending.current) return;
+    pending.current = true;
+    setBusy(true);
+    setFeedback(null);
+    try {
+      await action();
+    } catch {
+      if (mounted.current) setFeedback((current) => ({ text: failure, id: (current?.id ?? 0) + 1 }));
+    } finally {
+      pending.current = false;
+      if (mounted.current) setBusy(false);
+    }
+  };
+  const save = () => { if (!label) return; void write(() => onSave(label, {
     // A place in a list keeps an explicit icon, so the whole list shares it.
     icon: groupName ? shownIcon : pickedIcon,
     color: pickedColor,
     group: groupName,
-  });
+  }), 'Favorite could not be saved. Your changes are still here. Try again.'); };
 
   return (
-    <View accessibilityViewIsModal={true} style={styles.card} testID="save-place-sheet">
+    <View accessibilityState={{ busy }} accessibilityViewIsModal={true} style={styles.card} testID="save-place-sheet">
       <ScrollView bounces={false} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>{request.editing ? 'Edit favorite' : 'Add favorite'}</Text>
         <Text numberOfLines={1} style={styles.placeName} testID="save-place-title">{place.title}</Text>
@@ -109,6 +129,7 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
           <PressableScale
             accessibilityHint="Searches for a new address for this favorite"
             accessibilityRole="button"
+            disabled={busy || undefined}
             onPress={() => onChangeAddress({ ...request, label: name, style: { icon: pickedIcon, color: pickedColor, group: groupName } })}
             style={styles.changeAddress}
             testID="save-place-change-address"
@@ -126,6 +147,7 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
               <PressableScale
                 accessibilityRole="button"
                 accessibilityState={{ selected }}
+                disabled={busy || undefined}
                 key={quick}
                 onPress={() => setName(quick)}
                 style={[styles.quickName, selected && styles.quickNameSelected]}
@@ -139,6 +161,7 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
         </View>
         <TextInput
           accessibilityLabel="Name for this place"
+          editable={!busy}
           maxLength={MAX_PLACE_LABEL}
           onChangeText={setName}
           placeholder="Name, like Gym"
@@ -158,6 +181,7 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
               <PressableScale
                 accessibilityRole="radio"
                 accessibilityState={{ selected }}
+                disabled={busy || undefined}
                 key={entry?.name ?? 'none'}
                 onPress={() => chooseGroup(entry)}
                 style={[styles.groupChip, selected && styles.groupChipSelected]}
@@ -171,6 +195,7 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
           <PressableScale
             accessibilityRole="button"
             accessibilityState={{ selected: newGroup != null }}
+            disabled={busy || undefined}
             onPress={() => setNewGroup('')}
             style={[styles.groupChip, styles.groupChipNew, newGroup != null && styles.groupChipSelected]}
             testID="save-place-group-new"
@@ -182,6 +207,7 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
         {newGroup != null ? (
           <TextInput
             accessibilityLabel="Name for the new list"
+            editable={!busy}
             autoFocus={true}
             maxLength={MAX_GROUP_NAME}
             onChangeText={setNewGroup}
@@ -209,6 +235,7 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
                 accessibilityLabel={ICON_NAMES[icon]}
                 accessibilityRole="radio"
                 accessibilityState={{ selected }}
+                disabled={busy || undefined}
                 key={icon}
                 onPress={() => setPickedIcon(icon)}
                 style={[styles.iconChoice, selected && { backgroundColor: SAVED_PLACE_COLOR_HEX[shownColor] }]}
@@ -229,6 +256,7 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
                 accessibilityLabel={COLOR_NAMES[color]}
                 accessibilityRole="radio"
                 accessibilityState={{ selected }}
+                disabled={busy || undefined}
                 key={color}
                 onPress={() => setPickedColor(color)}
                 style={[styles.colorChoice, selected && { borderColor: SAVED_PLACE_COLOR_HEX[color] }]}
@@ -248,8 +276,8 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
           </PressableScale>
           <PressableScale
             accessibilityRole="button"
-            accessibilityState={{ disabled: !label }}
-            disabled={!label}
+            accessibilityState={{ disabled: busy || !label, busy }}
+            disabled={busy || !label}
             onPress={save}
             style={[styles.button, styles.confirmButton, !label && styles.disabled]}
             testID="save-place-confirm"
@@ -258,11 +286,12 @@ function SavePlaceForm({ groups = [], onCancel, onChangeAddress, onRemove, onSav
           </PressableScale>
         </View>
         {request.editing && onRemove ? (
-          <PressableScale accessibilityRole="button" onPress={onRemove} style={styles.remove} testID="save-place-remove">
+          <PressableScale accessibilityRole="button" accessibilityState={{ busy, disabled: busy }} disabled={busy || undefined} onPress={() => void write(onRemove, 'Favorite could not be removed. Try again.')} style={styles.remove} testID="save-place-remove">
             <Text style={styles.removeText}>Remove from favorites</Text>
           </PressableScale>
         ) : null}
       </ScrollView>
+      <Toast message={feedback} onHidden={() => setFeedback(null)} />
     </View>
   );
 }

@@ -3,6 +3,8 @@ import { httpsCallable } from 'firebase/functions';
 import type { SearchPlace } from '../src/data/placesSearch';
 import { createTripSelectionIdentity, sameTripSelection } from '../src/data/enrouteNavigation';
 import { retimeItinerary } from '../src/data/tripDepartures';
+import { getRequestLog, setRequestLogEnabled } from '../src/debug/requestLog';
+import { auth } from '../src/lib/firebase';
 import {
   CURRENT_LOCATION_LABEL,
   createResumePlanRequest,
@@ -137,6 +139,8 @@ describe('planTrip', () => {
 });
 
 describe('resume planning', () => {
+  afterEach(() => setRequestLogEnabled(false));
+
   it('captures now as an absolute departure and sends that same instant after relaunch', async () => {
     const request = createResumePlanRequest(options(), Date.parse('2026-10-14T12:30:00Z'));
     expect(request).toEqual({
@@ -169,6 +173,80 @@ describe('resume planning', () => {
     const result = await planTripForResume(request, createTripSelectionIdentity(chosen));
     expect(result.ok).toBe(true);
     if (result.ok) expect(sameTripSelection(createTripSelectionIdentity(result.itinerary), createTripSelectionIdentity(chosen))).toBe(true);
+  });
+
+  it('does not spend the reconstruction budget on unrelated alternatives before the selected departure', async () => {
+    const base = structuredClone(fixture[0]!);
+    const firstTransit = base.steps.find((step) => step.kind === 'transit')!;
+    const laterDeparts = new Date(Date.parse(firstTransit.from.time) + 15 * 60_000).toISOString();
+    firstTransit.departures = [
+      { departs: firstTransit.from.time, arrives: firstTransit.to.time },
+      { departs: laterDeparts, arrives: new Date(Date.parse(firstTransit.to.time) + 15 * 60_000).toISOString() },
+    ];
+    const chosen = retimeItinerary(base, new Map([[0, laterDeparts]]), Date.parse(base.departureTime) - 60_000);
+    const unrelated = structuredClone(base);
+    unrelated.id = 'unrelated-itinerary';
+    const ride = structuredClone(firstTransit);
+    ride.departures = Array.from({ length: 12 }, (_, index) => ({
+      departs: new Date(Date.parse(ride.from.time) + index * 5 * 60_000).toISOString(),
+      arrives: new Date(Date.parse(ride.to.time) + index * 5 * 60_000).toISOString(),
+    }));
+    unrelated.steps = [structuredClone(ride), structuredClone(ride), structuredClone(ride)];
+    // The 12^3 unrelated variants used to consume all 512 checks. None can change its id.
+    planTripMock().mockResolvedValueOnce({ data: { itineraries: [unrelated, base] } });
+    const result = await planTripForResume(createResumePlanRequest(options())!, createTripSelectionIdentity(chosen));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(sameTripSelection(createTripSelectionIdentity(result.itinerary), createTripSelectionIdentity(chosen))).toBe(true);
+    expect(planTripMock()).toHaveBeenCalledTimes(1);
+  });
+
+  it('can retrieve the exact selected journey at its saved boundary when the original result window omits it', async () => {
+    const request = createResumePlanRequest(options())!;
+    const selection = createTripSelectionIdentity(fixture[0]!);
+    planTripMock()
+      .mockResolvedValueOnce({ data: { itineraries: [] } })
+      .mockResolvedValueOnce({ data: { itineraries: fixture } });
+    const result = await planTripForResume(request, selection);
+    expect(result.ok).toBe(true);
+    expect(planTripMock()).toHaveBeenCalledTimes(2);
+    expect(planTripMock()).toHaveBeenNthCalledWith(2, expect.objectContaining({ time: { mode: 'depart', at: fixture[0]!.departureTime } }));
+    if (result.ok) expect(sameTripSelection(createTripSelectionIdentity(result.itinerary), selection)).toBe(true);
+  });
+
+  it('keeps exact matching on the bounded retry and records only protected reason/count diagnostics', async () => {
+    setRequestLogEnabled(true);
+    const selection = { ...createTripSelectionIdentity(fixture[0]!), itineraryId: 'missing-itinerary' };
+    planTripMock().mockResolvedValue({ data: { itineraries: fixture } });
+    expect(await planTripForResume(createResumePlanRequest(options())!, selection)).toEqual({ ok: false, problem: 'no-exact-match' });
+    expect(planTripMock()).toHaveBeenCalledTimes(2);
+    const diagnostic = getRequestLog().find((entry) => entry.name === 'restoreTrip')!;
+    expect(diagnostic).toMatchObject({ request: null, ok: false, responseSummary: { category: 'candidate-absent', attempts: 2, matchingIds: 0 } });
+    expect(JSON.stringify(diagnostic)).not.toMatch(/missing-itinerary|Penn Station|ChIJ|fingerprint|latitude|longitude/);
+  });
+
+  it('does not launch the fallback request after the restoring account is replaced', async () => {
+    let current = true;
+    planTripMock().mockImplementationOnce(async () => {
+      current = false;
+      return { data: { itineraries: [] } };
+    });
+    expect(await planTripForResume(createResumePlanRequest(options())!, createTripSelectionIdentity(fixture[0]!), { isCurrent: () => current })).toEqual({ ok: false, problem: 'unavailable' });
+    expect(planTripMock()).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an SDK account change before React has processed the new auth context', async () => {
+    const previous = auth.currentUser;
+    Object.defineProperty(auth, 'currentUser', { configurable: true, writable: true, value: { uid: 'alice' } });
+    try {
+      planTripMock().mockImplementationOnce(async () => {
+        Object.assign(auth, { currentUser: { uid: 'bob' } });
+        return { data: { itineraries: fixture } };
+      });
+      expect(await planTripForResume(createResumePlanRequest(options())!, createTripSelectionIdentity(fixture[0]!), { isCurrent: () => true })).toEqual({ ok: false, problem: 'unavailable' });
+      expect(planTripMock()).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(auth, 'currentUser', { configurable: true, writable: true, value: previous });
+    }
   });
 
   it('restores the same departure when optional timetable enrichment changes', async () => {

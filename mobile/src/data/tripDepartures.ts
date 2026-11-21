@@ -34,10 +34,12 @@ function departuresOf(step: TransitStep): TripDeparture[] {
 
 function retimeStep(step: TransitStep, option: TripDeparture): TransitStep {
   const shift = ms(option.departs) - ms(step.from.time);
-  // Another trip: the planned one's live status and connection no longer apply.
-  const { live: _live, connection: _connection, ...rest } = step;
+  // Another departure has no known run ID: keeping the original would identify the wrong
+  // vehicle and reject an exact fresh match. Equivalent timezone spellings keep that ID.
+  const { live: _live, connection: _connection, tripId, ...rest } = step;
   return {
     ...rest,
+    ...(shift === 0 && tripId !== undefined ? { tripId } : {}),
     from: { ...step.from, time: option.departs },
     to: { ...step.to, time: option.arrives },
     durationSeconds: Math.max(0, (ms(option.arrives) - ms(option.departs)) / 1000),

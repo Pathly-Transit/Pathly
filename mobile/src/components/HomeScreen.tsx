@@ -42,8 +42,10 @@ import { useDebug } from '../debug/DebugContext';
 import { pinnedSpotLabel } from '../debug/presets';
 import { useCurrentLocation, type Coordinates } from '../hooks/useCurrentLocation';
 import { useActiveTrip } from '../hooks/useActiveTrip';
+import { AccountWriteCancelled, useAccountWrites } from '../hooks/useAccountWrites';
 import { discardAccount } from '../data/accountData';
 import { useTripGuidanceAlerts } from '../hooks/useTripGuidanceAlerts';
+import { useBackgroundTripAlerts } from '../hooks/useBackgroundTripAlerts';
 import { useTripRide } from '../hooks/useTripRide';
 import { useNow } from '../hooks/useNow';
 import { useThumbSide } from '../hooks/useThumbSide';
@@ -72,6 +74,7 @@ import { MapPickerView } from './MapPickerView';
 import { RouteAlertsPrompt, type RouteAlertsRequest } from './RouteAlertsPrompt';
 import { RouteDetailView, type TappedStop } from './RouteDetailView';
 import { SavedPlaceDetailsSheet } from './SavedPlaceDetailsSheet';
+import { Toast, type ToastMessage } from './Toast';
 import { SavePlaceSheet, type SavePlaceRequest } from './SavePlaceSheet';
 import { OnboardingScreen } from './OnboardingScreen';
 import { ResumeTripCard } from './ResumeTripCard';
@@ -133,6 +136,8 @@ type ActiveView =
 
 
 const MAX_SAVED_LOCATIONS = 50;
+const NO_SAVED_ROUTES: readonly SavedRoute[] = [];
+const NO_SAVED_LOCATIONS: readonly SavedLocation[] = [];
 
 /** The place a Route Results destination stands for; a swapped-in or demo one is known only by name. */
 function destinationPlaceOf(criteria: ResultsCriteria): SearchPlace {
@@ -220,15 +225,23 @@ export function HomeScreen() {
   const { user } = useAuth();
   // A guest has a session but no account: nothing is saved, as if signed out.
   const uid = user?.isAnonymous ? undefined : user?.uid;
+  const { run: writeAccount, isCurrent: isCurrentAccount } = useAccountWrites(uid);
+  const [actionFeedback, setActionFeedback] = useState<(ToastMessage & { uid: string }) | null>(null);
+  const feedback = useCallback((text: string) => {
+    if (uid && isCurrentAccount()) setActionFeedback({ text, uid, id: Date.now() });
+  }, [isCurrentAccount, uid]);
+  const pendingStars = useRef(new Map<string, { value: boolean }>());
+  const alertIntents = useRef(new Map<string, number>());
   // One "Save" star replaces pin + favorite: saved routes lead Nearby and fill Favorites -> Routes.
   // Real lines are saved to the account (with their alert setting), so they show anywhere and
   // the backend can push their alerts; the demo catalog's illustrative routes stay on this device.
   // Nothing is saved by default.
-  const [accountRoutes, setAccountRoutes] = useState<readonly SavedRoute[]>([]);
+  const [savedRouteState, setSavedRouteState] = useState<{ uid: string; routes: readonly SavedRoute[] } | null>(null);
+  const accountRoutes = savedRouteState && savedRouteState.uid === uid ? savedRouteState.routes : NO_SAVED_ROUTES;
   const [localSavedRouteIds, setLocalSavedRouteIds] = useState<readonly string[]>([]);
   useEffect(() => {
     if (!uid) return undefined;
-    return subscribeToSavedRoutes(uid, setAccountRoutes);
+    return subscribeToSavedRoutes(uid, (routes) => setSavedRouteState({ uid, routes }));
   }, [uid]);
   // Starred lines only; a line kept just for its alerts isn't a favorite.
   const savedRouteIds = useMemo(() => [...accountRoutes.filter((route) => route.favorite).map((route) => route.id), ...localSavedRouteIds], [accountRoutes, localSavedRouteIds]);
@@ -272,7 +285,8 @@ export function HomeScreen() {
   const activeView = useMemo<ActiveView>(() => requestedView ?? (
     trip.status === 'active' || trip.status === 'recovery' ? tripView : { name: 'home' }
   ), [requestedView, trip.status, tripView]);
-  const [savedLocations, setSavedLocations] = useState<readonly SavedLocation[]>([]);
+  const [savedPlaceState, setSavedPlaceState] = useState<{ uid: string; locations: readonly SavedLocation[] } | null>(null);
+  const savedLocations = savedPlaceState && savedPlaceState.uid === uid ? savedPlaceState.locations : NO_SAVED_LOCATIONS;
   const { height } = useViewportSize();
   const { location, mocked: locationMocked, navigationFix, navigationStale, provisional: locationProvisional, refresh: refreshLocation, status: locationStatus } = useCurrentLocation(trip.active != null);
   // Shares the ride the trip's on, wherever in the app the rider is, Route View included.
@@ -288,12 +302,17 @@ export function HomeScreen() {
   );
   // Spoken steps, vibrations, and the lock-screen notification, wherever in the app the rider is.
   useTripGuidanceAlerts({
+    uid: user?.uid,
+    stepIndex: trip.active?.cursor.stepIndex,
     sessionId: trip.active?.sessionId ?? null,
     guidance: resumeGuidance,
     arrivedDestination,
     settings: userPreferences.tripGuidance,
-    notificationsEnabled: userPreferences.notifications.enabled,
+    notificationsEnabled: userPreferences.notifications.enabled && userPreferences.notifications.tripReminders,
   });
+  useBackgroundTripAlerts(trip.active, !locationMocked && userPreferences.tripGuidance.notification
+    && userPreferences.notifications.enabled && userPreferences.notifications.tripReminders, trip.advance,
+  { hydrating: trip.status === 'hydrating', recovery: trip.recovery });
   const hasResumableTrip = trip.status === 'active' || trip.status === 'recovery';
   const supportPopup = useSupportPopup(hasResumableTrip, userPreferences.supportPrompts);
   // A holiday that changes service on every line (Thanksgiving, Christmas…), under the search bar.
@@ -500,35 +519,50 @@ export function HomeScreen() {
   // A line's star and its alerts are separate: each can be on without the other. Both live on the
   // line's one record, which goes away once neither is on.
   const toggleSavedRoute = useCallback((route: RouteDetail) => {
+    if (uid && !isCurrentAccount()) return;
     const id = route.liveSource ? `${route.liveSource.agencyId}:${route.liveSource.routeId}` : route.id;
     const saved = route.liveSource && uid ? savedRouteFrom(route, 'off') : null;
     if (!saved || !uid) {
       setLocalSavedRouteIds((current) => toggleItem(current, id));
       return;
     }
-    // The listener shows the change; a rejected write leaves the star as it was.
+    const key = `${uid}:route:${id}`;
     const existing = accountRoutes.find((entry) => entry.id === id);
-    if (!existing) saveRoute(uid, saved).catch(() => undefined);
-    else if (!existing.favorite) setRouteFavorite(uid, id, true).catch(() => undefined);
-    else if (existing.alerts === 'off') removeSavedRoute(uid, id).catch(() => undefined);
-    else setRouteFavorite(uid, id, false).catch(() => undefined);
-  }, [accountRoutes, uid]);
-  const chooseRouteAlerts = useCallback((setting: RouteAlertSetting, hours?: AlertHours) => {
+    const intent = { value: !(pendingStars.current.get(key)?.value ?? existing?.favorite ?? false) };
+    pendingStars.current.set(key, intent);
+    void writeAccount(`route:${id}`, (owner) => intent.value
+      ? existing && existing.alerts !== 'off' ? setRouteFavorite(owner, id, true) : saveRoute(owner, { ...saved, ...existing, favorite: true })
+      : existing && existing.alerts !== 'off' ? setRouteFavorite(owner, id, false) : removeSavedRoute(owner, id), { serialize: false }).then(
+      () => { if (pendingStars.current.get(key) === intent) pendingStars.current.delete(key); },
+      (error) => { if (pendingStars.current.get(key) !== intent) return; pendingStars.current.delete(key); if (!(error instanceof AccountWriteCancelled)) feedback('Favorite could not be updated. Check your connection and try again.'); },
+    );
+  }, [accountRoutes, feedback, isCurrentAccount, uid, writeAccount]);
+  const chooseRouteAlerts = useCallback(async (setting: RouteAlertSetting, hours?: AlertHours) => {
     const prompt = alertsPrompt;
-    setAlertsPrompt(null);
-    if (!prompt || !uid) return;
-    if (setting === prompt.setting && setting !== 'custom') return;
-    const existing = accountRoutes.find((entry) => entry.id === prompt.id);
-    if (existing) {
-      // Alerts off on a line that isn't starred: nothing left to keep.
-      if (setting === 'off' && !existing.favorite) removeSavedRoute(uid, prompt.id).catch(() => undefined);
-      else setRouteAlerts(uid, prompt.id, setting, hours).catch(() => undefined);
-    } else {
-      const record = savedRouteFrom(prompt.route, setting, false);
-      if (record) saveRoute(uid, { ...record, ...(setting === 'custom' && hours ? { alertHours: hours } : {}) }).catch(() => undefined);
+    if (!prompt || !uid || !isCurrentAccount()) throw new AccountWriteCancelled();
+    if (setting === prompt.setting && setting !== 'custom') {
+      setAlertsPrompt((current) => current === prompt ? null : current);
+      return;
     }
-    if (setting !== 'off') void registerForRouteAlerts(uid);
-  }, [accountRoutes, alertsPrompt, uid]);
+    const existing = accountRoutes.find((entry) => entry.id === prompt.id);
+    const intent = (alertIntents.current.get(prompt.id) ?? 0) + 1;
+    alertIntents.current.set(prompt.id, intent);
+    await writeAccount(`route:${prompt.id}`, async (owner) => {
+      if (existing) {
+        if (setting === 'off' && !existing.favorite) await removeSavedRoute(owner, prompt.id);
+        else await setRouteAlerts(owner, prompt.id, setting, hours);
+      } else {
+        const record = savedRouteFrom(prompt.route, setting, false);
+        if (!record) throw new Error('This line cannot be saved');
+        await saveRoute(owner, { ...record, ...(setting === 'custom' && hours ? { alertHours: hours } : {}) });
+      }
+    });
+    setAlertsPrompt((current) => current === prompt ? null : current);
+    if (!isCurrentAccount() || setting === 'off' || alertIntents.current.get(prompt.id) !== intent) return;
+    void registerForRouteAlerts(uid).catch(() => false).then((registered) => {
+      if (isCurrentAccount() && alertIntents.current.get(prompt.id) === intent && !registered) feedback('Alert preference saved. Push notifications are not ready on this device. Check notification permissions.');
+    });
+  }, [accountRoutes, alertsPrompt, feedback, isCurrentAccount, uid, writeAccount]);
   // Route view's bell: the line's alert setting, to change, starred or not.
   const routeAlertsFor = (route: RouteDetail) => {
     if (!route.liveSource || !uid) return undefined;
@@ -604,21 +638,25 @@ export function HomeScreen() {
   }, []);
   useEffect(() => {
     if (!uid) return undefined;
-    return subscribeToSavedLocations(uid, MAX_SAVED_LOCATIONS, setSavedLocations);
+    return subscribeToSavedLocations(uid, MAX_SAVED_LOCATIONS, (locations) => setSavedPlaceState({ uid, locations }));
   }, [uid]);
   const [guestSavePrompt, setGuestSavePrompt] = useState(false);
   const isPlaceSaved = useCallback((place: SearchPlace) => findSavedLocation(savedLocations, place) != null, [savedLocations]);
   const toggleSavedPlace = useCallback((place: SearchPlace) => {
+    if (uid && !isCurrentAccount()) return;
     if (!uid) {
       setGuestSavePrompt(true);
       return;
     }
     const saved = findSavedLocation(savedLocations, place);
-    // The listener picks up the change (Firestore applies local writes right away, even offline),
-    // so the star needs no state of its own; a rejected write just leaves it as it was.
-    const write = saved ? removeSavedLocation(uid, saved.address.placeId) : saveLocation(uid, place, 'Destination');
-    write.catch(() => undefined);
-  }, [savedLocations, uid]);
+    const key = `${uid}:place:${place.id}`;
+    const intent = { value: !(pendingStars.current.get(key)?.value ?? Boolean(saved)) };
+    pendingStars.current.set(key, intent);
+    void writeAccount(`place:${place.id}`, (owner) => intent.value ? saveLocation(owner, place, 'Destination') : removeSavedLocation(owner, saved?.address.placeId ?? place.id), { serialize: false }).then(
+      () => { if (pendingStars.current.get(key) === intent) pendingStars.current.delete(key); },
+      (error) => { if (pendingStars.current.get(key) !== intent) return; pendingStars.current.delete(key); if (!(error instanceof AccountWriteCancelled)) feedback('Favorite could not be updated. Check your connection and try again.'); },
+    );
+  }, [feedback, isCurrentAccount, savedLocations, uid, writeAccount]);
   const openSavedLocation = useCallback((location: SavedLocation) => {
     const place = locationToPlace(location.address);
     setSelectedTrip(null);
@@ -626,6 +664,12 @@ export function HomeScreen() {
   }, []);
   // Adding a saved place: search for it, then name it (or save it straight away as Home or Work).
   const [saveRequest, setSaveRequest] = useState<SavePlaceRequest | null>(null);
+  const [saveRequestOwner, setSaveRequestOwner] = useState(uid);
+  if (saveRequestOwner !== uid) {
+    setSaveRequestOwner(uid);
+    if (saveRequest) setSaveRequest(null);
+    if (alertsPrompt) setAlertsPrompt(null);
+  }
   const addSavedPlace = useCallback((returnTo: SavedPlacePick['returnTo'], label?: SavedPlacePick['label']) => {
     setActiveView({ name: 'search', pickSavedPlace: { label, returnTo } });
   }, []);
@@ -635,11 +679,8 @@ export function HomeScreen() {
     else if (returnTo === 'settings') setActiveView({ name: 'profile', route: 'places' });
     else setActiveView({ name: 'search' });
   }, [showFavorites]);
-  const saveNamedPlace = useCallback((place: SearchPlace, label: string, style?: SavedPlaceStyle, replacing?: string) => {
-    if (!uid) return;
-    // As with the star, the listener shows the write; a rejected one just leaves the list as it was.
-    saveLabeledLocation(uid, place, label, savedLocations, style, replacing).catch(() => undefined);
-  }, [savedLocations, uid]);
+  const saveNamedPlace = useCallback((place: SearchPlace, label: string, style?: SavedPlaceStyle, replacing?: string) => writeAccount(`place:${replacing ?? place.id}`,
+    (owner) => saveLabeledLocation(owner, place, label, savedLocations, style, replacing)), [savedLocations, writeAccount]);
   const editSavedPlace = useCallback((location: SavedLocation) => {
     const { address } = location;
     setSaveRequest({ place: locationToPlace(address), label: savedPlaceName(address), style: { icon: address.icon, color: address.color, group: address.group }, editing: true });
@@ -653,14 +694,18 @@ export function HomeScreen() {
         setSaveRequest(null);
         setActiveView({ name: 'search', pickSavedPlace: { returnTo: 'settings', replacing: draft } });
       }}
-      onRemove={() => {
+      onRemove={async () => {
         // A place whose address was being changed is still saved under its old one.
-        if (uid && saveRequest) removeSavedLocation(uid, saveRequest.replacing ?? saveRequest.place.id).catch(() => undefined);
-        setSaveRequest(null);
+        const request = saveRequest;
+        if (!request) return;
+        await writeAccount(`place:${request.replacing ?? request.place.id}`, (owner) => removeSavedLocation(owner, request.replacing ?? request.place.id));
+        setSaveRequest((current) => current === request ? null : current);
       }}
-      onSave={(label, style) => {
-        if (saveRequest) saveNamedPlace(saveRequest.place, label, style, saveRequest.replacing);
-        setSaveRequest(null);
+      onSave={async (label, style) => {
+        const request = saveRequest;
+        if (!request) return;
+        await saveNamedPlace(request.place, label, style, request.replacing);
+        setSaveRequest((current) => current === request ? null : current);
       }}
       request={saveRequest}
     />
@@ -835,9 +880,10 @@ export function HomeScreen() {
     : allDiscoveredRoutes;
   const activeLiveRouteIds = activeView.name === 'home' ? visibleRouteIds : openedRoute ? [openedRoute.id] : [];
   const screen = (node: ReactNode) => (
-    <TransitLiveProvider activeRouteIds={activeLiveRouteIds} extraRoutes={liveRoutes} location={livePoint}>
+    <TransitLiveProvider activeRouteIds={activeLiveRouteIds} extraRoutes={liveRoutes} key={user?.uid ?? 'signed-out'} location={livePoint}>
       <ScreenTransition depth={activeView.name === 'home' ? 0 : activeView.name === 'search' ? 1 : 2} group="home" key={transitionKey}>{node}</ScreenTransition>
       {savePlaceSheet}
+      <Toast message={actionFeedback?.uid === uid ? actionFeedback : null} onHidden={() => setActionFeedback(null)} />
       <ConfirmDialog
         body="Your guest session ends and you can sign in or sign up."
         confirmLabel="Create account"
@@ -1398,6 +1444,7 @@ export function HomeScreen() {
           scrollY={homeScrollY}
         />
         {savePlaceSheet}
+        <Toast message={actionFeedback?.uid === uid ? actionFeedback : null} onHidden={() => setActionFeedback(null)} />
         {/* Admin tools' preview of a new account's onboarding (it saves for real). */}
         {popupPreview === 'onboarding' ? <View style={StyleSheet.absoluteFill}><OnboardingScreen onDone={() => setPopupPreview(null)} /></View> : null}
         <LineLayersSheet choice={lineChoice} lines={layerCandidates} onChange={changeLineChoice} onClose={() => setLayersOpen(false)} visible={layersOpen} />

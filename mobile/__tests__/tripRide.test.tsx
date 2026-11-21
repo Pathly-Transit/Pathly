@@ -10,7 +10,11 @@ import { useOnBoardVehicle, useTripRide } from '../src/hooks/useTripRide';
 const mockCall = jest.fn();
 const mockFetch = jest.fn();
 const mockPreferences = { shareRides: true };
-jest.mock('../src/lib/firebase', () => ({ callable: (name: string) => (payload: unknown) => mockCall(name, payload) }));
+const mockAuth = { user: { uid: 'rider', isAnonymous: false } as { uid: string; isAnonymous: boolean } | null };
+let mockAppActive = true;
+jest.mock('../src/auth/AuthContext', () => ({ useAuth: () => mockAuth }));
+jest.mock('../src/hooks/useAppActive', () => ({ useAppActive: () => mockAppActive }));
+jest.mock('../src/lib/firebase', () => ({ get auth() { return { currentUser: mockAuth.user }; }, callable: (name: string) => (payload: unknown) => mockCall(name, payload) }));
 jest.mock('../src/data/transitLive', () => ({ fetchRouteLiveData: (...args: unknown[]) => mockFetch(...args) }));
 jest.mock('../src/data/userPreferences', () => ({ useUserPreferences: () => ({ preferences: mockPreferences }) }));
 
@@ -25,6 +29,8 @@ describe('useTripRide', () => {
     jest.useFakeTimers();
     vehicleLat = 40.7;
     mockPreferences.shareRides = true;
+    mockAuth.user = { uid: 'rider', isAnonymous: false };
+    mockAppActive = true;
     mockCall.mockReset().mockImplementation(async (name: string) => ({ data: name === 'reportRide' ? { accepted: true } : { ok: true } }));
     mockFetch.mockReset().mockImplementation(async () => ({
       vehicles: [
@@ -58,6 +64,15 @@ describe('useTripRide', () => {
 
   it('asks for nothing and sends nothing with sharing off', async () => {
     mockPreferences.shareRides = false;
+    const { rerender, unmount } = mount(leg('Q1'));
+    await rideAlong(rerender, leg('Q1'));
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockCall).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('does not poll or share for a signed-out rider', async () => {
+    mockAuth.user = null;
     const { rerender, unmount } = mount(leg('Q1'));
     await rideAlong(rerender, leg('Q1'));
     expect(mockFetch).not.toHaveBeenCalled();
@@ -103,6 +118,81 @@ describe('useTripRide', () => {
     mockCall.mockClear();
     unmount();
     expect(mockCall).toHaveBeenCalledWith('stopRide', {});
+  });
+
+  it('pauses reads and sharing in the background, ending the foreground session', async () => {
+    const step = leg('Q1');
+    const { rerender, unmount } = mount(step);
+    await rideAlong(rerender, step);
+    mockCall.mockClear();
+    mockFetch.mockClear();
+    mockAppActive = false;
+    await act(async () => { rerender({ step, fix: fixAt(vehicleLat) }); });
+    expect(mockCall).toHaveBeenCalledWith('stopRide', {});
+    await act(async () => { await jest.advanceTimersByTimeAsync(60_000); });
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockCall).not.toHaveBeenCalledWith('reportRide', expect.anything());
+    mockAppActive = true;
+    await act(async () => { rerender({ step, fix: null }); });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('ignores an accepted report from the previous account without stopping the new account ride', async () => {
+    let resolve!: (value: { data: { accepted: boolean } }) => void;
+    mockCall.mockImplementation((name: string) => name === 'reportRide'
+      ? new Promise((done) => { resolve = done; })
+      : Promise.resolve({ data: { ok: true } }));
+    const step = leg('Q1');
+    const { result, rerender, unmount } = mount(step);
+    await act(async () => { rerender({ step, fix: fixAt(vehicleLat) }); });
+    act(() => result.current.claim('bus-1'));
+    expect(mockCall).toHaveBeenCalledWith('reportRide', expect.anything());
+    mockAuth.user = { uid: 'next-rider', isAnonymous: false };
+    await act(async () => { rerender({ step: { ...step }, fix: null }); });
+    mockCall.mockClear();
+    await act(async () => { resolve({ data: { accepted: true } }); });
+    expect(result.current.ridingTripId).toBeNull();
+    expect(mockCall).not.toHaveBeenCalledWith('stopRide', expect.anything());
+    unmount();
+  });
+
+  it('does not stop a replacement leg when an older same-account report is accepted late', async () => {
+    const replies: ((value: { data: { accepted: boolean } }) => void)[] = [];
+    mockCall.mockImplementation((name: string) => name === 'reportRide'
+      ? new Promise((done) => { replies.push(done); }) : Promise.resolve({ data: { ok: true } }));
+    const first = leg('Q1');
+    const { result, rerender, unmount } = mount(first);
+    await act(async () => { rerender({ step: first, fix: fixAt(vehicleLat) }); });
+    act(() => result.current.claim('old-bus'));
+    const next = leg('Q2');
+    await act(async () => { rerender({ step: next, fix: null }); });
+    await act(async () => { rerender({ step: next, fix: fixAt(vehicleLat) }); });
+    act(() => result.current.claim('new-bus'));
+    expect(replies).toHaveLength(2);
+    await act(async () => { replies[1]!({ data: { accepted: true } }); });
+    expect(result.current.ridingTripId).toBe('new-bus');
+    mockCall.mockClear();
+    await act(async () => { replies[0]!({ data: { accepted: true } }); });
+    expect(mockCall).not.toHaveBeenCalledWith('stopRide', expect.anything());
+    expect(result.current.ridingTripId).toBe('new-bus');
+    unmount();
+  });
+
+  it('still cleans a late accepted report after sharing is disabled', async () => {
+    let resolve!: (value: { data: { accepted: boolean } }) => void;
+    mockCall.mockImplementation((name: string) => name === 'reportRide'
+      ? new Promise((done) => { resolve = done; }) : Promise.resolve({ data: { ok: true } }));
+    const step = leg('Q1');
+    const { result, rerender, unmount } = mount(step);
+    await act(async () => { rerender({ step, fix: fixAt(vehicleLat) }); });
+    act(() => result.current.claim('bus-1'));
+    mockPreferences.shareRides = false;
+    await act(async () => { rerender({ step, fix: null }); });
+    mockCall.mockClear();
+    await act(async () => { resolve({ data: { accepted: true } }); });
+    expect(mockCall).toHaveBeenCalledWith('stopRide', {});
+    unmount();
   });
 });
 

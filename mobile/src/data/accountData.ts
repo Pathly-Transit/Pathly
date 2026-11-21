@@ -12,6 +12,7 @@ import { collection, deleteDoc, doc, getDoc, getDocs, setDoc } from 'firebase/fi
 import { Platform, Share } from 'react-native';
 
 import { auth, db } from '../lib/firebase';
+import { unregisterRouteAlerts } from '../lib/routeAlertRegistration';
 import { navigationStorageKey } from './navigationStorage';
 import { endRideSession } from './rideTracking';
 import { preferencesKey } from './userPreferences';
@@ -22,7 +23,7 @@ import { preferencesKey } from './userPreferences';
  */
 
 /** The per-user collections under users/{uid} (see userData.ts). */
-const USER_COLLECTIONS = ['searches', 'prevDests', 'savedLocations'] as const;
+const USER_COLLECTIONS = ['searches', 'prevDests', 'savedLocations', 'savedRoutes', 'alertInbox'] as const;
 
 export const MAX_DISPLAY_NAME = 60;
 
@@ -48,12 +49,16 @@ function plain(value: unknown): unknown {
 }
 
 export type UserDataExport = {
+  schemaVersion: 2;
+  scope: { cloudCollections: readonly string[]; deviceOnlyData: 'not-included' };
   exportedAt: string;
   account: { uid: string; email: string | null; displayName: string | null };
   profile: unknown;
   searches: unknown[];
   prevDests: unknown[];
   savedLocations: unknown[];
+  savedRoutes: unknown[];
+  alertInbox: unknown[];
 };
 
 export async function exportUserData(user: User, now = new Date()): Promise<UserDataExport> {
@@ -61,14 +66,20 @@ export async function exportUserData(user: User, now = new Date()): Promise<User
     getDoc(doc(db, 'users', user.uid)),
     ...USER_COLLECTIONS.map((name) => getDocs(collection(db, 'users', user.uid, name))),
   ]);
-  const [searches, prevDests, savedLocations] = lists.map((snapshot) => snapshot.docs.map((entry) => ({ id: entry.id, ...(plain(entry.data()) as object) })));
+  const [searches, prevDests, savedLocations, savedRoutes, alertInbox] = lists.map((snapshot) => snapshot.docs.map((entry) => ({ id: entry.id, ...(plain(entry.data()) as object) })));
+  // Push routing addresses and installation credentials are infrastructure, not rider content.
+  const { pushTokens: _pushTokens, ...profileData } = profile.data() ?? {};
   return {
+    schemaVersion: 2,
+    scope: { cloudCollections: USER_COLLECTIONS, deviceOnlyData: 'not-included' },
     exportedAt: now.toISOString(),
     account: { uid: user.uid, email: user.email ?? null, displayName: user.displayName ?? null },
-    profile: profile.exists() ? plain(profile.data()) : null,
+    profile: profile.exists() ? plain(profileData) : null,
     searches: searches ?? [],
     prevDests: prevDests ?? [],
     savedLocations: savedLocations ?? [],
+    savedRoutes: savedRoutes ?? [],
+    alertInbox: alertInbox ?? [],
   };
 }
 
@@ -131,7 +142,8 @@ export async function deleteAccountAfter(user: User, reauthenticate: (user: User
 }
 
 async function eraseAccount(user: User): Promise<void> {
-  for (const name of [...USER_COLLECTIONS, 'savedRoutes', 'alertInbox']) {
+  await unregisterRouteAlerts();
+  for (const name of USER_COLLECTIONS) {
     const snapshot = await getDocs(collection(db, 'users', user.uid, name));
     await Promise.all(snapshot.docs.map((entry) => deleteDoc(doc(db, 'users', user.uid, name, entry.id))));
   }

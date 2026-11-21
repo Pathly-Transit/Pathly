@@ -20,7 +20,7 @@ jest.mock('../src/data/placesSearch', () => {
   };
 });
 
-const mockAuthUser = (globalThis as unknown as { __mockAuthUser: { email: string } }).__mockAuthUser;
+const mockAuthUser = (globalThis as unknown as { __mockAuthUser: { email: string; emailVerified?: boolean } }).__mockAuthUser;
 const callableMock = (name: string) => (httpsCallable as jest.Mock)({}, name) as jest.Mock;
 const PENN = { latitude: 40.7506, longitude: -73.9935 };
 
@@ -38,6 +38,17 @@ async function openAdminTools(screen: ReturnType<typeof render>) {
 
 it('shows no admin entry or banner to a rider, even with stored overrides', async () => {
   await AsyncStorage.setItem(DEBUG_STORAGE_KEY, JSON.stringify({ mockLocation: { label: 'Penn Station', ...PENN }, overlays: { ids: false, tapCoords: false } }));
+  const screen = render(<App />);
+  await act(async () => undefined);
+  expect(screen.queryByTestId('debug-banner')).toBeNull();
+  fireEvent.press(screen.getByTestId('profile-trigger'));
+  expect(screen.queryByTestId('settings-row-admin')).toBeNull();
+});
+
+it.each([false, undefined])('hides admin tools and stored overrides when email ownership is %s', async (verified) => {
+  mockAuthUser.email = 'admin@gmail.com';
+  mockAuthUser.emailVerified = verified;
+  await AsyncStorage.setItem(DEBUG_STORAGE_KEY, JSON.stringify({ mockLocation: { label: 'Penn Station', ...PENN }, overlays: { ids: true, tapCoords: true } }));
   const screen = render(<App />);
   await act(async () => undefined);
   expect(screen.queryByTestId('debug-banner')).toBeNull();

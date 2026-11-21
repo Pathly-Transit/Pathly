@@ -6,6 +6,12 @@ const test = require('node:test');
 
 const { unzipSync, zipSync, strToU8 } = require('fflate');
 
+// Snapshot names are content-addressed and survive a process. Each case owns its whole temporary
+// root so an older run (or a parallel test file) cannot supply a partial fixture directory.
+const originalTempEnvironment = Object.fromEntries(['TMPDIR', 'TMP', 'TEMP'].map((key) => [key, process.env[key]]));
+const testTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pathly-gtfs-tests-'));
+let caseTempRoot;
+
 const { refreshGtfsStaticData } = require('../lib');
 const { AGENCY_CONFIGS } = require('../lib/gtfsAgencies');
 const {
@@ -189,8 +195,24 @@ async function waitFor(predicate) {
 }
 
 test.beforeEach(() => {
+  caseTempRoot = fs.mkdtempSync(path.join(testTempRoot, 'case-'));
+  for (const key of Object.keys(originalTempEnvironment)) process.env[key] = caseTempRoot;
   resetGtfsSnapshotStateForTests();
   resetGtfsStaticDataForTests();
+});
+
+test.afterEach(async () => {
+  resetGtfsSnapshotStateForTests();
+  resetGtfsStaticDataForTests();
+  for (const [key, value] of Object.entries(originalTempEnvironment)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  await fs.promises.rm(caseTempRoot, { recursive: true, force: true });
+});
+
+test.after(async () => {
+  await fs.promises.rm(testTempRoot, { recursive: true, force: true });
 });
 
 test('extracts and validates only the GTFS files the runtime consumes', () => {
@@ -667,6 +689,155 @@ test('activates new remote snapshots through the static-data readers and keeps t
     assert.equal(loadAgencyStaticData('lirr').routesById.get('10').name, 'Remote version two');
   } finally {
     global.fetch = originalFetch;
+    if (originalOverride === undefined) delete process.env.GTFS_USE_CLOUD_STORAGE;
+    else process.env.GTFS_USE_CLOUD_STORAGE = originalOverride;
+  }
+});
+
+test('repairs an incomplete snapshot directory before activating it, without mixing in stale derived files', async () => {
+  const fakeBucket = new FakeBucket();
+  setGtfsSnapshotBucketForTests(fakeBucket);
+  const originalOverride = process.env.GTFS_USE_CLOUD_STORAGE;
+  process.env.GTFS_USE_CLOUD_STORAGE = 'true';
+  try {
+    await withLirrFeed(() => refreshGtfsSnapshot('lirr'));
+    const manifest = currentManifest(fakeBucket);
+    const dataDir = path.join(os.tmpdir(), 'pathly-gtfs', 'lirr', manifest.version);
+    fs.mkdirSync(path.join(dataDir, 'derived'), { recursive: true });
+    fs.writeFileSync(path.join(dataDir, 'derived', 'stale.json'), '{}');
+
+    await prepareAgencyStaticData('lirr', 1_000_000);
+
+    assert.equal(loadAgencyStaticData('lirr').routesById.get('10').name, 'Port Jefferson');
+    assert.equal(fs.existsSync(path.join(dataDir, 'derived', 'stale.json')), false);
+    assert.equal(fs.existsSync(path.join(dataDir, 'derived', 'stop-indexes.json')), true);
+    assert.deepEqual(fs.readdirSync(path.dirname(dataDir)), [manifest.version], 'staging/quarantine folders are removed');
+  } finally {
+    if (originalOverride === undefined) delete process.env.GTFS_USE_CLOUD_STORAGE;
+    else process.env.GTFS_USE_CLOUD_STORAGE = originalOverride;
+  }
+});
+
+test('reuses a complete cache but repairs same-size corrupt raw and prepared files on a later hydration', async () => {
+  const fakeBucket = new FakeBucket();
+  setGtfsSnapshotBucketForTests(fakeBucket);
+  const originalOverride = process.env.GTFS_USE_CLOUD_STORAGE;
+  process.env.GTFS_USE_CLOUD_STORAGE = 'true';
+  try {
+    await withLirrFeed(() => refreshGtfsSnapshot('lirr'));
+    const first = await hydrateCurrentGtfsSnapshot('lirr', 1_000_000);
+    const routes = path.join(first.dataDir, 'routes.txt');
+    const geometry = path.join(first.dataDir, 'derived', 'geometry', '10.json');
+    const originalRoutes = fs.readFileSync(routes);
+    const originalGeometry = fs.readFileSync(geometry);
+    const originalInode = fs.statSync(routes).ino;
+    const hydrateAgain = async () => {
+      resetGtfsSnapshotStateForTests();
+      resetGtfsStaticDataForTests();
+      setGtfsSnapshotBucketForTests(fakeBucket);
+      await prepareAgencyStaticData('lirr', 1_000_000);
+    };
+
+    await hydrateAgain();
+    assert.equal(fs.statSync(routes).ino, originalInode, 'an intact cache is reused, not rewritten');
+    const badRoutes = Buffer.from(originalRoutes);
+    badRoutes[badRoutes.indexOf('Port Jefferson')] = 'X'.charCodeAt(0);
+    fs.writeFileSync(routes, badRoutes);
+    await hydrateAgain();
+    assert.deepEqual(fs.readFileSync(routes), originalRoutes, 'same-size raw corruption must be detected by its hash');
+    assert.equal(loadAgencyStaticData('lirr').routesById.get('10').name, 'Port Jefferson');
+
+    const badGeometry = Buffer.from(originalGeometry);
+    badGeometry[0] ^= 1;
+    fs.writeFileSync(geometry, badGeometry);
+    await hydrateAgain();
+    assert.deepEqual(fs.readFileSync(geometry), originalGeometry, 'prepared-file contents are validated too');
+  } finally {
+    if (originalOverride === undefined) delete process.env.GTFS_USE_CLOUD_STORAGE;
+    else process.env.GTFS_USE_CLOUD_STORAGE = originalOverride;
+  }
+});
+
+test('overlapping hydrations repair one content-addressed cache without deleting the valid winner', async () => {
+  const fakeBucket = new FakeBucket();
+  setGtfsSnapshotBucketForTests(fakeBucket);
+  const originalOverride = process.env.GTFS_USE_CLOUD_STORAGE;
+  process.env.GTFS_USE_CLOUD_STORAGE = 'true';
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const pending = [];
+  try {
+    await withLirrFeed(() => refreshGtfsSnapshot('lirr'));
+    const manifest = currentManifest(fakeBucket);
+    const dataDir = path.join(os.tmpdir(), 'pathly-gtfs', 'lirr', manifest.version);
+    fs.mkdirSync(path.join(dataDir, 'derived'), { recursive: true });
+    const file = fakeBucket.file.bind(fakeBucket);
+    let downloads = 0;
+    fakeBucket.file = (name, options) => {
+      const object = file(name, options);
+      return name !== manifest.archiveObject ? object : { ...object, download: async () => {
+        downloads += 1;
+        await gate;
+        return object.download();
+      } };
+    };
+    pending.push(hydrateCurrentGtfsSnapshot('lirr', 1_000_000));
+    await waitFor(() => downloads === 1);
+    // Emulate a retry after the earlier handled check has timed out: its Storage work can finish
+    // late, so both hydrations may reach the same disk destination independently.
+    resetGtfsSnapshotStateForTests();
+    setGtfsSnapshotBucketForTests(fakeBucket);
+    pending.push(hydrateCurrentGtfsSnapshot('lirr', 1_000_000));
+    await waitFor(() => downloads === 2);
+    release();
+    const snapshots = await Promise.all(pending);
+    assert.equal(snapshots[0].dataDir, snapshots[1].dataDir);
+    assert.equal(fs.readFileSync(path.join(dataDir, 'routes.txt'), 'utf8').includes('Port Jefferson'), true);
+    assert.equal(fs.existsSync(path.join(dataDir, 'derived', 'geometry', '10.json')), true);
+    assert.deepEqual(fs.readdirSync(path.dirname(dataDir)), [manifest.version]);
+  } finally {
+    release();
+    await Promise.allSettled(pending);
+    if (originalOverride === undefined) delete process.env.GTFS_USE_CLOUD_STORAGE;
+    else process.env.GTFS_USE_CLOUD_STORAGE = originalOverride;
+  }
+});
+
+test('a failed corrupt-cache replacement keeps the active last-good snapshot and rolls back its disk move', async (t) => {
+  const fakeBucket = new FakeBucket();
+  setGtfsSnapshotBucketForTests(fakeBucket);
+  const originalOverride = process.env.GTFS_USE_CLOUD_STORAGE;
+  process.env.GTFS_USE_CLOUD_STORAGE = 'true';
+  try {
+    await withLirrFeed(() => refreshGtfsSnapshot('lirr'), currentLirrFiles('Last good feed'));
+    await prepareAgencyStaticData('lirr', 1_000_000);
+    const oldVersion = agencySnapshotVersion('lirr');
+    const oldDir = path.join(os.tmpdir(), 'pathly-gtfs', 'lirr', oldVersion);
+    const oldData = loadAgencyStaticData('lirr');
+    await withLirrFeed(() => refreshGtfsSnapshot('lirr'), currentLirrFiles('Next feed'));
+    const nextVersion = currentManifest(fakeBucket).version;
+    const nextDir = path.join(os.tmpdir(), 'pathly-gtfs', 'lirr', nextVersion);
+    fs.mkdirSync(path.join(nextDir, 'derived'), { recursive: true });
+    const promises = require('node:fs/promises');
+    const rename = promises.rename;
+    let installs = 0;
+    t.mock.method(promises, 'rename', async (from, to) => {
+      if (to === nextDir && path.basename(from).endsWith('.tmp')) {
+        installs += 1;
+        if (installs === 2) throw Object.assign(new Error('fixture disk failure'), { code: 'EIO' });
+      }
+      return rename(from, to);
+    });
+
+    await prepareAgencyStaticData('lirr', 1_300_001);
+
+    assert.equal(installs, 2, 'the failure is after the invalid destination was moved aside');
+    assert.equal(agencySnapshotVersion('lirr'), oldVersion);
+    assert.equal(loadAgencyStaticData('lirr'), oldData);
+    assert.equal(fs.existsSync(oldDir), true, 'failed replacement must not prune the active root');
+    assert.equal(fs.existsSync(path.join(nextDir, 'derived')), true, 'the failed move is rolled back');
+    assert.deepEqual(fs.readdirSync(path.dirname(nextDir)).sort(), [oldVersion, nextVersion].sort());
+  } finally {
     if (originalOverride === undefined) delete process.env.GTFS_USE_CLOUD_STORAGE;
     else process.env.GTFS_USE_CLOUD_STORAGE = originalOverride;
   }

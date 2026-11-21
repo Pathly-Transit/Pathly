@@ -1,6 +1,7 @@
 import { act, fireEvent, render, waitFor, within, type RenderResult } from '@testing-library/react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { signOut } from 'firebase/auth';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { deleteDoc, setDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import * as Location from 'expo-location';
 import * as ReactNative from 'react-native';
@@ -10,6 +11,7 @@ import mockSafeAreaContext from 'react-native-safe-area-context/jest/mock';
 import App from '../App';
 import { SHEET_LOWER_DROP } from '../src/components/mapSheetLayout';
 import { RouteDetailView } from '../src/components/RouteDetailView';
+import { RouteAlertsPrompt } from '../src/components/RouteAlertsPrompt';
 import { AppSettingsProvider } from '../src/theme/AppSettings';
 import { autocompletePlaces, fetchPlaceDetails, getPlacesApiKey } from '../src/data/placesSearch';
 import { SERVICE_AREA_FALLBACK } from '../src/data/serviceArea';
@@ -846,6 +848,47 @@ describe('Pathly prototype navigation', () => {
     expect(within(screen.getByTestId('nearby-routes')).getByTestId(`route-card-${route51CardId}`)).toBeTruthy();
   });
 
+  it('honors a fast favorite undo from the same rendered handler before the first acknowledgement', async () => {
+    const screen = await renderHome();
+    const id = cardIdFor(routeById['51']);
+    fireEvent.press(await screen.findByTestId(`route-card-${id}-primary`));
+    const toggle = screen.UNSAFE_getByType(RouteDetailView).props.onToggleFavorite as () => void;
+    const original = (setDoc as jest.Mock).getMockImplementation()!;
+    let resolve!: () => void;
+    const acknowledgement = new Promise<void>((done) => { resolve = done; });
+    let held = false;
+    (setDoc as jest.Mock).mockImplementation((ref: { path: string }, ...args: unknown[]) => {
+      const local = original(ref, ...args);
+      if (!held && ref.path.endsWith(`/savedRoutes/${id}`)) { held = true; return Promise.resolve(local).then(() => acknowledgement); }
+      return local;
+    });
+    try {
+      act(() => { toggle(); toggle(); });
+      expect(deleteDoc).toHaveBeenCalledWith(expect.objectContaining({ path: `users/test-uid/savedRoutes/${id}` }));
+      expect(screen.getByTestId('route-favorite').props.accessibilityState.selected).toBe(false);
+      await act(async () => { resolve(); });
+    } finally {
+      (setDoc as jest.Mock).mockImplementation(original);
+    }
+  });
+
+  it('clears the previous account alert draft and rejects retained Done and star handlers', async () => {
+    const screen = render(<View><App /></View>);
+    await screen.findByTestId('search-trigger');
+    fireEvent.press(await screen.findByTestId(`route-card-${cardIdFor(routeById['51'])}-primary`));
+    const oldStar = screen.UNSAFE_getByType(RouteDetailView).props.onToggleFavorite as () => void;
+    fireEvent.press(screen.getByTestId('route-alerts'));
+    const oldDone = screen.UNSAFE_getByType(RouteAlertsPrompt).props.onDone as (setting: 'all', hours: undefined) => Promise<void>;
+    const callback = (onAuthStateChanged as jest.Mock).mock.calls.at(-1)![1] as (user: unknown) => void;
+    const user = (globalThis as unknown as { __mockAuthUser: object }).__mockAuthUser;
+    await act(async () => { callback({ ...user, uid: 'other-rider' }); });
+    expect(screen.UNSAFE_getByType(RouteAlertsPrompt).props.request).toBeNull();
+    (setDoc as jest.Mock).mockClear();
+    await act(async () => { await expect(oldDone('all', undefined)).rejects.toThrow(/account changed/i); });
+    act(() => oldStar());
+    expect((setDoc as jest.Mock).mock.calls.filter(([ref]) => ref.path.includes('/savedRoutes/'))).toHaveLength(0);
+  });
+
   it('plans a fresh trip from a saved-place map pin and returns to Home', async () => {
     grantLocation();
     await saveLocation('test-uid', {
@@ -1044,7 +1087,7 @@ describe('Pathly prototype navigation', () => {
     expect(screen.getByText('Account')).toBeTruthy();
     expect(screen.getByText('Notifications')).toBeTruthy();
     fireEvent.press(screen.getByTestId('sign-out'));
-    expect(signOut).toHaveBeenCalled();
+    await waitFor(() => expect(signOut).toHaveBeenCalled());
     fireEvent.press(screen.getByTestId('profile-back'));
     expect(screen.getByTestId('profile-trigger')).toBeTruthy();
   });
@@ -1314,7 +1357,7 @@ describe('Pathly prototype navigation', () => {
 
     fireEvent.press(screen.getByTestId('settings-row-notifications'));
     fireEvent(screen.getByTestId('toggle-notifications'), 'valueChange', false);
-    expect(screen.getByText('Notification preferences saved')).toBeTruthy();
+    expect(await screen.findByText('Notification preferences saved')).toBeTruthy();
     expect(screen.getByTestId('notifications-not-sent')).toBeTruthy();
     fireEvent.press(screen.getByTestId('settings-back'));
 
@@ -1351,7 +1394,7 @@ describe('Pathly prototype navigation', () => {
     fireEvent.press(screen.getByTestId('settings-back'));
 
     fireEvent.press(screen.getByTestId('sign-out'));
-    expect(signOut).toHaveBeenCalled();
+    await waitFor(() => expect(signOut).toHaveBeenCalled());
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

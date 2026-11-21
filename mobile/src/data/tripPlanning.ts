@@ -1,7 +1,7 @@
 
 import type { Coordinates, LocationStatus } from '../hooks/useCurrentLocation';
 import { badgeLabel, type TransitMode } from '../components/RouteBadge';
-import { callable } from '../lib/firebase';
+import { auth, callable } from '../lib/firebase';
 import { isPathAgency, pathHeadsign, pathLineCode } from './pathLines';
 import type { SearchPlace } from './placesSearch';
 import { appNow, isMockClock } from '../debug/clock';
@@ -14,6 +14,7 @@ import {
   type TripSelectionIdentity,
 } from './enrouteNavigation';
 import { retimeItinerary } from './tripDepartures';
+import { recordRequest } from '../debug/requestLog';
 
 /** Mirrors firebase/functions/src/tripPlanning.ts — the itinerary shape planTrip returns. */
 export type LatLng = { lat: number; lng: number };
@@ -417,14 +418,38 @@ export async function planTrip({ endpoints, location, time, preference, modes, l
 
 const MAX_RESUME_VARIANTS = 512;
 
+export type TripRestoreDiagnostic = {
+  category: 'restored' | 'provider-unavailable' | 'candidate-absent' | 'selection-mismatch' | 'progress-anchor-mismatch';
+  attempts?: number;
+  candidates?: number;
+  matchingIds?: number;
+  variantsChecked?: number;
+  variantLimitReached?: boolean;
+  code?: string;
+};
+
+/** Protected admin diagnostics only: counts/categories, never endpoints or provider content. */
+export function recordTripRestoreDiagnostic(diagnostic: TripRestoreDiagnostic, startedAt = Date.now()): void {
+  recordRequest({
+    name: 'restoreTrip', startedAt, ms: Date.now() - startedAt,
+    ok: diagnostic.category === 'restored', request: null, responseSummary: diagnostic,
+  });
+}
+
 /**
  * Candidate variants include client-retimed departures. The provider itinerary id is unchanged
  * by retiming, so id-only matching could otherwise restore the wrong train or bus.
  */
-function exactResumeCandidate(itineraries: readonly Itinerary[], selection: TripSelectionIdentity): Itinerary | null {
+function exactResumeCandidate(itineraries: readonly Itinerary[], selection: TripSelectionIdentity) {
   let checked = 0;
+  let matchingIds = 0;
+  const answer = (itinerary: Itinerary | null) => ({ itinerary, candidates: itineraries.length, matchingIds, variantsChecked: checked, variantLimitReached: checked >= MAX_RESUME_VARIANTS });
   for (const itinerary of itineraries) {
-    if (sameTripSelection(createTripSelectionIdentity(itinerary), selection)) return itinerary;
+    // Retiming never changes an itinerary id. Searching an unrelated route's departure product
+    // cannot match, and used to exhaust the shared budget before reaching the selected route.
+    if (itinerary.id !== selection.itineraryId) continue;
+    matchingIds += 1;
+    if (sameTripSelection(createTripSelectionIdentity(itinerary), selection)) return answer(itinerary);
 
     const legs = itinerary.steps.filter((step): step is TransitStep => step.kind === 'transit');
     const visit = (legIndex: number, choices: ReadonlyMap<number, string>): Itinerary | null => {
@@ -445,29 +470,61 @@ function exactResumeCandidate(itineraries: readonly Itinerary[], selection: Trip
       return null;
     };
     const found = visit(0, new Map());
-    if (found) return found;
+    if (found) return answer(found);
   }
-  return null;
+  return answer(null);
 }
 
 /** Fresh planning for a persisted session. A merely similar route is never substituted. */
-export async function planTripForResume(request: ResumePlanRequest, selection: TripSelectionIdentity): Promise<ResumePlanResult> {
+export async function planTripForResume(request: ResumePlanRequest, selection: TripSelectionIdentity, options: { isCurrent?: () => boolean } = {}): Promise<ResumePlanResult> {
+  const startedAt = Date.now();
+  let attempts = 0;
+  let candidateCount = 0;
+  let matchingIds = 0;
+  let variantsChecked = 0;
+  let variantLimitReached = false;
+  const requestOwner = auth?.currentUser?.uid ?? null;
+  const current = () => options.isCurrent?.() !== false && (auth?.currentUser?.uid ?? null) === requestOwner;
   try {
-    const { data } = await planTripCallable({
+    const base = {
       origin: requestEndpoint(request.origin),
       destination: requestEndpoint(request.destination),
-      time: request.time,
       preference: request.preference,
       modes: [...request.modes],
       ...(request.lessWalking ? { lessWalking: true } : {}),
       // A walk-only trip resumes too: it's planned again only to be matched exactly.
       ...(request.lessWalking ? {} : { walkOnlyMaxMinutes: MAX_WALK_ONLY_MINUTES }),
-    });
-    const itinerary = exactResumeCandidate(data.itineraries, selection);
-    return itinerary
-      ? { ok: true, itinerary, fetchedAt: appNow() }
-      : { ok: false, problem: 'no-exact-match' };
-  } catch {
+    };
+    // Alternatives selected after the original search can be outside its new result window.
+    // Make at most one bounded fresh search at that selected journey's original boundary.
+    // This only broadens candidate retrieval: both responses still require exact identity.
+    const selectedAt = request.time.mode === 'depart'
+      ? selection.legacy?.departureTime ?? selection.departureTime
+      : selection.legacy?.arrivalTime ?? selection.arrivalTime;
+    const times = [request.time];
+    if (Number.isFinite(Date.parse(selectedAt)) && Date.parse(selectedAt) !== Date.parse(request.time.at)) {
+      times.push({ mode: request.time.mode, at: selectedAt });
+    }
+    for (const time of times) {
+      if (!current()) return { ok: false, problem: 'unavailable' };
+      attempts += 1;
+      const { data } = await planTripCallable({ ...base, time });
+      if (!current()) return { ok: false, problem: 'unavailable' };
+      const matched = exactResumeCandidate(data.itineraries, selection);
+      candidateCount += matched.candidates;
+      matchingIds += matched.matchingIds;
+      variantsChecked += matched.variantsChecked;
+      variantLimitReached ||= matched.variantLimitReached;
+      if (matched.itinerary) {
+        recordTripRestoreDiagnostic({ category: 'restored', attempts, candidates: candidateCount, matchingIds, variantsChecked, variantLimitReached }, startedAt);
+        return { ok: true, itinerary: matched.itinerary, fetchedAt: appNow() };
+      }
+    }
+    recordTripRestoreDiagnostic({ category: matchingIds > 0 ? 'selection-mismatch' : 'candidate-absent', attempts, candidates: candidateCount, matchingIds, variantsChecked, variantLimitReached }, startedAt);
+    return { ok: false, problem: 'no-exact-match' };
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (current()) recordTripRestoreDiagnostic({ category: 'provider-unavailable', attempts, ...(typeof code === 'string' && /^[a-z/-]{1,64}$/.test(code) ? { code } : {}) }, startedAt);
     return { ok: false, problem: 'unavailable' };
   }
 }
