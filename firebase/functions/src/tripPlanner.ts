@@ -3,6 +3,7 @@ import { logger } from 'firebase-functions';
 
 import { haversineMeters } from './geo';
 import { AGENCY_CONFIGS, type AgencyId } from './gtfsAgencies';
+import { gtfsServiceDaysFor } from './gtfsServiceTime';
 import { agencySnapshotVersion, isAgencyAvailable, prepareAgencyStaticData, readRoutingTimetableFile } from './gtfsStaticData';
 import { decodeRoutingTimetable } from './routingTimetable';
 import {
@@ -142,35 +143,14 @@ async function currentNetwork(): Promise<LoadedNetwork | null> {
 // ---------------------------------------------------------------------------------------------
 // Service days: the planner's clock is seconds after the base day's GTFS midnight in New York.
 
-const TIME_ZONE = 'America/New_York';
-const nyParts = new Intl.DateTimeFormat('en-US', {
-  timeZone: TIME_ZONE,
-  hourCycle: 'h23',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  weekday: 'short',
-});
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-function serviceDayContaining(ms: number): { date: number; dayOfWeek: number; startMs: number; noonMs: number } {
-  const parts = Object.fromEntries(nyParts.formatToParts(new Date(ms)).map((part) => [part.type, part.value]));
-  const seconds = Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second);
-  // GTFS midnight is noon minus 12 hours, which keeps times right on daylight-saving days.
-  const noonMs = ms + (12 * 3600 - seconds) * 1000;
-  return { date: Number(`${parts.year}${parts.month}${parts.day}`), dayOfWeek: WEEKDAYS.indexOf(parts.weekday ?? ''), startMs: noonMs - 12 * 3600 * 1000, noonMs };
-}
-
 /** Yesterday (its trips running past midnight), the day of `ms`, and tomorrow, around `ms`'s day. */
 export function serviceDaysAround(ms: number): { baseStartMs: number; days: ServiceDay[] } {
-  const today = serviceDayContaining(ms);
-  const yesterday = serviceDayContaining(today.noonMs - 24 * 3600 * 1000);
-  const tomorrow = serviceDayContaining(today.noonMs + 24 * 3600 * 1000);
-  const day = (entry: typeof today): ServiceDay => ({ date: entry.date, dayOfWeek: entry.dayOfWeek, offset: Math.round((entry.startMs - today.startMs) / 1000) });
-  return { baseStartMs: today.startMs, days: [day(yesterday), day(today), day(tomorrow)] };
+  const dates = gtfsServiceDaysFor(ms, [-1, 0, 1]);
+  const baseStartMs = dates[1]!.startMs;
+  return {
+    baseStartMs,
+    days: dates.map((day) => ({ date: Number(day.dateKey), dayOfWeek: day.dayOfWeek, offset: Math.round((day.startMs - baseStartMs) / 1000) })),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
