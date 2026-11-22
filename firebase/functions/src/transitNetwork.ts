@@ -3,6 +3,7 @@ import { haversineMeters } from './geo';
 import { displayRouteColor } from './routeColors';
 import { NO_DROP_OFF, NO_PICKUP, serviceRunsOn, type RoutingService, type RoutingTimetable } from './routingTimetable';
 import { displayTransitName } from './transitNames';
+import { LIRR_AGENCY, METRO_NORTH_AGENCY, MTA_BUS_COMPANY_AGENCY, NICE_AGENCY, NYC_FERRY_AGENCY, NYCT_AGENCY } from './tripAgencies';
 
 /**
  * Every agency's routing timetable (routingTimetable.ts) merged into one network for the trip
@@ -31,6 +32,29 @@ export const STATION_ACCESS_SECONDS = 60;
 const DEFAULT_CHANGE_SECONDS: Record<TransitMode, number> = { bus: 60, subway: 120, rail: 180, ferry: 120, other: 90 };
 
 const GRID_DEGREES = 0.005;
+
+/**
+ * Each agency's name for a timetable that has none: the MTA's bus feeds, NYC Ferry's, the Staten
+ * Island Ferry's and PATH's are built without agency.txt. Without these their rides would be named
+ * by Pathly's id ("bk"), which the fares (tripFares.ts) and agency matching (tripAgencies.ts) don't
+ * know, so every trip on them showed "Fare N/A". The names are the ones tripAgencies.ts expects.
+ */
+const FALLBACK_AGENCY_NAMES: Record<AgencyId, string> = {
+  lirr: LIRR_AGENCY,
+  metronorth: METRO_NORTH_AGENCY,
+  subway: NYCT_AGENCY,
+  nice: NICE_AGENCY,
+  suffolk: 'Suffolk County Transit',
+  bx: NYCT_AGENCY,
+  bk: NYCT_AGENCY,
+  mn: NYCT_AGENCY,
+  qn: NYCT_AGENCY,
+  si: NYCT_AGENCY,
+  busco: MTA_BUS_COMPANY_AGENCY,
+  nycferry: NYC_FERRY_AGENCY,
+  siferry: 'New York City Department of Transportation',
+  path: 'PATH',
+};
 
 export type NetworkRoute = {
   agencyId: AgencyId;
@@ -214,7 +238,7 @@ export class TransitNetwork {
           ...(textColor ? { textColor } : {}),
           vehicleName: VEHICLE_NAMES[mode],
           // Feeds pad some names ("Suffolk County Transit  - Central").
-          agencyName: (agency?.name ?? agencyId).replace(/\s+/g, ' ').trim(),
+          agencyName: (agency?.name && agency.name !== agencyId ? agency.name : FALLBACK_AGENCY_NAMES[agencyId]).replace(/\s+/g, ' ').trim(),
           ...(agency?.url ? { agencyUrl: agency.url } : {}),
         });
       }

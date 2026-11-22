@@ -73,3 +73,22 @@ test('a left-out line is never ridden, and with nothing left there is no trip', 
 test('no trip runs on a day the calendar leaves out', () => {
   assert.deepEqual(plan({ from: 'A1', to: 'A4', at: Date.UTC(2026, 10, 21, 13, 0) }), [], 'a Saturday');
 });
+
+test("a feed built without agency.txt gets the agency's real name, so its fares price", async () => {
+  const { TransitNetwork } = require('../lib/transitNetwork');
+  const { createFareEstimator } = require('../lib/tripFares');
+  const { buildTimetable, busFeed } = require('./helpers/routingFeeds');
+  const bus = await buildTimetable('nice', busFeed());
+  // The MTA's borough bus feeds come out named by Pathly's id ("bk"); some with no agency at all.
+  const named = new TransitNetwork([{ agencyId: 'bk', version: 'test', timetable: { ...bus, agencies: [{ name: 'bk' }] } }]);
+  const unnamed = new TransitNetwork([{ agencyId: 'nycferry', version: 'test', timetable: { ...bus, agencies: [] } }]);
+  assert.equal(named.routes[0].agencyName, 'MTA New York City Transit');
+  assert.equal(unnamed.routes[0].agencyName, 'NYC Ferry');
+
+  const step = {
+    kind: 'transit', mode: 'bus', agency: { name: named.routes[0].agencyName }, line: { name: 'Crosstown', shortName: 'B41' },
+    from: { name: 'A', time: '2026-11-18T14:00:00Z', location: { lat: 40.7, lng: -73.9 } },
+    to: { name: 'B', time: '2026-11-18T14:10:00Z', location: { lat: 40.71, lng: -73.9 } },
+  };
+  assert.equal(createFareEstimator([])([step], step.from.time)?.text, '$3.00');
+});

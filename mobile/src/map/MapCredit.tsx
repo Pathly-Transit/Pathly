@@ -87,7 +87,14 @@ export function SheetMapCredit({ bottomInset = 0 }: { bottomInset?: number }) {
   return sheet ? null : <MapCredit bottomInset={bottomInset} />;
 }
 
-/** The credit's `bottomInset` to sit level with a map button `buttonSize` across, `buttonBottom` up. */
-export function creditBesideButton(buttonBottom: number, buttonSize: number): number {
-  return buttonBottom + (buttonSize - SIZE) / 2 - EDGE;
+/**
+ * The credit's `bottomInset` beside a map button `buttonBottom` up: its bottom edge lined up with
+ * the button's, so it sits low, close to the sheet or menu below. `buttonSize` is kept so callers
+ * stay unchanged if it ever goes back to centering on the button.
+ */
+export function creditBesideButton(buttonBottom: number, _buttonSize: number): number {
+  return buttonBottom - EDGE - BELOW_BUTTON;
 }
+
+/** How far the credit drops below the button's bottom edge, toward the sheet or menu. */
+const BELOW_BUTTON = 8;
