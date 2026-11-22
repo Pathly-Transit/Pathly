@@ -1,7 +1,7 @@
 import { logger } from 'firebase-functions';
 
 import { agencyConfig, type AgencyId } from './gtfsAgencies';
-import { fetchFeedEntities } from './gtfsRealtime';
+import { fetchRealtimeFeed, sourceFreshness, timestampMilliseconds } from './gtfsRealtime';
 import { loadAgencyStaticData } from './gtfsStaticData';
 
 export type GtfsStopStatus = {
@@ -20,6 +20,12 @@ export type GtfsTripStatus = {
   /** This trip's real LIRR peak/off-peak classification (trips.txt), resolved by trip_id — null for agencies without one, or if this live trip_id has no static match. */
   peakOffpeak: boolean | null;
   stops: GtfsStopStatus[];
+  serviceDate?: string;
+  startTime?: string;
+  observedAt?: number | null;
+  expiresAt?: number | null;
+  freshness?: 'fresh' | 'stale' | 'unknown';
+  scheduleRelationship?: number;
 };
 
 export type GtfsVehicleStatus = {
@@ -81,12 +87,13 @@ export async function getRouteStatus(agencyId: AgencyId, routeId: string): Promi
   // the route then shows its timetable, untracked, as when a feed is down.
   const keyMissing = config.liveFeedSecret !== undefined && !process.env[config.liveFeedSecret];
   const feedRequests = keyMissing ? [] : liveFeedRequests(agencyId, routeId);
-  const entityLists = await Promise.all(feedRequests.map((request) => fetchFeedEntities(request.url, request.headers)));
-  const entities = entityLists.flat();
+  const feeds = await Promise.all(feedRequests.map((request) => fetchRealtimeFeed(request.url, request.headers)));
+  const entities = feeds.flatMap((feed) => feed.entities.map((entity) => ({ entity, feed })));
   const trips: GtfsTripStatus[] = [];
   const vehicles: GtfsVehicleStatus[] = [];
 
-  for (const entity of entities) {
+  for (const { entity, feed } of entities) {
+    if (entity.isDeleted || feed.differential) continue;
     const tripUpdate = entity.tripUpdate;
     const updateTripMeta = tripUpdate ? tripsById.get(tripUpdate.trip.tripId ?? '') : undefined;
     // NYC Ferry leaves route_id empty on trip updates; its trip_ids match trips.txt, which knows.
@@ -97,24 +104,31 @@ export async function getRouteStatus(agencyId: AgencyId, routeId: string): Promi
       const stops: GtfsStopStatus[] = (tripUpdate.stopTimeUpdate ?? []).map((update) => {
         const stopId = update.stopId ?? '';
         const stop = stopsById.get(stopId);
-        const event = update.arrival ?? update.departure;
-        const time = event?.time != null ? Number(event.time) : null;
+        const event = update.scheduleRelationship === 1 || update.scheduleRelationship === 2 ? undefined : update.arrival ?? update.departure;
+        const time = timestampMilliseconds(event?.time);
         return {
           stopId,
           stopName: stop?.name ?? stopId,
           lat: stop?.lat ?? 0,
           lon: stop?.lon ?? 0,
           sequence: update.stopSequence ?? 0,
-          scheduledTime: time != null ? new Date(time * 1000).toISOString() : null,
-          delaySeconds: event?.delay ?? null,
+          scheduledTime: time !== null && Number.isFinite(new Date(time).getTime()) ? new Date(time).toISOString() : null,
+          delaySeconds: event && Object.hasOwn(event, 'delay') ? event.delay ?? null : null,
         };
       });
 
+      const freshness = sourceFreshness(feed.observedAt, timestampMilliseconds(tripUpdate.timestamp));
       trips.push({
         tripId,
         directionId: tripUpdate.trip.directionId ?? tripMeta?.directionId ?? 0,
         peakOffpeak: tripMeta?.peakOffpeak ?? null,
         stops,
+        ...(tripUpdate.trip.startDate ? { serviceDate: tripUpdate.trip.startDate } : {}),
+        ...(tripUpdate.trip.startTime ? { startTime: tripUpdate.trip.startTime } : {}),
+        observedAt: freshness.observedAt,
+        expiresAt: freshness.expiresAt,
+        freshness: freshness.state,
+        ...(Object.hasOwn(tripUpdate.trip, 'scheduleRelationship') ? { scheduleRelationship: tripUpdate.trip.scheduleRelationship ?? 0 } : {}),
       });
       continue;
     }

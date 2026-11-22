@@ -54,6 +54,8 @@ import {
 } from './tripPlanning';
 import { walkingPath } from './walkingGraph';
 import { addLiveStatus } from './tripLive';
+import { parseTripLiveRequest, selectedTripStatus } from './selectedTripStatus';
+import type { TripLiveRequest } from './tripLiveTypes';
 import { withStopEntrances } from './stationEntrances';
 
 const CALLABLE_RUNTIME_SERVICE_ACCOUNT = 'pathly-callable-runtime@pathly-b7f0f.iam.gserviceaccount.com';
@@ -90,6 +92,8 @@ const RATE_LIMITS = {
   getRouteLiveStatus: { userPerMinute: 600 },
   // One batch per refresh of the cards on screen (every 15 s, plus on scrolling and moving).
   getRoutesLiveStatus: { userPerMinute: 120 },
+  // One bounded batch for the selected journey, normally every 15–30 seconds while active.
+  getTripLiveStatus: { userPerMinute: 30 },
   // Opened on demand from route detail's "More departures" card.
   getStopDepartures: { userPerMinute: 60 },
   findNearbyTransit: { userPerMinute: 30 },
@@ -274,6 +278,19 @@ export const getRouteLiveStatus = onCall<RouteLiveStatusRequest>({ ...liveStatus
   const data = request.data ?? ({} as RouteLiveStatusRequest);
   await prepareAgencyStaticData(requiredAgencyId(data.agencyId));
   return routeLiveStatus(data, uid);
+});
+
+/** Predictions and disruption facts for exact selected runs; never invokes the route planner. */
+export const getTripLiveStatus = onCall<TripLiveRequest>({ ...liveStatusCallableOptions, minInstances: 0, secrets: liveFeedSecrets }, async (request) => {
+  await enforceCallableSecurity(request, 'getTripLiveStatus', RATE_LIMITS.getTripLiveStatus);
+  const data = parseTripLiveRequest(request.data);
+  const unavailableAgencies = new Set<AgencyId>();
+  // Complete root switches before parallel reads; a timed-out live lookup cannot race a later
+  // request's snapshot preparation. A failed agency leaves the other legs independently usable.
+  for (const agencyId of new Set(data.legs.map(({ runRef }) => runRef.agencyId))) {
+    try { await prepareAgencyStaticData(agencyId); } catch { unavailableAgencies.add(agencyId); }
+  }
+  return selectedTripStatus(data, { unavailableAgencies });
 });
 
 /** One route's live status — the shared body of getRouteLiveStatus and getRoutesLiveStatus. Its agency's static data must already be prepared. */

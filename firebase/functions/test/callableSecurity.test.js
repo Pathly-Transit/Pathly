@@ -16,6 +16,7 @@ const {
   getRouteGeometry,
   getRouteLiveStatus,
   getRoutesLiveStatus,
+  getTripLiveStatus,
   getStopDepartures,
 } = require('../lib');
 
@@ -36,12 +37,18 @@ test('requires an authenticated Firebase user', async () => {
 });
 
 test('every callable rejects anonymous traffic before validation or provider work', async () => {
-  for (const callable of [findNearbyTransit, geocodeAddress, getNearestRouteStop, getRouteGeometry, getRouteLiveStatus, getRoutesLiveStatus, getStopDepartures, getWalkingPath]) {
+  for (const callable of [findNearbyTransit, geocodeAddress, getNearestRouteStop, getRouteGeometry, getRouteLiveStatus, getRoutesLiveStatus, getTripLiveStatus, getStopDepartures, getWalkingPath]) {
     await assert.rejects(
       () => callable.run({ auth: null, data: {}, rawRequest: request(null).rawRequest }),
       (error) => error.code === 'unauthenticated',
     );
   }
+});
+
+test('selected-trip live status rejects oversized input before preparing a timetable or feed', async () => {
+  await assert.rejects(getTripLiveStatus.run({ auth: { uid: 'selected-user' }, data: { version: 1, legs: Array(13).fill({}) }, rawRequest: {} }), { code: 'invalid-argument' });
+  assert.equal(getTripLiveStatus.__endpoint.concurrency, 1);
+  assert.equal(getTripLiveStatus.__endpoint.maxInstances, 1);
 });
 
 test('serializes transit requests so a response cannot mix two GTFS snapshots', () => {

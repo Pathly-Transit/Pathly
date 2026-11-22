@@ -2,9 +2,11 @@ import type { transit_realtime } from 'gtfs-realtime-bindings';
 
 import { agencyConfig, type AgencyId } from './gtfsAgencies';
 import { alertLabel, getLineAlerts, type LineAlert } from './gtfsAlerts';
-import { fetchFeedEntities } from './gtfsRealtime';
-import { loadAgencyStaticData } from './gtfsStaticData';
+import { fetchRealtimeFeed } from './gtfsRealtime';
 import type { LegAlert, LegConnection, LegLive, TransitStep, WalkStep } from './tripPlanning';
+import { observeSelectedRun } from './tripLiveSelection';
+import type { TripLegObservation } from './tripLiveTypes';
+import { resolveSelectedRun } from './tripRunSchedule';
 
 /**
  * Checks a planned trip (tripPlanner.ts, from the published timetables) against the agencies'
@@ -82,6 +84,8 @@ function findLiveTrip(
   const { tripId } = ref;
   const sameTrip = tripId ? updates.find((update) => isSameTrip(tripId, update.trip.tripId ?? '')) : undefined;
   if (sameTrip) return sameTrip;
+  // Losing the selected run's update means unknown, not permission to substitute the next bus.
+  if (tripId) return undefined;
   const planned = Date.parse(step.from.time);
   let best: { update: transit_realtime.TripUpdate; offset: number } | undefined;
   for (const update of updates) {
@@ -114,8 +118,8 @@ export function legLiveFrom(
   const alight = updateAt(ref.alightStopId);
   if (board?.scheduleRelationship === STOP_SKIPPED || alight?.scheduleRelationship === STOP_SKIPPED) return { status: 'skips-stop' };
 
-  const departs = eventTime(board?.departure ?? board?.arrival, step.from.time);
-  const arrives = eventTime(alight?.arrival ?? alight?.departure, step.to.time);
+  const departs = board?.scheduleRelationship === 2 ? undefined : eventTime(board?.departure ?? board?.arrival, step.from.time);
+  const arrives = alight?.scheduleRelationship === 2 ? undefined : eventTime(alight?.arrival ?? alight?.departure, step.to.time);
   if (!departs && !arrives) return undefined;
   const planned = departs ? Date.parse(step.from.time) : Date.parse(step.to.time);
   const delaySeconds = Math.round((Date.parse((departs ?? arrives) as string) - planned) / 1000);
@@ -127,19 +131,30 @@ export function legLiveFrom(
   };
 }
 
-/** A leg's live status from its agency's feed (shared with route status through the feed cache). */
+/** Older display shape only receives current facts about a validated selected run. */
+export function plannedLegLive(observation: TripLegObservation): LegLive | undefined {
+  if (observation.state !== 'fresh') return undefined;
+  if (observation.status === 'cancelled' || observation.status === 'skips-stop') return { status: observation.status };
+  if (observation.status !== 'predicted' || (!observation.departs && !observation.arrives)) return undefined;
+  const delaySeconds = observation.departureDelaySeconds ?? observation.arrivalDelaySeconds;
+  return {
+    status: 'tracked',
+    ...(observation.departs ? { departs: observation.departs } : {}),
+    ...(observation.arrives ? { arrives: observation.arrives } : {}),
+    ...(delaySeconds !== undefined ? { delaySeconds } : {}),
+  };
+}
+
+/** A leg's exact dated live status, sharing source envelopes with selected/route polling. */
 export async function liveTripStatus(ref: LiveTripRef, step: TransitStep): Promise<LegLive | undefined> {
-  const config = agencyConfig(ref.agencyId);
+  if (!step.runRef) return undefined;
+  const run = await resolveSelectedRun(step.runRef);
+  if (!run) return undefined;
+  const config = agencyConfig(run.runRef.agencyId);
   if (config.liveFeedSecret !== undefined && !process.env[config.liveFeedSecret]) return undefined;
-  const requests = config.feedRequestsForRoute(ref.routeId);
-  const entities = (await Promise.all(requests.map((request) => fetchFeedEntities(request.url, request.headers)))).flat();
-  const { stopsById, tripsById } = loadAgencyStaticData(ref.agencyId);
-  return legLiveFrom(entities, ref, step, {
-    stationOf: (stopId) => stopsById.get(stopId)?.parentStation ?? stopId,
-    // Live subway trip ids are the timetable's tails; a bare lookup misses those, but the
-    // subway feed carries route_id itself.
-    routeOf: (tripId) => tripsById.get(tripId)?.routeId,
-  });
+  const requests = config.feedRequestsForRoute(run.runRef.routeId);
+  const feeds = await Promise.all(requests.map((request) => fetchRealtimeFeed(request.url, request.headers)));
+  return plannedLegLive(observeSelectedRun(feeds, run, 'preview'));
 }
 
 /**
