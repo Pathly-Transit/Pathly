@@ -5,7 +5,8 @@ import { createPortal } from 'react-dom';
 import { StyleSheet, View } from 'react-native';
 
 import { useTheme } from '../theme/AppSettings';
-import { MapCredit } from './MapCredit';
+import { sheetPaddingExtra, useSheetInset } from './mapSheetInset';
+import { SheetMapCredit } from './MapCredit';
 import { WEB_ICON_PIXEL_RATIO, WEB_MAP_ICONS } from './mapIcons';
 import { mapLandColor, overlaySlotId, pathlyMapStyle, STOP_LAYER_IDS } from './mapStyle';
 import {
@@ -104,6 +105,8 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
     latest.current = { onCameraIdle, onLongPress, onPress, onStopPress, onUserGesture, maxBounds };
   });
   const themeAtCreation = useRef({ isDark, mapTheme, transitIcons });
+  // Set while the sheet's padding is applied: that move isn't the camera's own.
+  const paddingMove = useRef(false);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -145,12 +148,14 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       onReady?.();
     });
     instance.on('movestart', (event) => {
+      if (paddingMove.current) return;
       cancelLongPress();
       if (!(event as { originalEvent?: unknown }).originalEvent) return;
       gesture = true;
       latest.current.onUserGesture?.();
     });
     instance.on('moveend', () => {
+      if (paddingMove.current) return;
       const center = instance.getCenter();
       // Like the native map: the center stays within the bounds, gliding back after a pan beyond them.
       const bounds = latest.current.maxBounds;
@@ -226,11 +231,26 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   }, [isDark, map, mapTheme, transitIcons]);
 
   const paddingKey = `${padding?.top ?? 0},${padding?.right ?? 0},${padding?.bottom ?? 0},${padding?.left ?? 0}`;
+  // A sheet over the map adds what it covers to the bottom padding, so the map never resizes and
+  // its center stays in the middle of what's showing (mapSheetInset.ts).
+  const sheetInset = useSheetInset();
   useEffect(() => {
-    if (!map) return;
-    map.setPadding({ top: padding?.top ?? 0, right: padding?.right ?? 0, bottom: padding?.bottom ?? 0, left: padding?.left ?? 0 });
+    if (!map) return undefined;
+    const base = { top: padding?.top ?? 0, right: padding?.right ?? 0, bottom: padding?.bottom ?? 0, left: padding?.left ?? 0 };
+    let applied = -1;
+    const apply = (covered: number) => {
+      const extra = sheetPaddingExtra(covered, map.getContainer().clientHeight, base.top, base.bottom);
+      if (extra === applied) return;
+      applied = extra;
+      // Only the padding changes; the camera's own listeners shouldn't hear it as a move.
+      paddingMove.current = true;
+      map.setPadding({ ...base, bottom: base.bottom + extra });
+      paddingMove.current = false;
+    };
+    apply(sheetInset?.get() ?? 0);
+    return sheetInset?.subscribe(apply);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by value
-  }, [map, paddingKey]);
+  }, [map, paddingKey, sheetInset]);
 
   useImperativeHandle(ref, () => ({
     easeTo({ center, zoom, bearing, pitch, durationMs = 300 }) {
@@ -273,7 +293,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
       {context ? <MapContext.Provider value={context}>{children}</MapContext.Provider> : null}
       {/* The map's credit, in the app's own button style (MapLibre's is turned off above). */}
-      <MapCredit bottomInset={padding?.bottom ?? 0} />
+      <SheetMapCredit bottomInset={padding?.bottom ?? 0} />
     </View>
   );
 });

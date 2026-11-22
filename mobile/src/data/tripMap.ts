@@ -1,5 +1,5 @@
 import { stopRevealZoom } from './stopDeclutter';
-import { entranceLabel } from './stationEntrances';
+import { entranceLabel, legEntrances } from './stationEntrances';
 import { subwayEntrancesAt } from './subwayEntrances';
 import { formatTripClock, type Itinerary, type LatLng, type TransitStep, type TripStep } from './tripPlanning';
 import { distanceMeters, type NavigationCursor, type NormalizedNavigationPlan } from './enrouteNavigation';
@@ -56,7 +56,8 @@ export type TripMapProps = {
 /** Where an interactive trip map rests: its center and zoom (a region span, from older maps). */
 export type TripMapCamera = { latitude: number; longitude: number; latitudeDelta?: number; longitudeDelta?: number; zoom?: number };
 
-export type TripMapLeg = { path: LatLng[]; walk: boolean; color?: string };
+/** `indoor`: the part of a walk inside a station, between its platform and the entrance or exit taken, drawn thin. */
+export type TripMapLeg = { path: LatLng[]; walk: boolean; color?: string; indoor?: boolean };
 export type TripMapProgressState = 'completed' | 'current' | 'upcoming';
 export type TripMapRenderSegment = TripMapLeg & {
   state: TripMapProgressState;
@@ -228,6 +229,47 @@ function joinEnds(path: readonly LatLng[], from?: LatLng, to?: LatLng): LatLng[]
   return joined;
 }
 
+/** A walk vertex this close (meters) to the entrance taken is where the walk comes through it. */
+const THROUGH_ENTRANCE_METERS = 40;
+
+/**
+ * A walk leaving a station, split where it comes out at the exit taken: the part inside the
+ * station first, then the street part. Unsplit (null) when there's nothing left outside.
+ */
+function splitAtExit(path: readonly LatLng[], exit: LatLng): { indoor: LatLng[]; outdoor: LatLng[] } | null {
+  if (path.length < 2) return null;
+  let nearest = 0;
+  for (let index = 1; index < path.length; index += 1) if (distanceMeters(path[index]!, exit) < distanceMeters(path[nearest]!, exit)) nearest = index;
+  const through = distanceMeters(path[nearest]!, exit) <= THROUGH_ENTRANCE_METERS;
+  // Through it: the walk's own way to it is inside. Past it: straight from the platform to it.
+  const indoor = through && nearest > 0 ? [...path.slice(0, nearest), exit] : [path[0]!, exit];
+  const outdoor = [exit, ...path.slice(through ? nearest + 1 : Math.max(1, nearest))];
+  return outdoor.length >= 2 ? { indoor, outdoor } : null;
+}
+
+/** A walk's legs: in a station (from an exit, to an entrance) drawn thin, the street part as usual. */
+function walkLegs(path: LatLng[], exit?: LatLng, enter?: LatLng): TripMapLeg[] {
+  let start: LatLng[] = [];
+  let street = path;
+  let end: LatLng[] = [];
+  if (exit) {
+    const split = splitAtExit(street, exit);
+    if (split) ({ indoor: start, outdoor: street } = split);
+  }
+  if (enter) {
+    const split = splitAtExit([...street].reverse(), enter);
+    if (split) {
+      end = split.indoor.reverse();
+      street = split.outdoor.reverse();
+    }
+  }
+  return [
+    ...(start.length >= 2 ? [{ path: start, walk: true, indoor: true }] : []),
+    { path: street, walk: true },
+    ...(end.length >= 2 ? [{ path: end, walk: true, indoor: true }] : []),
+  ];
+}
+
 const isCurbStop = (step: TripStep | undefined): step is TransitStep => step?.kind === 'transit' && step.mode !== 'subway' && step.mode !== 'rail';
 
 export function tripMapPoints(itinerary: Itinerary | null | undefined, origin?: LatLng | null, destination?: LatLng | null) {
@@ -244,7 +286,11 @@ export function tripMapPoints(itinerary: Itinerary | null | undefined, origin?: 
       // only one point in a station with many ways in.
       const before = steps[index - 1];
       const after = steps[index + 1];
-      legs.push({ path: joinEnds(step.path, isCurbStop(before) ? before.to.location : undefined, isCurbStop(after) ? after.from.location : undefined), walk: true });
+      const path = joinEnds(step.path, isCurbStop(before) ? before.to.location : undefined, isCurbStop(after) ? after.from.location : undefined);
+      // Out through the exit Trip Details names, and in through its entrance: inside the station, thin.
+      const exit = before?.kind === 'transit' ? legEntrances(steps, index - 1).exit : undefined;
+      const enter = after?.kind === 'transit' ? legEntrances(steps, index + 1).enter : undefined;
+      legs.push(...walkLegs(path, exit ? { lat: exit.lat, lng: exit.lon } : undefined, enter ? { lat: enter.lat, lng: enter.lon } : undefined));
     } else {
       // A ride's line is snapped to the road; it's run on to its stops' dots so it ends on them.
       legs.push({ path: joinEnds(step.path, step.from.location, step.to.location), walk: false, color: step.line.color });

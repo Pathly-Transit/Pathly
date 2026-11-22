@@ -42,6 +42,12 @@ export function entranceLabel(entrance: StationEntrance): string {
   return `${side ? `${name}, ${side}` : name}${access}`;
 }
 
+/** An entrance's name alone, for a card already headed as the way in or out: "Stair, NE corner", "Elevator". */
+export function entranceName(entrance: StationEntrance): string {
+  const side = sideName(entrance.corner);
+  return side ? `${KIND_NAMES[entrance.kind]}, ${side}` : KIND_NAMES[entrance.kind];
+}
+
 /** "Enter by the stair at the NE corner", "Exit on the north side", "Enter at the station entrance". */
 export function entranceInstruction(entrance: StationEntrance, use: 'enter' | 'exit'): string {
   const verb = use === 'enter' ? 'Enter' : 'Exit';

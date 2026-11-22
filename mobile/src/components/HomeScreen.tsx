@@ -91,6 +91,7 @@ import { SystemNoticeBanner } from './SystemNoticeBanner';
 import { SearchHeader } from './SearchHeader';
 import { SearchView } from './SearchView';
 import { TransitSheet, type TransitTabId } from './TransitSheet';
+import { MIN_VISIBLE_MAP } from '../map/mapSheetInset';
 import { mapPageMapHeight, SHEET_LOWER_DROP } from './mapSheetLayout';
 import { radii } from '../theme/shape';
 
@@ -632,6 +633,14 @@ export function HomeScreen() {
   const mapHeight = mapPageMapHeight(height);
   // The transit menu scrolls over the map in one page scroll; the location button rides up with it.
   const [homeScrollY] = useState(() => new Animated.Value(0));
+  // How far the map's center sits from where it does with the sheet at rest: half of what the
+  // sheet uncovers (dragged lower) or covers (opened), as far as the map's padding follows it.
+  const sheetCoverLimit = Math.max(1, mapHeight + SHEET_LOWER_DROP - homeHeaderInset - MIN_VISIBLE_MAP);
+  const searchCenterShift = useMemo(() => homeScrollY.interpolate({
+    inputRange: [0, sheetCoverLimit],
+    outputRange: [SHEET_LOWER_DROP / 2, (SHEET_LOWER_DROP - sheetCoverLimit) / 2],
+    extrapolate: 'clamp',
+  }), [homeScrollY, sheetCoverLimit]);
   // The line layers button stays put on the map, under the search bar, and the transit menu slides
   // over it as it scrolls up. The button stays aligned with the top of the row as the card fills it.
   const [underSearchTop, setUnderSearchTop] = useState<number | null>(null);
@@ -1336,7 +1345,8 @@ export function HomeScreen() {
           }}
           onOrientationChange={setMapOrientation}
           onSavedLocationPress={openSavedLocationFromMap}
-          padding={{ top: homeHeaderInset, bottom: Platform.OS === 'web' ? 0 : SHEET_LOWER_DROP }}
+          // The sheet's own cover is added as it moves (TransitSheet, mapSheetInset.ts).
+          padding={{ top: homeHeaderInset }}
           recenterRequest={recenterRequest}
           reorientRequest={reorientRequest}
           savedLocations={savedLocations}
@@ -1355,10 +1365,11 @@ export function HomeScreen() {
         {searchCenter ? (
           // Fixed at the center of the visible map (below the header, above the resting sheet):
           // the point Nearby is currently searching around.
-          <View
+          // It moves with the sheet, as the map's center does (mapSheetInset.ts).
+          <Animated.View
             accessibilityLabel="Searching nearby transit around the map center"
             pointerEvents="none"
-            style={[styles.searchCenter, { top: (homeHeaderInset + mapHeight) / 2 - SEARCH_CENTER_SIZE / 2 }]}
+            style={[styles.searchCenter, { top: (homeHeaderInset + mapHeight) / 2 - SEARCH_CENTER_SIZE / 2, transform: [{ translateY: searchCenterShift }] }]}
             testID="search-center"
           />
         ) : null}

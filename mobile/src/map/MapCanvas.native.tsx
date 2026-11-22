@@ -9,11 +9,12 @@ import {
   type MapRef,
   type ViewStateChangeEvent,
 } from '@maplibre/maplibre-react-native';
-import { createContext, forwardRef, useContext, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
+import { createContext, forwardRef, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
 import { StyleSheet, View, type NativeSyntheticEvent } from 'react-native';
 
 import { useTheme } from '../theme/AppSettings';
-import { MapCredit } from './MapCredit';
+import { SheetMapCredit } from './MapCredit';
+import { sheetPaddingExtra, useSheetInset } from './mapSheetInset';
 import { MAP_ICONS } from './mapIcons';
 import { mapLandColor, overlaySlotId, pathlyMapStyle, STOP_LAYER_IDS } from './mapStyle';
 import {
@@ -99,6 +100,12 @@ const pointOf = ([longitude, latitude]: [number, number]): MapPoint => ({ latitu
 /** Taps within this many points of a stop's icon count as tapping it. */
 const STOP_TAP_SLOP = 12;
 
+/** The same camera, to well under a pixel. */
+function sameCamera(a: MapCamera, b: MapCamera): boolean {
+  return Math.abs(a.center.latitude - b.center.latitude) < 1e-7 && Math.abs(a.center.longitude - b.center.longitude) < 1e-7
+    && Math.abs(a.zoom - b.zoom) < 1e-4 && Math.abs(a.bearing - b.bearing) < 0.01 && Math.abs(a.pitch - b.pitch) < 0.01;
+}
+
 function cameraOf(state: ViewStateChangeEvent): MapCamera {
   return { center: pointOf(state.center), zoom: fromMapLibreZoom(state.zoom), bearing: state.bearing, pitch: state.pitch };
 }
@@ -171,10 +178,22 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
     },
   }), [size]);
 
+  // A sheet over the map adds what it covers to the bottom padding, so the map never resizes and
+  // its center stays in the middle of what's showing (mapSheetInset.ts).
+  const sheetInset = useSheetInset();
+  const [covered, setCovered] = useState(() => sheetInset?.get() ?? 0);
+  useEffect(() => {
+    if (!sheetInset) return undefined;
+    setCovered(sheetInset.get());
+    return sheetInset.subscribe(setCovered);
+  }, [sheetInset]);
+  const sheetExtra = sheetInset ? sheetPaddingExtra(covered, size.height, padding?.top ?? 0, padding?.bottom ?? 0) : 0;
   const contentInset = useMemo(
-    () => (padding ? { top: padding.top ?? 0, right: padding.right ?? 0, bottom: padding.bottom ?? 0, left: padding.left ?? 0 } : undefined),
-    [padding?.top, padding?.right, padding?.bottom, padding?.left], // eslint-disable-line react-hooks/exhaustive-deps -- keyed by value
+    () => (padding || sheetExtra > 0 ? { top: padding?.top ?? 0, right: padding?.right ?? 0, bottom: (padding?.bottom ?? 0) + sheetExtra, left: padding?.left ?? 0 } : undefined),
+    [padding?.top, padding?.right, padding?.bottom, padding?.left, sheetExtra], // eslint-disable-line react-hooks/exhaustive-deps -- keyed by value
   );
+  // The last camera reported, so a padding-only change (same camera) isn't reported as a move.
+  const lastIdle = useRef<MapCamera | null>(null);
 
   return (
     <View
@@ -217,7 +236,11 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
           zoomStore.set(fromMapLibreZoom(event.nativeEvent.zoom));
           const userInteraction = event.nativeEvent.userInteraction || gesture.current;
           gesture.current = false;
-          onCameraIdle?.({ ...cameraOf(event.nativeEvent), userInteraction });
+          const camera = cameraOf(event.nativeEvent);
+          const last = lastIdle.current;
+          lastIdle.current = camera;
+          if (!userInteraction && last && sameCamera(last, camera)) return;
+          onCameraIdle?.({ ...camera, userInteraction });
         }}
         onRegionIsChanging={(event: NativeSyntheticEvent<ViewStateChangeEvent>) => {
           bearingStore.set(event.nativeEvent.bearing);
@@ -242,7 +265,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
         />
         <BearingContext.Provider value={bearingStore}><ZoomContext.Provider value={zoomStore}>{children}</ZoomContext.Provider></BearingContext.Provider>
       </Map>
-      <MapCredit bottomInset={padding?.bottom ?? 0} />
+      <SheetMapCredit bottomInset={padding?.bottom ?? 0} />
     </View>
   );
 });
