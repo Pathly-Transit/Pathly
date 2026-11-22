@@ -6,13 +6,13 @@ const ref = { version: 1, agencyId: 'lirr', routeId: '10', tripId: 'scheduled-tr
 
 test('normal planning has no recovery side effects while triggered recovery preserves exact bounded run refs', () => {
   assert.equal(requiredPlanTripRequest(data).recovery, undefined);
-  const recovery = { excludedRuns: [ref], preferredRoute: { agencyId: 'lirr', routeId: '10' } };
+  const recovery = { excludedRuns: [ref], preferredRoute: { agencyId: 'lirr', routeId: '10' }, incomingRun: ref };
   assert.deepEqual(requiredPlanTripRequest({ ...data, recovery }).recovery, recovery);
   assert.deepEqual(requiredPlanTripRequest({ ...data, recovery: { excludedRuns: [] } }).recovery, { excludedRuns: [] });
 });
 
 test('rejects oversized, malformed and arrival-mode recovery before planner/provider work', () => {
-  for (const recovery of [null, [], { excludedRuns: 'all' }, { excludedRuns: Array(13).fill(ref) }, { excludedRuns: [{ ...ref, boardOccurrence: -1 }] }, { excludedRuns: [], preferredRoute: { agencyId: 'unknown', routeId: '10' } }]) {
+  for (const recovery of [null, [], { excludedRuns: 'all' }, { excludedRuns: Array(13).fill(ref) }, { excludedRuns: [{ ...ref, boardOccurrence: -1 }] }, { excludedRuns: [], preferredRoute: { agencyId: 'unknown', routeId: '10' } }, { excludedRuns: [], incomingRun: null }, { excludedRuns: [], incomingRun: { ...ref, alightOccurrence: -1 } }]) {
     assert.throws(() => requiredPlanTripRequest({ ...data, recovery }), (error) => error.code === 'invalid-argument');
   }
   assert.throws(() => requiredPlanTripRequest({ ...data, time: { mode: 'arrive', at: new Date(Date.now() + 3600_000).toISOString() }, recovery: { excludedRuns: [] } }), (error) => error.code === 'invalid-argument');

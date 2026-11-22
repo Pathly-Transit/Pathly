@@ -32,7 +32,7 @@ import {
 import { legEntrances } from './stationEntrances';
 import { liveTripRefs, type LiveTripRef } from './tripLive';
 import type { TripRunRef } from './tripLiveTypes';
-import { gtfsClock, rememberRunSchedule, scheduleVersionForTimetable } from './tripRunSchedule';
+import { gtfsClock, rememberRunSchedule, resolveSelectedRun, scheduledRun, scheduleVersionForTimetable } from './tripRunSchedule';
 import { recoveryNetwork, type RecoveryCoverage, type RecoveryNetwork } from './tripRecoveryNetwork';
 import { hasWalkingData, walkingMeters, walkingPath } from './walkingGraph';
 
@@ -191,6 +191,8 @@ type PlanContext = {
   time: number;
   bannedRuns?: ReadonlySet<string>;
   firstRoutes?: ReadonlySet<number>;
+  incomingRide?: SearchOptions['incomingRide'];
+  incomingDate?: number;
   baseline?: PlanContext;
   recovery?: RecoveryNetwork;
 };
@@ -236,7 +238,7 @@ function walkableStops(network: TransitNetwork, point: LatLng, lessWalking: bool
 }
 
 function search(context: PlanContext, time: number, extra: Partial<SearchOptions> = {}): Journey[] {
-  const options: SearchOptions = { days: context.days, maxRounds: MAX_ROUNDS, modes: context.modes, horizonSeconds: HORIZON_SECONDS, ...(context.bannedRuns ? { bannedRuns: context.bannedRuns } : {}), ...(context.firstRoutes ? { firstRoutes: context.firstRoutes } : {}), ...extra };
+  const options: SearchOptions = { days: context.days, maxRounds: MAX_ROUNDS, modes: context.modes, horizonSeconds: HORIZON_SECONDS, ...(context.bannedRuns ? { bannedRuns: context.bannedRuns } : {}), ...(context.firstRoutes ? { firstRoutes: context.firstRoutes } : {}), ...(context.incomingRide ? { incomingRide: context.incomingRide } : {}), ...extra };
   const journeys = context.arriveBy
     ? context.router.backward(time, context.access, context.egress, options, context.active)
     : context.router.forward(time, context.access, context.egress, options, context.active);
@@ -613,7 +615,9 @@ function itineraryFor(context: PlanContext, journey: Journey, destinationLabel: 
       const previousTrip = previousRide && (context.recovery?.baselineTrips.get(previousRide.trip) ?? previousRide.trip);
       const nextTrip = context.recovery?.baselineTrips.get(leg.trip) ?? leg.trip;
       const held = previousTrip !== undefined && transferNetwork.timedTransfers.get(previousTrip)?.some(([trip, stop]) => trip === nextTrip && stop === leg.boardStop);
-      step.minimumTransferSeconds = !previousRide ? 0 : transferWalk ? omittedWalkSeconds : held ? 0 : Math.max(0, context.network.stopChangeSeconds[leg.boardStop]!);
+      const incomingMargin = context.incomingRide?.stop === leg.boardStop
+        ? context.incomingRide.heldTrips.includes(leg.trip) ? 0 : Math.max(0, context.network.stopChangeSeconds[leg.boardStop]!) : 0;
+      step.minimumTransferSeconds = !previousRide ? incomingMargin : transferWalk ? omittedWalkSeconds : held ? 0 : Math.max(0, context.network.stopChangeSeconds[leg.boardStop]!);
       steps.push(step);
       previousRide = leg;
       transferWalk = false;
@@ -698,16 +702,46 @@ export async function planTransitTrip({ request, origin, destination, nowMs, est
   const arriveBy = request.time.mode === 'arrive';
   const atMs = request.time.mode === 'now' ? nowMs : Date.parse(request.time.at);
   const { baseStartMs, days } = serviceDaysAround(atMs);
+  const active = network.activeServices(days);
   const lessWalking = request.lessWalking === true;
-  const access = walkableStops(network, origin, lessWalking);
+  let incomingRide: SearchOptions['incomingRide'];
+  let incomingDate: number | undefined;
+  const incoming = request.recovery?.incomingRun;
+  if (incoming) {
+    const part = network.parts.find((entry) => entry.agencyId === incoming.agencyId);
+    let resolved = part ? scheduledRun(part.timetable, incoming) : null;
+    if (resolved && resolved.stops.some((stop) => stop.stopSequence === undefined)) resolved = await resolveSelectedRun(incoming).catch(() => null);
+    const localTrip = part?.timetable.tripIds.indexOf(incoming.tripId) ?? -1;
+    const localStop = part?.timetable.stopIds.indexOf(incoming.alightStopId) ?? -1;
+    const date = Number(incoming.serviceDate);
+    const day = days.findIndex((entry) => entry.date === date);
+    if (!part || !resolved || localTrip < 0 || localStop < 0 || day < 0 || atMs < Date.parse(resolved.arrives)) return [];
+    const stop = part.stopOffset + localStop;
+    if (haversineMeters(origin.lat, origin.lng, network.stopLat[stop]!, network.stopLon[stop]!) > 50) return [];
+    const trip = part.tripOffset + localTrip;
+    incomingDate = date;
+    incomingRide = { trip, stop, heldTrips: (network.timedTransfers.get(trip) ?? []).filter(([target, atStop]) => atStop === stop && active[day]![network.tripService[target]!] === 1).map(([target]) => target) };
+  }
+  const access = walkableStops(network, origin, lessWalking).flatMap((entry) => {
+    if (!incomingRide) return [entry];
+    if (entry.stop === incomingRide.stop) return [];
+    let published: number | undefined;
+    for (let slot = network.transferStart[incomingRide.stop]!; slot < network.transferStart[incomingRide.stop + 1]!; slot += 1) {
+      if (network.transferTo[slot] === entry.stop) { published = network.transferSeconds[slot]!; break; }
+    }
+    if (published !== undefined && published < 0) return [];
+    // This is a transfer walk, including the planner's published/physical walk allowance once.
+    const seconds = published ?? Math.round(entry.meters / WALK_METERS_PER_SECOND) + WALK_TRANSFER_SLACK_SECONDS + network.stationAccessSeconds(incomingRide.stop, entry.stop);
+    return [{ ...entry, seconds }];
+  });
   const egress = walkableStops(network, destination, lessWalking);
-  if (access.length === 0 || egress.length === 0) return [];
+  if ((access.length === 0 && !incomingRide) || egress.length === 0) return [];
   let context: PlanContext = {
     network,
     router,
     walks,
     days,
-    active: network.activeServices(days),
+    active,
     baseStartMs,
     origin,
     destination,
@@ -716,6 +750,7 @@ export async function planTransitTrip({ request, origin, destination, nowMs, est
     egress,
     arriveBy,
     time: Math.round((atMs - baseStartMs) / 1000),
+    ...(incomingRide ? { incomingRide, incomingDate } : {}),
   };
 
   if (request.recovery) {
@@ -730,6 +765,14 @@ export async function planTransitTrip({ request, origin, destination, nowMs, est
     const preferred = request.recovery.preferredRoute;
     const preferredRoutes = preferred ? new Set(recovery.network.routes.flatMap((route, index) => route.agencyId === preferred.agencyId && route.routeId === preferred.routeId ? [index] : [])) : undefined;
     context = { ...context, network: recovery.network, router: new TransitRouter(recovery.network, MAX_ROUNDS), active: recovery.network.activeServices(days), bannedRuns: recovery.bannedRuns, baseline, recovery, ...(preferredRoutes?.size ? { firstRoutes: preferredRoutes } : {}) };
+    if (incomingRide && incomingDate !== undefined) {
+      const fromPart = network.parts.find((part) => incomingRide.trip >= part.tripOffset && incomingRide.trip < part.tripOffset + part.timetable.tripIds.length)!;
+      const intoPart = recovery.network.parts.find((part) => part.agencyId === fromPart.agencyId)!;
+      const day = days.findIndex((entry) => entry.date === incomingDate);
+      const heldTrips = incomingRide.heldTrips.flatMap((target) => [intoPart.tripOffset + target - fromPart.tripOffset,
+        ...[...recovery.liveStops.keys()].filter((trip) => recovery.baselineTrips.get(trip) === target && context.active[day]![recovery.network.tripService[trip]!] === 1)]);
+      context.incomingRide = { ...incomingRide, trip: intoPart.tripOffset + incomingRide.trip - fromPart.tripOffset, heldTrips };
+    }
     if (context.firstRoutes && runSearches(context).length === 0) context.firstRoutes = undefined;
   }
 

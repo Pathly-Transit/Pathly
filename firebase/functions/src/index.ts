@@ -791,7 +791,9 @@ export function requiredPlanTripRequest(data: unknown, nowMs = Date.now()): Plan
       const route = value.preferredRoute as Record<string, unknown>;
       preferredRoute = { agencyId: requiredAgencyId(route.agencyId), routeId: requiredString(route.routeId, 'routeId') };
     }
-    recovery = { excludedRuns, ...(preferredRoute ? { preferredRoute } : {}) };
+    const incomingRun = value.incomingRun === undefined ? undefined
+      : parseTripLiveRequest({ version: 1, legs: [{ legKey: 'incoming', runRef: value.incomingRun }] }).legs[0]!.runRef;
+    recovery = { excludedRuns, ...(preferredRoute ? { preferredRoute } : {}), ...(incomingRun ? { incomingRun } : {}) };
   }
   return {
     origin,

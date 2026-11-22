@@ -104,7 +104,7 @@ type PlanTripRequest = {
   recovery?: TripRecoveryRequest;
 };
 
-export type TripRecoveryRequest = { excludedRuns: TripRunRef[]; preferredRoute?: { agencyId: string; routeId: string } };
+export type TripRecoveryRequest = { excludedRuns: TripRunRef[]; preferredRoute?: { agencyId: string; routeId: string }; incomingRun?: TripRunRef };
 export type TripRecoveryCoverage = { state: 'complete' | 'partial'; scope?: 'candidate-routes'; reasons: string[]; updatedRuns: number };
 
 export const CURRENT_LOCATION_LABEL = 'Current location';

@@ -155,6 +155,40 @@ it('plans from actual GPS, preserves criteria, excludes known cancelled runs and
   expect((result!.itinerary.steps[1] as TransitStep).runRef!.tripId).toBe('bus-next');
 });
 
+it('excludes a proven missed run even when a planner returns a conflicting future prediction for it', async () => {
+  const active = activeFor();
+  callable('planTrip').mockResolvedValue({ data: { itineraries: [nativeJourney(), nextCandidate()] } });
+  const result = await findTripRecovery(active, requestFor(), fixAt(40.799), { kind: 'passed-board', stepIndex: 1, key: 'missed' }, null);
+  expect((result!.itinerary.steps[1] as TransitStep).runRef!.tripId).toBe('bus-next');
+  expect(callable('planTrip')).toHaveBeenCalledWith(expect.objectContaining({ recovery: expect.objectContaining({
+    excludedRuns: [(active.itinerary.steps[1] as TransitStep).runRef],
+  }) }));
+});
+
+it('does not assume an onboard rider can alight at a stop whose forecast is already past', async () => {
+  const active = activeFor();
+  active.cursor = { ...active.cursor, stepIndex: 1, phase: 'riding' };
+  const now = ETA_NOW + 21 * 60_000;
+  (Date.now as jest.Mock).mockReturnValue(now);
+  expect(await findTripRecovery(active, requestFor(), null, { kind: 'connection', stepIndex: 3, key: 'missed-transfer' }, null)).toBeNull();
+  expect(callable('planTrip')).not.toHaveBeenCalled();
+});
+
+it('rechecks the canonical incoming transfer margin after planning returns', async () => {
+  const active = activeFor();
+  active.cursor = { ...active.cursor, stepIndex: 1, phase: 'riding' };
+  const candidate = nextCandidate();
+  const first = candidate.steps[1] as TransitStep;
+  first.from = { ...first.from, time: etaAt(21), location: (active.itinerary.steps[1] as TransitStep).to.location };
+  first.to = { ...first.to, time: etaAt(31) };
+  first.minimumTransferSeconds = 180;
+  candidate.steps = [first]; candidate.transfers = 0;
+  candidate.departureTime = etaAt(21); candidate.arrivalTime = etaAt(31); candidate.durationSeconds = 600;
+  callable('planTrip').mockResolvedValue({ data: { itineraries: [candidate] } });
+  expect(await findTripRecovery(active, requestFor(), null, { kind: 'connection', stepIndex: 3, key: 'missed-transfer' }, null)).toBeNull();
+  expect(callable('planTrip')).toHaveBeenCalledWith(expect.objectContaining({ recovery: expect.objectContaining({ incomingRun: (active.itinerary.steps[1] as TransitStep).runRef }) }));
+});
+
 it('prefers a reachable same-line candidate and rejects a candidate that fresh status cancels', async () => {
   const active = activeFor();
   const same = nextCandidate();

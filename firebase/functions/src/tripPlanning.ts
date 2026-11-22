@@ -16,7 +16,12 @@ export type LatLng = { lat: number; lng: number };
 
 /** A place given by coordinates; an older app can send only a Google place id (resolved in index.ts). */
 export type TripEndpoint = { placeId?: string; lat?: number; lng?: number; label: string };
-export type TripRecoveryRequest = { excludedRuns: TripRunRef[]; preferredRoute?: { agencyId: TripRunRef['agencyId']; routeId: string } };
+export type TripRecoveryRequest = {
+  excludedRuns: TripRunRef[];
+  preferredRoute?: { agencyId: TripRunRef['agencyId']; routeId: string };
+  /** Current onboard run, ending at the recovery origin; preserves its canonical transfer rules. */
+  incomingRun?: TripRunRef;
+};
 export type PlanTripRequest = {
   origin: TripEndpoint;
   destination: TripEndpoint;

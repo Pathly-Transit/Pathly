@@ -144,8 +144,11 @@ export async function findTripRecovery(active: ActiveTripRuntime, request: Resum
     const projection = projectTripTiming(active.itinerary, statuses, now, { cursor: active.cursor });
     const observed = projection.legs.find((leg) => leg.stepIndex === active.cursor.stepIndex)?.observation;
     if (fresh(observed, now) && (observed.status === 'cancelled' || observed.alightSkipped)) return null;
+    const alightAt = Math.max(at(current.to.time), fresh(observed, now) && observed.arrives && !observed.arrivalNoData ? at(observed.arrives) : 0);
+    // A passed forecast cannot prove the rider can still alight at this stop.
+    if (alightAt <= now) return null;
     anchor = { kind: 'coordinate', label: current.to.name, point: { ...current.to.location }, savedAt: now };
-    notBefore = Math.max(now, at(current.to.time), fresh(observed, now) && observed.arrives && !observed.arrivalNoData ? at(observed.arrives) : 0);
+    notBefore = alightAt;
     prefixSteps = active.cursor.stepIndex + 1;
   } else {
     if (!credible(fix, now)) return null;
@@ -165,7 +168,13 @@ export async function findTripRecovery(active: ActiveTripRuntime, request: Resum
       : active.itinerary.steps.slice(prefixSteps).find((step): step is TransitStep => step.kind === 'transit');
     const excludedRuns = (statuses?.legs ?? []).filter((observation) => fresh(observation, now) && observation.status === 'cancelled' && parseTripRunRef(observation.runRef))
       .map((observation) => observation.runRef).slice(0, 12);
-    const recovery = { excludedRuns, ...(affected?.liveRoute ? { preferredRoute: { agencyId: affected.liveRoute.agencyId, routeId: affected.liveRoute.routeId } } : {}) };
+    if (['passed-board', 'unreachable-board', 'connection'].includes(reason.kind) && affected?.runRef
+      && !excludedRuns.some((ref) => serviceKey(ref) === serviceKey(affected.runRef!))) excludedRuns.push(affected.runRef);
+    const excludedKeys = new Set(excludedRuns.map(serviceKey));
+    const containsExcludedRun = (candidate: Itinerary) => candidate.steps.some((step) => step.kind === 'transit'
+      && step.runRef && excludedKeys.has(serviceKey(step.runRef)));
+    const recovery = { excludedRuns, ...(affected?.liveRoute ? { preferredRoute: { agencyId: affected.liveRoute.agencyId, routeId: affected.liveRoute.routeId } } : {}),
+      ...(onBoard && current?.kind === 'transit' && current.runRef ? { incomingRun: current.runRef } : {}) };
     const planned = await planTripAlternativesForRecovery(request, anchor, new Date(notBefore).toISOString(), recovery);
     if (!isCurrent()) return null;
     const sameLine = (candidate: Itinerary) => {
@@ -174,7 +183,7 @@ export async function findTripRecovery(active: ActiveTripRuntime, request: Resum
         && next.liveRoute.agencyId === affected.liveRoute.agencyId && next.liveRoute.routeId === affected.liveRoute.routeId;
     };
     const candidates = planned.itineraries.filter((candidate) => candidate.steps.length > 0 && at(candidate.arrivalTime) >= at(candidate.departureTime)
-      && !knownBad(candidate, statuses, Date.now()))
+      && !containsExcludedRun(candidate) && !knownBad(candidate, statuses, Date.now()))
       .sort((a, b) => Number(Boolean(sameLine(b))) - Number(Boolean(sameLine(a))) || at(a.arrivalTime) - at(b.arrivalTime));
     for (const candidate of candidates.slice(0, 4)) {
       if (!isCurrent()) return null;
@@ -191,7 +200,8 @@ export async function findTripRecovery(active: ActiveTripRuntime, request: Resum
       const first = projection.legs[0];
       if (first) {
         const access = candidate.steps.slice(0, first.stepIndex).reduce((sum, step) => sum + (step.kind === 'walk' ? step.durationSeconds : 0), 0);
-        if (at(first.departs) < Math.max(notBefore, onBoard ? notBefore : checkedAt) + access * 1000) continue;
+        const incomingMargin = onBoard ? (candidate.steps[first.stepIndex] as TransitStep).minimumTransferSeconds ?? 0 : 0;
+        if (at(first.departs) < Math.max(notBefore, onBoard ? notBefore : checkedAt) + (access + incomingMargin) * 1000) continue;
       }
       const prefix = active.itinerary.steps.slice(0, prefixSteps);
       const steps: TripStep[] = [...prefix, ...candidate.steps];
