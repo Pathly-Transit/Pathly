@@ -40,14 +40,12 @@ export function useTripLiveStatus({ uid, sessionId, itinerary, enabled = true }:
   enabled?: boolean;
 }) {
   const appActive = useAppActive();
-  const [, tick] = useState(0);
-  // Returning to the foreground must age data immediately, before the next timer tick.
-  const now = Date.now();
+  const [now, setNow] = useState(() => Date.now());
   const legs = useMemo(() => itinerary ? tripLiveRequests(itinerary).slice(0, 12) : [], [itinerary]);
   const key = JSON.stringify([uid ?? null, sessionId ?? itinerary?.id ?? null, legs]);
   useEffect(() => {
     if (!enabled || !uid || !appActive || legs.length === 0) return undefined;
-    const timer = setInterval(() => tick((value) => value + 1), 5_000);
+    const timer = setInterval(() => setNow(Date.now()), 5_000);
     return () => clearInterval(timer);
   }, [enabled, uid, appActive, legs.length]);
   const [loaded, setLoaded] = useState<{ key: string; data: TripLiveResponse | null; refreshing: boolean } | null>(null);
@@ -62,6 +60,8 @@ export function useTripLiveStatus({ uid, sessionId, itinerary, enabled = true }:
     const isCurrent = () => !cancelled && auth.currentUser?.uid === uid;
     const refresh = async () => {
       if (working || !isCurrent()) return;
+      // Age the previous source as soon as foreground refresh starts, even if the RPC is slow.
+      setNow(Date.now());
       working = true;
       setLoaded((previous) => ({ key, data: previous?.key === key ? previous.data : null, refreshing: true }));
       try {
