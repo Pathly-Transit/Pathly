@@ -1,10 +1,12 @@
-import { fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import mockSafeAreaContext from 'react-native-safe-area-context/jest/mock';
 
 import { RideGuideView, type RideGuideLiveTrip } from '../src/components/RideGuideView';
 import { retimeItinerary } from '../src/data/tripDepartures';
 import { rideAlerts, rideGuideItinerary, ridePath, rideStopTimes, type RideGuideRequest } from '../src/data/rideGuide';
 import { formatTripClock, type TransitStep } from '../src/data/tripPlanning';
+import { projectTripTiming, type TripTimingProjection } from '../src/data/tripTiming';
+import { nativeRun } from './fixtures/nativeJourney';
 import { UserPreferencesProvider } from '../src/data/userPreferences';
 import { AppSettingsProvider } from '../src/theme/AppSettings';
 
@@ -112,10 +114,10 @@ describe('RideGuideView', () => {
   });
   afterEach(() => jest.useRealTimers());
 
-  const renderGuide = (onStart = jest.fn(), live: RideGuideLiveTrip | null = null) => render(
+  const renderGuide = (onStart = jest.fn(), live: RideGuideLiveTrip | null = null, guide = request(), timing: TripTimingProjection | null = null) => render(
     <AppSettingsProvider>
       <UserPreferencesProvider>
-        <RideGuideView live={live} onBack={jest.fn()} onEnd={jest.fn()} onStart={onStart} request={request()} riderLocation={null} />
+        <RideGuideView live={live} onBack={jest.fn()} onEnd={jest.fn()} onStart={onStart} request={guide} riderLocation={null} timing={timing} />
       </UserPreferencesProvider>
     </AppSettingsProvider>,
   );
@@ -175,5 +177,51 @@ describe('RideGuideView', () => {
     fireEvent.press(screen.getByTestId('ride-guide-stop-picker'));
     expect(screen.getByTestId('ride-guide-stop-time-1')).toHaveTextContent(formatTripClock(new Date(NOW + 30 * 60_000).toISOString()));
     expect(screen.queryByTestId('ride-guide-favorite')).toBeNull();
+  });
+
+  const canonicalRide = () => {
+    const guide = request({ departures: [{ minutes: 6, live: true, tripId: 'bus-a', serviceDate: '20261104', stopId: 'a', directionId: 0, departureTime: new Date(NOW + 6 * 60_000).toISOString() }] });
+    const provisional = rideGuideItinerary(guide, 3)!;
+    const leg = ride(provisional);
+    const ref = nativeRun({ serviceDate: '20261104', alightStopId: 'd' });
+    const itinerary = { ...provisional, departureTime: new Date(NOW - 60_000).toISOString(), arrivalTime: new Date(NOW + 22 * 60_000).toISOString(),
+      steps: provisional.steps.map((step) => step === leg ? { ...leg, tripId: ref.tripId, runRef: ref,
+        from: { ...leg.from, time: new Date(NOW + 2 * 60_000).toISOString() }, to: { ...leg.to, time: new Date(NOW + 22 * 60_000).toISOString() } } : step) };
+    const live = { itinerary, guidance: { phase: 'walking', currentAction: 'Walk to Main St', nextAction: 'Board 51', remainingStops: null } as RideGuideLiveTrip['guidance'] };
+    return { guide, live, ref };
+  };
+
+  it('keeps the canonical selected run across past-departure clock ticks without restarting its provisional estimate', async () => {
+    const { guide, live } = canonicalRide();
+    const onStart = jest.fn();
+    renderGuide(onStart, live, guide);
+    await act(async () => { jest.advanceTimersByTime(10 * 60_000); });
+    expect(onStart).not.toHaveBeenCalled();
+    expect(screen.getByTestId('ride-guide-arrive-time')).toHaveTextContent(formatTripClock(live.itinerary.arrivalTime));
+  });
+
+  it('changes an explicit canonical alighting choice once without restarting on subsequent clock ticks', async () => {
+    const { guide, live } = canonicalRide();
+    const onStart = jest.fn();
+    renderGuide(onStart, live, guide);
+    fireEvent.press(screen.getByTestId('ride-guide-stop-picker'));
+    fireEvent.press(screen.getByTestId('ride-guide-stop-2'));
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(ride(onStart.mock.calls[0]![0]).runSeed).toMatchObject({ tripId: 'bus-a', alightStopId: 'c' });
+    await act(async () => { jest.advanceTimersByTime(60_000); });
+    expect(onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the shared exact-run live projection while preserving the canonical selection', () => {
+    const { guide, live, ref } = canonicalRide();
+    const arrival = new Date(NOW + 42 * 60_000).toISOString();
+    const timing = projectTripTiming(live.itinerary, { version: 1, fetchedAt: NOW, legs: [{ legKey: '1', runRef: ref,
+      state: 'fresh', status: 'predicted', observedAt: NOW, expiresAt: NOW + 90_000,
+      departs: new Date(NOW + 22 * 60_000).toISOString(), arrives: arrival }] }, NOW);
+    const onStart = jest.fn();
+    renderGuide(onStart, live, guide, timing);
+    expect(screen.getByTestId('ride-guide-arrive-time')).toHaveTextContent(formatTripClock(arrival));
+    expect(onStart).not.toHaveBeenCalled();
+    expect(live.itinerary.arrivalTime).toBe(new Date(NOW + 22 * 60_000).toISOString());
   });
 });

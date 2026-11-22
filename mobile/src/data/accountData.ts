@@ -16,6 +16,7 @@ import { unregisterRouteAlerts } from '../lib/routeAlertRegistration';
 import { navigationStorageKey } from './navigationStorage';
 import { endRideSession } from './rideTracking';
 import { preferencesKey } from './userPreferences';
+import { TRIP_DISRUPTION_STORAGE_PREFIX } from './tripDisruptionStorage';
 
 /**
  * Account actions behind Settings -> Account details and Privacy: renaming, password reset,
@@ -149,7 +150,7 @@ async function eraseAccount(user: User): Promise<void> {
   }
   await deleteDoc(doc(db, 'users', user.uid));
   await endRideSession();
-  await AsyncStorage.multiRemove([preferencesKey(user.uid), navigationStorageKey(user.uid)]).catch(() => undefined);
+  await AsyncStorage.multiRemove([preferencesKey(user.uid), navigationStorageKey(user.uid), `${TRIP_DISRUPTION_STORAGE_PREFIX}${user.uid}`]).catch(() => undefined);
   await deleteUser(user);
 }
 

@@ -39,6 +39,11 @@ export type SearchOptions = {
   modes: ReadonlySet<TransitMode>;
   bannedRoutes?: ReadonlySet<number>;
   bannedTrips?: ReadonlySet<number>;
+  bannedRuns?: ReadonlySet<string>;
+  /** Forward recovery can prefer the existing line on its first ride without banning later transfers. */
+  firstRoutes?: ReadonlySet<number>;
+  /** Recovery begins after this ride at `departs`, rather than as a fresh street origin. */
+  incomingRide?: { trip: number; stop: number; heldTrips: readonly number[] };
   /** How long after leaving (or before arriving) a trip may take at most, in seconds. */
   horizonSeconds: number;
 };
@@ -114,7 +119,8 @@ export class TransitRouter {
   }
 
   private isTripUsable(trip: number, day: number): boolean {
-    return this.active[day]![this.network.tripService[trip]!] === 1 && !this.options.bannedTrips?.has(trip);
+    return this.active[day]![this.network.tripService[trip]!] === 1 && !this.options.bannedTrips?.has(trip)
+      && !this.options.bannedRuns?.has(`${trip}@${this.options.days[day]!.date}`);
   }
 
   /** The first trip of `pattern` leaving `position` at or after `time`, over every service day. */
@@ -191,7 +197,17 @@ export class TransitRouter {
 
     let markedList: number[] = [];
     const start = this.rounds[0]!;
+    if (options.incomingRide) {
+      const { stop, trip } = options.incomingRide;
+      start.byRide[stop] = departs;
+      start.trip[stop] = trip;
+      start.walkSeconds[stop] = 0;
+      best[stop] = departs;
+      marked[stop] = 1;
+      markedList.push(stop);
+    }
     for (const { stop, seconds } of access) {
+      if (stop === options.incomingRide?.stop) continue;
       const time = departs + seconds;
       if (time < start.byWalk[stop]!) {
         start.byWalk[stop] = time;
@@ -217,7 +233,7 @@ export class TransitRouter {
         marked[stop] = 0;
         for (let slot = stopPatternStart[stop]!; slot < stopPatternStart[stop + 1]!; slot += 1) {
           const pattern = stopPatternPattern[slot]!;
-          if (!patternAllowed[pattern]) continue;
+          if (!patternAllowed[pattern] || (round === 1 && options.firstRoutes && !options.firstRoutes.has(network.patternRoute[pattern]!))) continue;
           const position = stopPatternPosition[slot]!;
           const queued = queuePosition[pattern]!;
           if (queued < 0) {
@@ -277,13 +293,14 @@ export class TransitRouter {
           let foundVia = walkReady <= rideReady ? 1 : 0;
           // A timed transfer the feed promises to hold: no change time needed.
           if (byRide < INF) {
-            const held = timedTransfers.get(previous.trip[stop]!);
+            const held = round === 1 && stop === options.incomingRide?.stop
+              ? options.incomingRide.heldTrips.map((trip): [number, number] => [trip, stop]) : timedTransfers.get(previous.trip[stop]!);
             if (held) {
               for (const [heldTrip, heldStop] of held) {
                 if (heldStop !== stop || tripPattern[heldTrip] !== pattern) continue;
                 for (let heldDay = 0; heldDay < options.days.length; heldDay += 1) {
                   const heldDeparts = tripStart[heldTrip]! + profileDep[tripProfileOffset[heldTrip]! + position]! + options.days[heldDay]!.offset;
-                  if (heldDeparts >= byRide && this.active[heldDay]![tripService[heldTrip]!] === 1 && (!found || heldDeparts < found.departs)) {
+                  if (heldDeparts >= byRide && this.isTripUsable(heldTrip, heldDay) && (!found || heldDeparts < found.departs)) {
                     found = { trip: heldTrip, day: heldDay, departs: heldDeparts };
                     foundVia = 0;
                   }

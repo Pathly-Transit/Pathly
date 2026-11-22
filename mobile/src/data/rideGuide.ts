@@ -2,6 +2,9 @@ import { distanceMeters } from './enrouteNavigation';
 import type { RouteNotice } from './routeNotices';
 import type { RoutePrediction, ServiceAlert } from './transit';
 import type { Itinerary, LatLng, TransitStep, TripMode, TripStep } from './tripPlanning';
+import { auth, callable } from '../lib/firebase';
+import type { ResolveRideGuideRunRequest, ResolveRideGuideRunResponse } from './tripLiveTypes';
+import { parseRideRunSeed, parseTripRunRef, rideRunSeedKey } from './tripRunRef';
 
 /**
  * Route View's GO: one line, ridden from the rider's stop to a stop they pick, in the shape of a
@@ -119,7 +122,15 @@ export function rideGuideItinerary(request: RideGuideRequest, alightIndex: numbe
   if (!board || !alight || lastIndex < 1 || !picked) return null;
 
   const rideMs = Math.max(0, alight.offsetMinutes - board.offsetMinutes) * MINUTE_MS;
-  const departsAt = (prediction: RoutePrediction) => capturedAt + Math.max(0, prediction.minutes) * MINUTE_MS;
+  const departsAt = (prediction: RoutePrediction) => prediction.departureTime && Number.isFinite(Date.parse(prediction.departureTime))
+    ? Date.parse(prediction.departureTime) : capturedAt + Math.max(0, prediction.minutes) * MINUTE_MS;
+  const seedFor = (prediction: RoutePrediction) => (!prediction.stopId || prediction.stopId === board.stopId) ? parseRideRunSeed({
+    version: 1, agencyId: request.agencyId, routeId: request.routeIdAtAgency,
+    tripId: prediction.tripId, serviceDate: prediction.serviceDate, startTime: prediction.startTime,
+    directionId: prediction.directionId ?? request.directionId, boardStopId: board.stopId, alightStopId: alight.stopId,
+    boardStopSequence: prediction.stopSequence,
+  }) : null;
+  const runSeed = seedFor(picked);
   const stopTime = (start: number, stop: RideGuideStop) => iso(start + Math.max(0, stop.offsetMinutes - board.offsetMinutes) * MINUTE_MS);
   const between = stops.slice(1, lastIndex);
   const start = departsAt(picked);
@@ -134,11 +145,13 @@ export function rideGuideItinerary(request: RideGuideRequest, alightIndex: numbe
     to: { name: alight.name, location: toLatLng(alight), time: iso(start + rideMs) },
     stopCount: lastIndex,
     durationSeconds: rideMs / 1000,
+    ...(runSeed ? { runSeed } : {}),
     path: ridePath(stops.slice(0, lastIndex + 1), request.path),
     stops: between.map((stop) => ({ name: stop.name, location: toLatLng(stop), time: stopTime(start, stop) })),
     departures: departures.map((prediction) => {
       const leaves = departsAt(prediction);
-      return { departs: iso(leaves), arrives: iso(leaves + rideMs), stopTimes: between.map((stop) => stopTime(leaves, stop)) };
+      const seed = seedFor(prediction);
+      return { departs: iso(leaves), arrives: iso(leaves + rideMs), stopTimes: between.map((stop) => stopTime(leaves, stop)), ...(seed ? { runSeed: seed } : {}) };
     }),
     ...(request.agencyId && request.routeIdAtAgency && board.stopId ? {
       liveRoute: {
@@ -172,6 +185,85 @@ export function rideGuideItinerary(request: RideGuideRequest, alightIndex: numbe
     transfers: 0,
     steps,
   };
+}
+
+const resolveRideRun = callable<ResolveRideGuideRunRequest, ResolveRideGuideRunResponse>('resolveRideGuideRun');
+const validPoint = (point: LatLng) => point && Number.isFinite(point.lat) && Number.isFinite(point.lng) && Math.abs(point.lat) <= 90 && Math.abs(point.lng) <= 180;
+
+function matchesSeed(seed: ResolveRideGuideRunRequest, ref: NonNullable<TransitStep['runRef']>): boolean {
+  const tripMatches = ref.tripId === seed.tripId || (seed.agencyId === 'subway'
+    && (ref.tripId.endsWith(`_${seed.tripId}`) || (/^\d{6}_[A-Za-z0-9]+\.\.[NS]$/.test(seed.tripId)
+      && ref.tripId.includes(`_${seed.tripId}`) && /^\d+R$/.test(ref.tripId.slice(ref.tripId.lastIndexOf(`_${seed.tripId}`) + seed.tripId.length + 1)))));
+  return tripMatches && ref.agencyId === seed.agencyId && ref.routeId === seed.routeId && ref.serviceDate === seed.serviceDate
+    && ref.boardStopId === seed.boardStopId && ref.alightStopId === seed.alightStopId
+    && (seed.startTime === undefined || ref.startTime === seed.startTime)
+    && (seed.directionId === undefined || ref.directionId === seed.directionId)
+    && (seed.boardOccurrence === undefined || ref.boardOccurrence === seed.boardOccurrence)
+    && (seed.alightOccurrence === undefined || ref.alightOccurrence === seed.alightOccurrence)
+    && (seed.boardStopSequence === undefined || ref.boardStopSequence === seed.boardStopSequence)
+    && (seed.alightStopSequence === undefined || ref.alightStopSequence === seed.alightStopSequence);
+}
+
+/** Resolve only the exact chosen run. Missing proof keeps the existing schedule-only ride. */
+export async function enrichRideGuideItinerary(itinerary: Itinerary, { isCurrent }: { isCurrent?: () => boolean } = {}): Promise<Itinerary | null> {
+  const owner = auth?.currentUser?.uid ?? null;
+  const current = () => isCurrent?.() !== false && (auth?.currentUser?.uid ?? null) === owner;
+  if (!current()) return null;
+  const legIndex = itinerary.steps.findIndex((step) => step.kind === 'transit');
+  const leg = itinerary.steps[legIndex];
+  if (!itinerary.id.startsWith('ride:') || leg?.kind !== 'transit' || itinerary.steps.filter((step) => step.kind === 'transit').length !== 1) return itinerary;
+  const seed = parseRideRunSeed(leg.runSeed);
+  if (!seed) return itinerary;
+  if (leg.runRef && matchesSeed(seed, leg.runRef)) return itinerary;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const response = await Promise.race([
+      resolveRideRun(seed).then(({ data }) => data),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 2_800); }),
+    ]);
+    if (!current()) return null;
+    if (response?.version !== 1 || response.status !== 'resolved') return itinerary;
+    const ref = parseTripRunRef(response.runRef);
+    if (!ref || !matchesSeed(seed, ref) || !Array.isArray(response.stops) || response.stops.length < 2 || response.stops.length > 512) return itinerary;
+    const departs = Date.parse(response.departs);
+    const arrives = Date.parse(response.arrives);
+    if (!Number.isFinite(departs) || !Number.isFinite(arrives) || arrives < departs || arrives - departs > 172_800_000) return itinerary;
+    const stops = response.stops;
+    let previous = -Infinity;
+    for (const stop of stops) {
+      const arrival = Date.parse(stop.arrives);
+      const departure = Date.parse(stop.departs);
+      if (!stop.stopId || !stop.name || !validPoint(stop.location) || !Number.isSafeInteger(stop.occurrence) || stop.occurrence < 0
+        || !Number.isFinite(arrival) || !Number.isFinite(departure) || arrival < previous || departure < arrival) return itinerary;
+      previous = departure;
+    }
+    const first = stops[0]!;
+    const last = stops.at(-1)!;
+    if (first.stopId !== ref.boardStopId || first.occurrence !== ref.boardOccurrence || last.stopId !== ref.alightStopId || last.occurrence !== ref.alightOccurrence
+      || first.departs !== response.departs || last.arrives !== response.arrives
+      || distanceMeters(first.location, leg.from.location) > 100 || distanceMeters(last.location, leg.to.location) > 100) return itinerary;
+    const originalStops = [leg.from, ...(leg.stops ?? []), leg.to];
+    const sameShape = originalStops.length === stops.length && originalStops.every((stop, index) => distanceMeters(stop.location, stops[index]!.location) <= 50);
+    const { live: _live, connection: _connection, ...immutable } = leg;
+    const canonical: TransitStep = {
+      ...immutable, tripId: ref.tripId, runRef: ref, runSeed: seed,
+      from: { ...leg.from, time: response.departs }, to: { ...leg.to, time: response.arrives },
+      durationSeconds: (arrives - departs) / 1000, stopCount: stops.length - 1,
+      stops: stops.slice(1, -1).map((stop) => ({ name: stop.name, location: stop.location, time: stop.arrives })),
+      path: sameShape ? leg.path : [leg.from.location, ...stops.map((stop) => stop.location), leg.to.location],
+      liveRoute: { agencyId: ref.agencyId, routeId: ref.routeId, boardStopId: ref.boardStopId, alightStopId: ref.alightStopId, ...(ref.directionId === undefined ? {} : { directionId: ref.directionId }) },
+      departures: leg.departures?.map((option) => option.runSeed && rideRunSeedKey(option.runSeed) === rideRunSeedKey(seed)
+        ? { ...option, departs: response.departs, arrives: response.arrives, stopTimes: stops.slice(1, -1).map((stop) => stop.arrives), runRef: ref } : option),
+    };
+    const walkSeconds = itinerary.steps.slice(0, legIndex).reduce((sum, step) => sum + step.durationSeconds, 0);
+    const departureTime = iso(departs - walkSeconds * 1000);
+    return { ...itinerary, steps: itinerary.steps.map((step, index) => index === legIndex ? canonical : step), departureTime,
+      arrivalTime: response.arrives, durationSeconds: (arrives - Date.parse(departureTime)) / 1000 };
+  } catch {
+    return current() ? itinerary : null;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /** Each stop after the boarding one with when the ride gets there, for the "Getting off at" list. */

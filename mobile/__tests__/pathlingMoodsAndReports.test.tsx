@@ -82,9 +82,9 @@ describe('trip card live signal', () => {
   const model = { legs: [{ shortName: '7' }] };
   const vehicle = { lineKey: 'subway:7:1' };
 
-  it('follows a vehicle shown on the map for a ride leaving soon', () => {
+  it('does not label scheduled times live just because the map shows a vehicle on that line', () => {
     const shown = withMapLive(model, { steps: [ride('2026-11-03T15:10:00Z')] }, [vehicle], now);
-    expect(shown.legs[0].live).toBe(true);
+    expect(shown.legs[0].live).toBeUndefined();
   });
 
   it('stays off for a later departure or a line with no vehicle shown', () => {

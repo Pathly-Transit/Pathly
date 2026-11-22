@@ -141,6 +141,19 @@ describe('planTrip', () => {
 describe('resume planning', () => {
   afterEach(() => setRequestLogEnabled(false));
 
+  it('preserves ferry-only requests and ferry exclusion through planning and recovery', async () => {
+    const ferryOnly = createResumePlanRequest(options({ modes: [] }))!;
+    expect(ferryOnly.modes).toEqual([]);
+    await planTripForResume(ferryOnly, createTripSelectionIdentity(fixture[0]!));
+    expect(planTripMock()).toHaveBeenLastCalledWith(expect.objectContaining({ modes: [] }));
+
+    const result = await planTrip(options({ ferry: false, refresh: true }));
+    expect(result.ok && result.resumeRequest.ferry).toBe(false);
+    if (!result.ok) throw new Error('Expected fixture plan');
+    await planTripForResume(result.resumeRequest, createTripSelectionIdentity(fixture[0]!));
+    expect(planTripMock()).toHaveBeenLastCalledWith(expect.objectContaining({ ferry: false }));
+  });
+
   it('captures now as an absolute departure and sends that same instant after relaunch', async () => {
     const request = createResumePlanRequest(options(), Date.parse('2026-10-14T12:30:00Z'));
     expect(request).toEqual({

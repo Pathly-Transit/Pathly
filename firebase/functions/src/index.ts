@@ -40,7 +40,8 @@ import { getRouteStatus } from './gtfsStatus';
 import { isInServiceArea } from './serviceArea';
 import { lookupStations, searchStops, type StationLookup } from './stopSearch';
 import { createFareEstimator } from './tripFares';
-import { planTransitTrip } from './tripPlanner';
+import { planTransitTrip, recoveryCoverageFor } from './tripPlanner';
+import type { RecoveryCoverage } from './tripRecoveryNetwork';
 import {
   MAX_WALK_ONLY_MINUTES,
   type Itinerary,
@@ -54,6 +55,9 @@ import {
 } from './tripPlanning';
 import { walkingPath } from './walkingGraph';
 import { addLiveStatus } from './tripLive';
+import { parseTripLiveRequest, selectedTripStatus } from './selectedTripStatus';
+import { parseResolveRideGuideRunRequest, resolveRideGuideRun as resolveRideGuideSelection } from './rideGuideRun';
+import type { ResolveRideGuideRunRequest, TripLiveRequest } from './tripLiveTypes';
 import { withStopEntrances } from './stationEntrances';
 
 const CALLABLE_RUNTIME_SERVICE_ACCOUNT = 'pathly-callable-runtime@pathly-b7f0f.iam.gserviceaccount.com';
@@ -90,6 +94,9 @@ const RATE_LIMITS = {
   getRouteLiveStatus: { userPerMinute: 600 },
   // One batch per refresh of the cards on screen (every 15 s, plus on scrolling and moving).
   getRoutesLiveStatus: { userPerMinute: 120 },
+  // One bounded batch for the selected journey, normally every 15–30 seconds while active.
+  getTripLiveStatus: { userPerMinute: 30 },
+  resolveRideGuideRun: { userPerMinute: 30 },
   // Opened on demand from route detail's "More departures" card.
   getStopDepartures: { userPerMinute: 60 },
   findNearbyTransit: { userPerMinute: 30 },
@@ -274,6 +281,27 @@ export const getRouteLiveStatus = onCall<RouteLiveStatusRequest>({ ...liveStatus
   const data = request.data ?? ({} as RouteLiveStatusRequest);
   await prepareAgencyStaticData(requiredAgencyId(data.agencyId));
   return routeLiveStatus(data, uid);
+});
+
+/** Predictions and disruption facts for exact selected runs; never invokes the route planner. */
+export const getTripLiveStatus = onCall<TripLiveRequest>({ ...liveStatusCallableOptions, minInstances: 0, secrets: liveFeedSecrets }, async (request) => {
+  await enforceCallableSecurity(request, 'getTripLiveStatus', RATE_LIMITS.getTripLiveStatus);
+  const data = parseTripLiveRequest(request.data);
+  const unavailableAgencies = new Set<AgencyId>();
+  // Complete root switches before parallel reads; a timed-out live lookup cannot race a later
+  // request's snapshot preparation. A failed agency leaves the other legs independently usable.
+  for (const agencyId of new Set(data.legs.map(({ runRef }) => runRef.agencyId))) {
+    try { await prepareAgencyStaticData(agencyId); } catch { unavailableAgencies.add(agencyId); }
+  }
+  return selectedTripStatus(data, { unavailableAgencies });
+});
+
+/** Give Route View's exact chosen departure a canonical active-trip reference, without rerouting. */
+export const resolveRideGuideRun = onCall<ResolveRideGuideRunRequest>({ ...protectedCallableOptions, minInstances: 0 }, async (request) => {
+  await enforceCallableSecurity(request, 'resolveRideGuideRun', RATE_LIMITS.resolveRideGuideRun);
+  const data = parseResolveRideGuideRunRequest(request.data);
+  try { await prepareAgencyStaticData(data.agencyId); } catch { return { version: 1 as const, status: 'unknown' as const, reason: 'unavailable' as const }; }
+  return resolveRideGuideSelection(data);
 });
 
 /** One route's live status — the shared body of getRouteLiveStatus and getRoutesLiveStatus. Its agency's static data must already be prepared. */
@@ -761,6 +789,22 @@ export function requiredPlanTripRequest(data: unknown, nowMs = Date.now()): Plan
   if (request.lessWalking !== undefined && typeof request.lessWalking !== 'boolean') throw badTripRequest('lessWalking is invalid');
   const walkOnly = request.walkOnlyMaxMinutes;
   if (walkOnly !== undefined && (typeof walkOnly !== 'number' || !Number.isInteger(walkOnly) || walkOnly < 1 || walkOnly > MAX_WALK_ONLY_MINUTES)) throw badTripRequest('walkOnlyMaxMinutes is invalid');
+  let recovery: PlanTripRequest['recovery'];
+  if (request.recovery !== undefined) {
+    if (!request.recovery || typeof request.recovery !== 'object' || Array.isArray(request.recovery) || tripTime.mode === 'arrive') throw badTripRequest('recovery requires a departure request');
+    const value = request.recovery as Record<string, unknown>;
+    if (!Array.isArray(value.excludedRuns) || value.excludedRuns.length > 12) throw badTripRequest('recovery.excludedRuns is invalid');
+    const excludedRuns = value.excludedRuns.length ? parseTripLiveRequest({ version: 1, legs: value.excludedRuns.map((runRef, index) => ({ legKey: String(index), runRef })) }).legs.map((leg) => leg.runRef) : [];
+    let preferredRoute: NonNullable<PlanTripRequest['recovery']>['preferredRoute'];
+    if (value.preferredRoute !== undefined) {
+      if (!value.preferredRoute || typeof value.preferredRoute !== 'object' || Array.isArray(value.preferredRoute)) throw badTripRequest('recovery.preferredRoute is invalid');
+      const route = value.preferredRoute as Record<string, unknown>;
+      preferredRoute = { agencyId: requiredAgencyId(route.agencyId), routeId: requiredString(route.routeId, 'routeId') };
+    }
+    const incomingRun = value.incomingRun === undefined ? undefined
+      : parseTripLiveRequest({ version: 1, legs: [{ legKey: 'incoming', runRef: value.incomingRun }] }).legs[0]!.runRef;
+    recovery = { excludedRuns, ...(preferredRoute ? { preferredRoute } : {}), ...(incomingRun ? { incomingRun } : {}) };
+  }
   return {
     origin,
     destination,
@@ -770,6 +814,7 @@ export function requiredPlanTripRequest(data: unknown, nowMs = Date.now()): Plan
     ...(request.ferry === false ? { ferry: false } : {}),
     ...(request.lessWalking === true ? { lessWalking: true } : {}),
     ...(walkOnly !== undefined ? { walkOnlyMaxMinutes: walkOnly } : {}),
+    ...(recovery ? { recovery } : {}),
   };
 }
 
@@ -807,7 +852,7 @@ export function setTransitPlannerForTests(planner: typeof planTransitTrip | unde
  * transit trip gets there.
  * Client call: httpsCallable(functions, 'planTrip')({ origin, destination, time, preference, modes, ferry?, lessWalking?, walkOnlyMaxMinutes? }).
  */
-export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary[] }>>(
+export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary[]; recoveryCoverage?: RecoveryCoverage }>>(
   // The bus feeds' keys for the live check (NYC, Suffolk, and NICE buses, tripLive.ts); the Maps key
   // only locates a place sent without coordinates. Every agency's timetable is held for planning.
   // A new instance first loads every timetable and builds the network, which took over a minute on
@@ -834,7 +879,8 @@ export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary
     const walkOnly = walkOnlyOption(trip, origin, destination, nowMs, itineraries);
     if (walkOnly) itineraries.push(walkOnly);
     // Each leg against the agencies' live feeds: cancelled trips, live times, missed connections.
-    return { itineraries: await addLiveStatus(itineraries, TRIP_LIVE_BUDGET_MS, nowMs, tripLiveLookup, undefined, tripAlertsLookup) };
+    const recoveryCoverage = recoveryCoverageFor(itineraries);
+    return { itineraries: await addLiveStatus(itineraries, TRIP_LIVE_BUDGET_MS, nowMs, tripLiveLookup, undefined, tripAlertsLookup), ...(recoveryCoverage ? { recoveryCoverage } : {}) };
   },
 );
 

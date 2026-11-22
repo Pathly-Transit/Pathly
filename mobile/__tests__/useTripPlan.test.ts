@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react-native';
+import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { httpsCallable } from 'firebase/functions';
 
 import { clearTripPlanCache, CURRENT_LOCATION_LABEL } from '../src/data/tripPlanning';
@@ -54,4 +54,17 @@ it('plans a Recent with a saved Current location coordinate without waiting for 
   hook.rerender({ location: { latitude: 40.9, longitude: -73.1 }, locationPending: false });
   await waitFor(() => expect(hook.result.current.state.status).toBe('loaded'));
   expect(planTripMock()).toHaveBeenCalledTimes(1);
+});
+
+it('does not start overlapping route searches when refresh is pressed while planning is pending', async () => {
+  let resolve!: (value: { data: { itineraries: [] } }) => void;
+  planTripMock().mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+  const hook = renderHook(() => useTripPlan({ endpoints: { origin: CURRENT_LOCATION_LABEL, originPlace: savedOrigin, destination: destination.title, destinationPlace: destination },
+    time: { mode: 'now' }, preference: 'fastest', modes: ['bus'], location: null, locationPending: false }));
+  await waitFor(() => expect(planTripMock()).toHaveBeenCalledTimes(1));
+  act(() => { hook.result.current.refresh(); hook.result.current.refresh(); });
+  expect(planTripMock()).toHaveBeenCalledTimes(1);
+  await act(async () => { resolve({ data: { itineraries: [] } }); });
+  expect(hook.result.current.state.status).toBe('loaded');
+  hook.unmount();
 });

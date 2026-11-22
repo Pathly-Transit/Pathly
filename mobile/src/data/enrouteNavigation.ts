@@ -1,5 +1,7 @@
 import { isPathAgency, pathHeadsign } from './pathLines';
 import type { Itinerary, LatLng, TransitStep, TripStep } from './tripPlanning';
+import type { TripRunRef } from './tripLiveTypes';
+import { parseTripRunRef, tripRunRefKey } from './tripRunRef';
 
 export type NavigationPhase = 'walking' | 'waiting-to-board' | 'riding' | 'transferring' | 'arrived';
 export type NavigationCheckpointKind = 'start' | 'walk' | 'board' | 'transit-stop' | 'alight' | 'destination';
@@ -30,6 +32,8 @@ export type TripSelectionIdentity = {
   walks?: TripWalkEvidence[];
   /** Exact v1 evidence lets an in-progress trip survive an app update when the provider reply is unchanged. */
   legacy?: LegacyTripSelectionEvidence;
+  /** Native schedule proof is independent of the planner's result/group ID. */
+  native?: { version: 1; fingerprint: string; runRefs: TripRunRef[] };
 };
 
 export type TripEndpointReference =
@@ -67,6 +71,8 @@ export type NavigationRouteSegment = {
   startCheckpointOrdinal: number;
   endCheckpointOrdinal: number;
   transitLegIndex?: number;
+  /** Exact service date/run/stop visits, independent of the itinerary's remaining tail. */
+  runKey?: string;
   line?: NavigationLine;
   headsign?: string;
   departureTime?: string;
@@ -87,6 +93,15 @@ export type NormalizedNavigationPlan = {
   departureTime: string;
   arrivalTime: string;
   destinationName: string;
+  /** Transient display projection; the selected schedule/identity remains unchanged. */
+  timing?: NavigationTiming;
+};
+
+export type NavigationTiming = {
+  confidence: 'scheduled' | 'estimated' | 'live' | 'stale' | 'unavailable';
+  observedAt: number | null;
+  expiresAt: number | null;
+  arrivalTime: string | null;
 };
 
 export type NavigationCursor = {
@@ -136,6 +151,7 @@ export type NavigationGuidance = {
   arrivalTime: string;
   distanceMeters: number | null;
   durationSeconds: number | null;
+  timing?: NavigationTiming;
 };
 
 export type StartTripInput = {
@@ -337,6 +353,13 @@ export function createTripSelectionIdentity(itinerary: Itinerary): TripSelection
   // walking-only trips use their request time plus the bounded evidence above.
   const departureTime = transits[0]?.from.time ?? itinerary.departureTime;
   const arrivalTime = transits.at(-1)?.to.time ?? itinerary.arrivalTime;
+  const runRefs = transits.map((step) => parseTripRunRef(step.runRef));
+  const native = transits.length > 0 && runRefs.every((ref) => ref !== null)
+    ? { version: 1 as const, runRefs: runRefs as TripRunRef[], fingerprint: digestSelection(JSON.stringify(transits.map((step, index) => ({
+      run: tripRunRefKey(runRefs[index]!), mode: step.mode, from: canonicalStop(step.from), to: canonicalStop(step.to), stopCount: step.stopCount,
+      minimumTransferSeconds: step.minimumTransferSeconds ?? 0,
+    }))), 2) }
+    : undefined;
   const canonical = transits.length > 0
     ? {
       itineraryId: itinerary.id,
@@ -364,11 +387,17 @@ export function createTripSelectionIdentity(itinerary: Itinerary): TripSelection
     ...(transits.length > 0 ? { tripIds: transits.map((step) => step.tripId ?? null) } : {}),
     walks,
     legacy: legacySelectionEvidence(itinerary),
+    ...(native ? { native } : {}),
   };
 }
 
 export function sameTripSelection(a: TripSelectionIdentity, b: TripSelectionIdentity): boolean {
-  if (!compatibleTripIds(a, b) || a.itineraryId !== b.itineraryId) return false;
+  if (!compatibleTripIds(a, b)) return false;
+  if (a.native && b.native) return a.native.fingerprint === b.native.fingerprint
+    && a.native.runRefs.length === b.native.runRefs.length
+    && a.native.runRefs.every((ref, index) => tripRunRefKey(ref) === tripRunRefKey(b.native!.runRefs[index]!))
+    && a.departureTime === b.departureTime && a.arrivalTime === b.arrivalTime && compatibleWalks(a, b);
+  if (a.itineraryId !== b.itineraryId) return false;
   if (a.version === 1 && b.version === 1) {
     return a.departureTime === b.departureTime
       && a.arrivalTime === b.arrivalTime
@@ -536,6 +565,7 @@ export function normalizeItinerary(itinerary: Itinerary, options: NormalizeItine
     segments.push({
       stepIndex,
       kind: 'transit',
+      ...(parseTripRunRef(step.runRef) ? { runKey: tripRunRefKey(step.runRef!) } : {}),
       path,
       color: step.line.color,
       startCheckpointOrdinal: board.ordinal,
@@ -843,5 +873,6 @@ export function guidanceForNavigation(plan: NormalizedNavigationPlan, cursor: Na
     arrivalTime: plan.arrivalTime,
     distanceMeters: segment?.kind === 'walk' ? segment.distanceMeters ?? null : null,
     durationSeconds: segment?.durationSeconds ?? null,
+    ...(plan.timing ? { timing: plan.timing } : {}),
   };
 }

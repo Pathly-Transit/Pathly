@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { addConnections, addLiveStatus, alertAffectsLeg, isSameTrip, legLiveFrom } = require('../lib/tripLive');
+const { addConnections, addLiveStatus, alertAffectsLeg, isSameTrip, legLiveFrom, plannedLegLive, liveTripStatus } = require('../lib/tripLive');
 
 const at = (minutes) => new Date(Date.UTC(2026, 9, 26, 16, 0) + minutes * 60_000).toISOString();
 const seconds = (minutes) => Math.round(Date.parse(at(minutes)) / 1000);
@@ -14,6 +14,17 @@ const transit = (fromMinutes, toMinutes, extra = {}) => ({
 const walk = (minutes) => ({ kind: 'walk', durationSeconds: minutes * 60, distanceMeters: 0, toName: 'B', path: [] });
 const REF = { agencyId: 'lirr', routeId: '1', tripId: 'GO202_26_2', boardStopId: 'board', alightStopId: 'alight' };
 const entity = (tripUpdate) => ({ id: 'e', tripUpdate });
+
+test('legacy preview receives only fresh selected-run facts and legacy references stay untracked', async () => {
+  const observation = { state: 'fresh', status: 'predicted', departs: at(4), arrives: at(34), departureDelaySeconds: 240, arrivalDelaySeconds: 240 };
+  assert.deepEqual(plannedLegLive(observation), { status: 'tracked', departs: at(4), arrives: at(34), delaySeconds: 240 });
+  assert.equal(plannedLegLive({ ...observation, state: 'stale' }), undefined);
+  assert.equal(plannedLegLive({ ...observation, state: 'unknown' }), undefined);
+  assert.equal(plannedLegLive({ ...observation, arrivalInferred: true }), undefined);
+  assert.equal(plannedLegLive({ state: 'fresh', status: 'no-data' }), undefined);
+  assert.deepEqual(plannedLegLive({ state: 'fresh', status: 'cancelled' }), { status: 'cancelled' });
+  assert.equal(await liveTripStatus(REF, transit(0, 30)), undefined);
+});
 
 test('a live trip_id names its timetable trip, including the subway feed\'s shortened ids', () => {
   assert.equal(isSameTrip('GO202_26_2', 'GO202_26_2'), true);
@@ -54,13 +65,13 @@ test('a cancelled trip or a skipped stop says so; a trip the feed doesn\'t carry
   assert.equal(legLiveFrom([entity({ trip: { tripId: 'GO202_26_2' }, stopTimeUpdate: [{ stopId: 'elsewhere', departure: { time: seconds(1) } }] })], REF, transit(0, 30)), undefined);
 });
 
-test('a matched trip missing from the feed falls back to the live trip leaving nearest the planned time', () => {
+test('a selected trip missing from the feed never borrows the nearest other run', () => {
   const ref = { ...REF, routeId: '7', tripId: 'not-in-the-feed' };
   const live = legLiveFrom([entity({
     trip: { tripId: 'running', routeId: '7' },
     stopTimeUpdate: [{ stopId: 'board', departure: { time: seconds(2) } }, { stopId: 'alight', arrival: { time: seconds(22) } }],
   })], ref, transit(0, 20));
-  assert.equal(live?.status, 'tracked');
+  assert.equal(live, undefined);
 });
 
 test("without a trip id, the line's live trip leaving nearest the planned time is the leg's", () => {
@@ -103,6 +114,21 @@ test('connections are judged after the walk between legs, with live times where 
   const cancelled = [transit(0, 20), transit(20, 40, { live: { status: 'cancelled' } })];
   addConnections(cancelled);
   assert.equal(cancelled[1].connection, undefined);
+});
+
+test('rail/platform minimum transfer time is subtracted without charging visible walk slack twice', () => {
+  const rail = [transit(0, 20), transit(22, 40, { minimumTransferSeconds: 180 })];
+  addConnections(rail);
+  assert.deepEqual(rail[1].connection, { status: 'missed', spareSeconds: -60 });
+  const boundary = [transit(0, 20), transit(23, 40, { minimumTransferSeconds: 180 })];
+  addConnections(boundary);
+  assert.deepEqual(boundary[1].connection, { status: 'tight', spareSeconds: 0 });
+  const visibleWalk = [transit(0, 20), walk(4), transit(25, 40, { minimumTransferSeconds: 0 })];
+  addConnections(visibleWalk);
+  assert.deepEqual(visibleWalk[2].connection, { status: 'tight', spareSeconds: 60 });
+  const omittedWalk = [transit(0, 20), transit(25, 40, { minimumTransferSeconds: 240 })];
+  addConnections(omittedWalk);
+  assert.deepEqual(omittedWalk[1].connection, { status: 'tight', spareSeconds: 60 });
 });
 
 test('only legs leaving soon are looked up, and a slow feed doesn\'t hold up the trip', async () => {

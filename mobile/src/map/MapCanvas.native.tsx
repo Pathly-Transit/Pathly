@@ -9,7 +9,7 @@ import {
   type MapRef,
   type ViewStateChangeEvent,
 } from '@maplibre/maplibre-react-native';
-import { createContext, forwardRef, useContext, useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
+import { createContext, forwardRef, useContext, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
 import { StyleSheet, View, type NativeSyntheticEvent } from 'react-native';
 
 import { useTheme } from '../theme/AppSettings';
@@ -181,12 +181,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   // A sheet over the map adds what it covers to the bottom padding, so the map never resizes and
   // its center stays in the middle of what's showing (mapSheetInset.ts).
   const sheetInset = useSheetInset();
-  const [covered, setCovered] = useState(() => sheetInset?.get() ?? 0);
-  useEffect(() => {
-    if (!sheetInset) return undefined;
-    setCovered(sheetInset.get());
-    return sheetInset.subscribe(setCovered);
-  }, [sheetInset]);
+  const covered = useSyncExternalStore(sheetInset?.subscribe ?? NO_SUBSCRIPTION, () => sheetInset?.get() ?? 0);
   const sheetExtra = sheetInset ? sheetPaddingExtra(covered, size.height, padding?.top ?? 0, padding?.bottom ?? 0) : 0;
   const contentInset = useMemo(
     () => (padding || sheetExtra > 0 ? { top: padding?.top ?? 0, right: padding?.right ?? 0, bottom: (padding?.bottom ?? 0) + sheetExtra, left: padding?.left ?? 0 } : undefined),

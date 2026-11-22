@@ -4,6 +4,7 @@ declare module 'gtfs-realtime-bindings' {
     interface StopTimeEvent {
       delay?: number | null;
       time?: number | string | null;
+      uncertainty?: number | null;
     }
 
     interface StopTimeUpdate {
@@ -20,6 +21,7 @@ declare module 'gtfs-realtime-bindings' {
       routeId?: string | null;
       directionId?: number | null;
       startDate?: string | null;
+      startTime?: string | null;
       /** GTFS-RT TripDescriptor.ScheduleRelationship (0 SCHEDULED … 3 CANCELED). */
       scheduleRelationship?: number | null;
     }
@@ -27,6 +29,7 @@ declare module 'gtfs-realtime-bindings' {
     interface TripUpdate {
       trip: TripDescriptor;
       stopTimeUpdate?: StopTimeUpdate[] | null;
+      timestamp?: number | string | null;
     }
 
     interface Position {
@@ -69,12 +72,14 @@ declare module 'gtfs-realtime-bindings' {
 
     interface FeedEntity {
       id: string;
+      isDeleted?: boolean | null;
       tripUpdate?: TripUpdate | null;
       vehicle?: VehiclePosition | null;
       alert?: Alert | null;
     }
 
     interface FeedMessage {
+      header: { timestamp?: number | string | null; incrementality?: number | null };
       entity: FeedEntity[];
     }
 

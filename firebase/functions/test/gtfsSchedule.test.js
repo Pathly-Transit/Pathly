@@ -54,6 +54,10 @@ for (const [label, now, serviceDate, departure, expected] of cases) {
     const result = await predictions();
     assert.equal(result.towardDirection0[0]?.minutes, expected);
     assert.equal(result.towardDirection0[0]?.live, false);
+    assert.equal(result.towardDirection0[0]?.tripId, 'T');
+    assert.equal(result.towardDirection0[0]?.serviceDate, serviceDate);
+    assert.equal(result.towardDirection0[0]?.stopId, 'S1');
+    assert.equal(result.towardDirection0[0]?.stopSequence, 1);
   });
 }
 
@@ -90,6 +94,21 @@ test('an existing live trip only deduplicates its own run, leaving the same trip
   timetable('09:20:00', ['20261015', '20261016']);
   const result = await predictions([live('2026-10-15T13:27:00Z')], 6);
   assert.deepEqual(result.towardDirection0.map((entry) => [entry.live, entry.minutes]), [[true, 27], [false, 1460]]);
+});
+
+test('chosen live prediction retains actual descriptor fields and never invents a missing service date', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-15T13:00:00Z') });
+  timetable('09:20:00', ['20261015', '20261016']);
+  const selected = { ...live('2026-10-15T13:27:00Z'), serviceDate: '20261015', startTime: '09:20:00' };
+  const dated = (await predictions([selected], 6)).towardDirection0;
+  assert.deepEqual({ tripId: dated[0].tripId, serviceDate: dated[0].serviceDate, startTime: dated[0].startTime,
+    stopId: dated[0].stopId, stopSequence: dated[0].stopSequence, directionId: dated[0].directionId, departureTime: dated[0].departureTime },
+  { tripId: 'T', serviceDate: '20261015', startTime: '09:20:00', stopId: 'S1', stopSequence: 1, directionId: 0, departureTime: '2026-10-15T13:27:00.000Z' });
+  assert.equal(dated[1].serviceDate, '20261016');
+  const undated = (await predictions([live('2026-10-15T13:27:00Z')])).towardDirection0[0];
+  assert.equal(undated.tripId, 'T');
+  assert.equal(undated.serviceDate, undefined);
+  assert.equal(undated.startTime, undefined);
 });
 
 test('selected-trip matching shares independent noon anchors before both DST transitions', () => {

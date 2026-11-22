@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import type { Animated } from 'react-native';
 
 /**
@@ -28,37 +28,41 @@ export function sheetPaddingExtra(covered: number, height: number, top: number, 
   return Math.max(0, Math.min(Math.round(covered), height - top - bottom - MIN_VISIBLE_MAP));
 }
 
+/** Mutable animation state belongs to the external store, outside React's render state. */
+function createScrollInset(initialScroll: number, initialMaxCovered: number) {
+  let scroll = initialScroll;
+  let maxCovered = initialMaxCovered;
+  const covered = () => Math.max(0, Math.round(Math.min(maxCovered, Math.max(0, scroll))));
+  let value = covered();
+  const listeners = new Set<(covered: number) => void>();
+  const notify = () => {
+    const next = covered();
+    if (next === value) return;
+    value = next;
+    for (const listener of listeners) listener(next);
+  };
+  return {
+    get: () => value,
+    subscribe: (listener: (covered: number) => void) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    setScroll: (next: number) => { scroll = next; notify(); },
+    setMaxCovered: (next: number) => { maxCovered = next; notify(); },
+  };
+}
+
 /**
  * A page's sheet inset from its scroll position: the sheet covers as many px of the map as the
  * page is scrolled, up to `maxCovered`. Listeners hear whole-pixel changes only.
  */
 export function useScrollSheetInset(scrollY: Animated.Value, maxCovered: number, initialScroll = 0): SheetInset {
-  const covered = (scroll: number) => Math.min(maxCovered, Math.max(0, scroll));
-  const coveredRef = useRef(covered);
-  coveredRef.current = covered;
-  const [state] = useState(() => ({ scroll: initialScroll, value: Math.round(covered(initialScroll)), listeners: new Set<(covered: number) => void>() }));
-  const inset = useMemo<SheetInset>(() => ({
-    get: () => state.value,
-    subscribe: (listener) => {
-      state.listeners.add(listener);
-      return () => state.listeners.delete(listener);
-    },
-  }), [state]);
-  const notify = () => {
-    const next = Math.max(0, Math.round(coveredRef.current(state.scroll)));
-    if (next === state.value) return;
-    state.value = next;
-    for (const listener of state.listeners) listener(next);
-  };
+  const [inset] = useState(() => createScrollInset(initialScroll, maxCovered));
+  // A page resize changes the cap, preserving the animation's current scroll position.
+  useEffect(() => { inset.setMaxCovered(maxCovered); }, [inset, maxCovered]);
   useEffect(() => {
-    const id = scrollY.addListener(({ value }) => {
-      state.scroll = value;
-      notify();
-    });
+    const id = scrollY.addListener(({ value }) => inset.setScroll(value));
     return () => scrollY.removeListener(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- notify reads refs only
-  }, [scrollY, state]);
-  // The page's sizes changed (a new map height): what's covered changes with them.
-  useEffect(notify);
+  }, [inset, scrollY]);
   return inset;
 }

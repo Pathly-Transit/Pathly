@@ -3,6 +3,7 @@ import { logger } from 'firebase-functions';
 
 import { haversineMeters } from './geo';
 import { AGENCY_CONFIGS, type AgencyId } from './gtfsAgencies';
+import { gtfsServiceDaysFor } from './gtfsServiceTime';
 import { agencySnapshotVersion, isAgencyAvailable, prepareAgencyStaticData, readRoutingTimetableFile } from './gtfsStaticData';
 import { decodeRoutingTimetable } from './routingTimetable';
 import {
@@ -30,6 +31,9 @@ import {
 } from './tripPlanning';
 import { legEntrances } from './stationEntrances';
 import { liveTripRefs, type LiveTripRef } from './tripLive';
+import type { TripRunRef } from './tripLiveTypes';
+import { gtfsClock, rememberRunSchedule, resolveSelectedRun, scheduledRun, scheduleVersionForTimetable } from './tripRunSchedule';
+import { recoveryNetwork, type RecoveryCoverage, type RecoveryNetwork } from './tripRecoveryNetwork';
 import { hasWalkingData, walkingMeters, walkingPath } from './walkingGraph';
 
 /**
@@ -81,7 +85,8 @@ const MIN_WALK_STEP_METERS = 30;
 // ---------------------------------------------------------------------------------------------
 // The network, built once per instance and again when any agency's timetable changes.
 
-type LoadedNetwork = { key: string; network: TransitNetwork; router: TransitRouter; walks: Map<string, { meters: number; path: LatLng[] } | null> };
+type LoadedNetwork = { key: string; retryAt?: number; network: TransitNetwork; router: TransitRouter; walks: Map<string, { meters: number; path: LatLng[] } | null> };
+const NETWORK_RETRY_MS = 5_000;
 let loaded: LoadedNetwork | null = null;
 let loading: Promise<LoadedNetwork | null> | null = null;
 
@@ -97,20 +102,32 @@ async function buildNetwork(): Promise<LoadedNetwork | null> {
   await Promise.all(agencyIds.map((agencyId) => prepareAgencyStaticData(agencyId).catch(() => undefined)));
   const available = agencyIds.filter(isAgencyAvailable);
   const key = available.map((agencyId) => `${agencyId}@${agencySnapshotVersion(agencyId) ?? 'bundled'}`).join(',');
-  if (loaded?.key === key) return loaded;
+  if (loaded?.key === key && (loaded.retryAt === undefined || Date.now() < loaded.retryAt)) return loaded;
   const started = Date.now();
+  const previous = new Map(loaded?.network.parts.map((part) => [part.agencyId, part]) ?? []);
+  const failed: AgencyId[] = [];
   const timetables = await Promise.all(available.map(async (agencyId) => {
+    const version = agencySnapshotVersion(agencyId) ?? 'bundled';
+    const lastGood = previous.get(agencyId);
+    if (lastGood?.version === version) return { agencyId, version, timetable: lastGood.timetable };
     try {
       const file = await readRoutingTimetableFile(agencyId);
-      return file ? { agencyId, version: agencySnapshotVersion(agencyId) ?? 'bundled', timetable: decodeRoutingTimetable(file) } : null;
+      if (file) {
+        const timetable = decodeRoutingTimetable(file);
+        rememberRunSchedule(agencyId, timetable, version === 'bundled' ? null : version);
+        return { agencyId, version, timetable };
+      }
     } catch (error) {
       logger.warn('Could not read an agency routing timetable', {
         agencyId,
         event: 'trip_planner_timetable_failed',
         reason: error instanceof Error ? error.message : String(error),
       });
-      return null;
     }
+    failed.push(agencyId);
+    // A transient failure preparing a newer timetable must not erase a working agency. Its
+    // retained version remains attached to the network; the requested version is retried soon.
+    return lastGood ? { agencyId, version: lastGood.version, timetable: lastGood.timetable } : null;
   }));
   const usable = timetables.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
   if (usable.length === 0) return null;
@@ -121,9 +138,11 @@ async function buildNetwork(): Promise<LoadedNetwork | null> {
     stops: network.stopCount,
     patterns: network.patternCount,
     trips: network.tripCount,
+    complete: failed.length === 0,
+    missingAgencies: failed,
     ms: Date.now() - started,
   });
-  return { key, network, router: new TransitRouter(network, MAX_ROUNDS), walks: new Map() };
+  return { key, ...(failed.length > 0 ? { retryAt: Date.now() + NETWORK_RETRY_MS } : {}), network, router: new TransitRouter(network, MAX_ROUNDS), walks: new Map() };
 }
 
 async function currentNetwork(): Promise<LoadedNetwork | null> {
@@ -142,35 +161,14 @@ async function currentNetwork(): Promise<LoadedNetwork | null> {
 // ---------------------------------------------------------------------------------------------
 // Service days: the planner's clock is seconds after the base day's GTFS midnight in New York.
 
-const TIME_ZONE = 'America/New_York';
-const nyParts = new Intl.DateTimeFormat('en-US', {
-  timeZone: TIME_ZONE,
-  hourCycle: 'h23',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  weekday: 'short',
-});
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-function serviceDayContaining(ms: number): { date: number; dayOfWeek: number; startMs: number; noonMs: number } {
-  const parts = Object.fromEntries(nyParts.formatToParts(new Date(ms)).map((part) => [part.type, part.value]));
-  const seconds = Number(parts.hour) * 3600 + Number(parts.minute) * 60 + Number(parts.second);
-  // GTFS midnight is noon minus 12 hours, which keeps times right on daylight-saving days.
-  const noonMs = ms + (12 * 3600 - seconds) * 1000;
-  return { date: Number(`${parts.year}${parts.month}${parts.day}`), dayOfWeek: WEEKDAYS.indexOf(parts.weekday ?? ''), startMs: noonMs - 12 * 3600 * 1000, noonMs };
-}
-
 /** Yesterday (its trips running past midnight), the day of `ms`, and tomorrow, around `ms`'s day. */
 export function serviceDaysAround(ms: number): { baseStartMs: number; days: ServiceDay[] } {
-  const today = serviceDayContaining(ms);
-  const yesterday = serviceDayContaining(today.noonMs - 24 * 3600 * 1000);
-  const tomorrow = serviceDayContaining(today.noonMs + 24 * 3600 * 1000);
-  const day = (entry: typeof today): ServiceDay => ({ date: entry.date, dayOfWeek: entry.dayOfWeek, offset: Math.round((entry.startMs - today.startMs) / 1000) });
-  return { baseStartMs: today.startMs, days: [day(yesterday), day(today), day(tomorrow)] };
+  const dates = gtfsServiceDaysFor(ms, [-1, 0, 1]);
+  const baseStartMs = dates[1]!.startMs;
+  return {
+    baseStartMs,
+    days: dates.map((day) => ({ date: Number(day.dateKey), dayOfWeek: day.dayOfWeek, offset: Math.round((day.startMs - baseStartMs) / 1000) })),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -191,6 +189,12 @@ type PlanContext = {
   arriveBy: boolean;
   /** Seconds after the base day's midnight: leaving at, or arriving by. */
   time: number;
+  bannedRuns?: ReadonlySet<string>;
+  firstRoutes?: ReadonlySet<number>;
+  incomingRide?: SearchOptions['incomingRide'];
+  incomingDate?: number;
+  baseline?: PlanContext;
+  recovery?: RecoveryNetwork;
 };
 
 const walkSecondsFor = (network: TransitNetwork, stop: number, meters: number) => (
@@ -234,7 +238,7 @@ function walkableStops(network: TransitNetwork, point: LatLng, lessWalking: bool
 }
 
 function search(context: PlanContext, time: number, extra: Partial<SearchOptions> = {}): Journey[] {
-  const options: SearchOptions = { days: context.days, maxRounds: MAX_ROUNDS, modes: context.modes, horizonSeconds: HORIZON_SECONDS, ...extra };
+  const options: SearchOptions = { days: context.days, maxRounds: MAX_ROUNDS, modes: context.modes, horizonSeconds: HORIZON_SECONDS, ...(context.bannedRuns ? { bannedRuns: context.bannedRuns } : {}), ...(context.firstRoutes ? { firstRoutes: context.firstRoutes } : {}), ...(context.incomingRide ? { incomingRide: context.incomingRide } : {}), ...extra };
   const journeys = context.arriveBy
     ? context.router.backward(time, context.access, context.egress, options, context.active)
     : context.router.forward(time, context.access, context.egress, options, context.active);
@@ -348,6 +352,7 @@ function checkWalks(context: PlanContext, journeys: readonly Journey[]): boolean
       const reverseKey = walkKey(leg.to, leg.from);
       if (!walk) {
         network.correctTransfer(leg.from, leg.to, -1);
+        context.baseline?.network.correctTransfer(leg.from, leg.to, -1);
         walks.set(key, null);
         walks.set(reverseKey, null);
         changed = true;
@@ -359,6 +364,7 @@ function checkWalks(context: PlanContext, journeys: readonly Journey[]): boolean
       const seconds = Math.round(walk.meters / WALK_METERS_PER_SECOND) + WALK_TRANSFER_SLACK_SECONDS + network.stationAccessSeconds(leg.from, leg.to);
       if (seconds > leg.seconds + WALK_CHECK_TOLERANCE_SECONDS) {
         network.correctTransfer(leg.from, leg.to, seconds);
+        context.baseline?.network.correctTransfer(leg.from, leg.to, seconds);
         changed = true;
       }
     }
@@ -448,6 +454,33 @@ function patternsOfRoute(network: TransitNetwork, route: number): number[] {
   return index[route]!;
 }
 
+function runReference(context: PlanContext, trip: number, pattern: number, day: number, board: number, alight: number): TripRunRef {
+  const { network } = context;
+  const base = network.patternStopStart[pattern]!;
+  const boardStop = network.patternStops[base + board]!;
+  const alightStop = network.patternStops[base + alight]!;
+  const part = network.parts[network.stopPart[boardStop]!]!;
+  const occurrence = (stop: number, position: number) => {
+    let count = 0;
+    for (let index = 0; index < position; index += 1) if (network.patternStops[base + index] === stop) count += 1;
+    return count;
+  };
+  const direction = network.patternDirection[pattern]!;
+  const localTrip = trip - part.tripOffset;
+  const sequenceStart = part.timetable.tripSequenceStart?.[localTrip];
+  const boardSequence = sequenceStart === undefined ? undefined : part.timetable.tripStopSequence?.[sequenceStart + board];
+  const alightSequence = sequenceStart === undefined ? undefined : part.timetable.tripStopSequence?.[sequenceStart + alight];
+  return {
+    version: 1, agencyId: part.agencyId, routeId: network.routes[network.patternRoute[pattern]!]!.routeId,
+    tripId: network.tripId(trip), serviceDate: String(context.days[day]!.date), scheduleVersion: scheduleVersionForTimetable(part.timetable),
+    startTime: gtfsClock(network.departure(trip, 0)), boardStopId: network.stopId(boardStop), alightStopId: network.stopId(alightStop),
+    boardOccurrence: occurrence(boardStop, board), alightOccurrence: occurrence(alightStop, alight),
+    ...(boardSequence !== undefined && boardSequence >= 0 ? { boardStopSequence: boardSequence } : {}),
+    ...(alightSequence !== undefined && alightSequence >= 0 ? { alightStopSequence: alightSequence } : {}),
+    ...(direction >= 0 ? { directionId: direction } : {}),
+  };
+}
+
 /** The same line's departures, in the same direction, from this ride's stop to its alighting stop, around this one. */
 function rideDepartures(context: PlanContext, ride: RideLeg, iso: (seconds: number) => string): TripDeparture[] {
   const { network, days, active } = context;
@@ -487,6 +520,7 @@ function rideDepartures(context: PlanContext, ride: RideLeg, iso: (seconds: numb
           at: departs,
           departs: iso(departs),
           arrives: iso(network.arrival(trip, alight) + offset),
+          runRef: runReference(context, trip, pattern, day, board, alight),
           ...(sameStops ? { stopTimes } : {}),
         });
       }
@@ -499,6 +533,19 @@ function rideDepartures(context: PlanContext, ride: RideLeg, iso: (seconds: numb
 }
 
 function transitStep(context: PlanContext, ride: RideLeg, iso: (seconds: number) => string): TransitStep {
+  if (context.baseline && context.recovery) {
+    const originalTrip = context.recovery.baselineTrips.get(ride.trip)!;
+    const original = context.baseline.network;
+    const pattern = original.tripPattern[originalTrip]!;
+    const offset = context.days[ride.day]!.offset;
+    const baseRide = { ...ride, trip: originalTrip, pattern, departs: original.departure(originalTrip, ride.boardPosition) + offset, arrives: original.arrival(originalTrip, ride.alightPosition) + offset };
+    const step = transitStep(context.baseline, baseRide, iso);
+    const observations = context.recovery.liveStops.get(ride.trip);
+    const departure = observations?.[ride.boardPosition]?.departs;
+    const arrival = observations?.[ride.alightPosition]?.arrives;
+    if (departure || arrival) step.live = { status: 'tracked', ...(departure ? { departs: departure, delaySeconds: Math.round((Date.parse(departure) - Date.parse(step.from.time)) / 1000) } : {}), ...(arrival ? { arrives: arrival } : {}) };
+    return step;
+  }
   const { network } = context;
   const route = network.routes[network.patternRoute[ride.pattern]!]!;
   const offset = context.days[ride.day]!.offset;
@@ -529,6 +576,7 @@ function transitStep(context: PlanContext, ride: RideLeg, iso: (seconds: number)
     path: simplifiedPath(network.pathBetween(ride.pattern, ride.boardPosition, ride.alightPosition)),
     ...(intermediate.length > 0 ? { stops: intermediate } : {}),
     tripId: network.tripId(ride.trip),
+    runRef: runReference(context, ride.trip, ride.pattern, ride.day, ride.boardPosition, ride.alightPosition),
     liveRoute: {
       agencyId,
       routeId: route.routeId,
@@ -557,25 +605,50 @@ function transitStep(context: PlanContext, ride: RideLeg, iso: (seconds: number)
 function itineraryFor(context: PlanContext, journey: Journey, destinationLabel: string, estimateFare?: FareEstimator): Itinerary {
   const iso = (seconds: number) => new Date(context.baseStartMs + seconds * 1000).toISOString();
   const steps: TripStep[] = [];
+  let previousRide: RideLeg | undefined;
+  let transferWalk = false;
+  let omittedWalkSeconds = 0;
   journey.legs.forEach((leg, index) => {
     if (leg.kind === 'ride') {
-      steps.push(transitStep(context, leg, iso));
+      const step = transitStep(context, leg, iso);
+      const transferNetwork = context.baseline?.network ?? context.network;
+      const previousTrip = previousRide && (context.recovery?.baselineTrips.get(previousRide.trip) ?? previousRide.trip);
+      const nextTrip = context.recovery?.baselineTrips.get(leg.trip) ?? leg.trip;
+      const held = previousTrip !== undefined && transferNetwork.timedTransfers.get(previousTrip)?.some(([trip, stop]) => trip === nextTrip && stop === leg.boardStop);
+      const incomingMargin = context.incomingRide?.stop === leg.boardStop
+        ? context.incomingRide.heldTrips.includes(leg.trip) ? 0 : Math.max(0, context.network.stopChangeSeconds[leg.boardStop]!) : 0;
+      step.minimumTransferSeconds = !previousRide ? incomingMargin : transferWalk ? omittedWalkSeconds : held ? 0 : Math.max(0, context.network.stopChangeSeconds[leg.boardStop]!);
+      steps.push(step);
+      previousRide = leg;
+      transferWalk = false;
+      omittedWalkSeconds = 0;
       return;
     }
     const next = journey.legs[index + 1];
     const toName = next?.kind === 'ride' ? context.network.stopName(next.boardStop) : destinationLabel;
     const step = walkStep(context, leg, toName);
+    if (previousRide) {
+      transferWalk = true;
+      if (!step) omittedWalkSeconds += leg.seconds;
+    }
     if (step) steps.push(step);
   });
   const transits = steps.filter((step): step is TransitStep => step.kind === 'transit');
-  const departureTime = iso(journey.departs);
+  let departureTime = iso(journey.departs);
+  let arrivalTime = iso(journey.arrives);
+  if (context.baseline && transits.length) {
+    const first = steps.findIndex((step) => step.kind === 'transit');
+    const last = steps.length - 1 - [...steps].reverse().findIndex((step) => step.kind === 'transit');
+    departureTime = new Date(Date.parse(transits[0]!.from.time) - steps.slice(0, first).reduce((sum, step) => sum + step.durationSeconds, 0) * 1000).toISOString();
+    arrivalTime = new Date(Date.parse(transits.at(-1)!.to.time) + steps.slice(last + 1).reduce((sum, step) => sum + step.durationSeconds, 0) * 1000).toISOString();
+  }
   const key = transits.map((step) => `${step.line.name}|${step.from.name}|${step.from.time}`).join('>');
   const fare = itineraryFare(transits, departureTime, estimateFare);
   return {
     id: createHash('sha256').update(key).digest('hex').slice(0, 12),
     departureTime,
-    arrivalTime: iso(journey.arrives),
-    durationSeconds: journey.arrives - journey.departs,
+    arrivalTime,
+    durationSeconds: Math.max(0, (Date.parse(arrivalTime) - Date.parse(departureTime)) / 1000),
     transfers: Math.max(0, transits.length - 1),
     ...(fare ? { fare } : {}),
     steps,
@@ -588,7 +661,27 @@ export type PlanTransitInput = {
   destination: LatLng;
   nowMs: number;
   estimateFare?: FareEstimator;
+  /** Deterministic recovery tests; production uses the shared provider cache. */
+  recoveryFeedLookup?: Parameters<typeof recoveryNetwork>[6];
 };
+
+const recoveryCoverages = new WeakMap<Itinerary[], RecoveryCoverage>();
+export const recoveryCoverageFor = (itineraries: Itinerary[]) => recoveryCoverages.get(itineraries);
+
+/** Live-rescued connections may overlap in the timetable, but the public baseline must still have a valid global interval. */
+function hasBaselineInterval(context: PlanContext, journey: Journey): boolean {
+  if (!context.baseline || !context.recovery) return true;
+  const first = journey.legs.findIndex((leg) => leg.kind === 'ride');
+  const last = journey.legs.length - 1 - [...journey.legs].reverse().findIndex((leg) => leg.kind === 'ride');
+  if (first < 0 || last < 0) return false;
+  const board = journey.legs[first] as RideLeg;
+  const alight = journey.legs[last] as RideLeg;
+  const network = context.baseline.network;
+  const from = network.departure(context.recovery.baselineTrips.get(board.trip)!, board.boardPosition) + context.days[board.day]!.offset;
+  const to = network.arrival(context.recovery.baselineTrips.get(alight.trip)!, alight.alightPosition) + context.days[alight.day]!.offset;
+  const walkingSeconds = (legs: readonly (RideLeg | WalkLeg)[]) => legs.reduce((sum, leg) => sum + (leg.kind === 'walk' ? leg.seconds : 0), 0);
+  return to + walkingSeconds(journey.legs.slice(last + 1)) >= from - walkingSeconds(journey.legs.slice(0, first));
+}
 
 /** The modes a request rides: the app's three filters, ferries unless turned off, and anything else (trams). */
 function modesFor(request: PlanTripRequest): Set<TransitMode> {
@@ -602,23 +695,53 @@ function modesFor(request: PlanTripRequest): Set<TransitMode> {
  * Transit itineraries between two points, fastest first (or, arriving by a time, latest leaving
  * first). Empty when no trip within reach gets there.
  */
-export async function planTransitTrip({ request, origin, destination, nowMs, estimateFare }: PlanTransitInput): Promise<Itinerary[]> {
+export async function planTransitTrip({ request, origin, destination, nowMs, estimateFare, recoveryFeedLookup }: PlanTransitInput): Promise<Itinerary[]> {
   const current = await currentNetwork();
   if (!current) return [];
   const { network, router, walks } = current;
   const arriveBy = request.time.mode === 'arrive';
   const atMs = request.time.mode === 'now' ? nowMs : Date.parse(request.time.at);
   const { baseStartMs, days } = serviceDaysAround(atMs);
+  const active = network.activeServices(days);
   const lessWalking = request.lessWalking === true;
-  const access = walkableStops(network, origin, lessWalking);
+  let incomingRide: SearchOptions['incomingRide'];
+  let incomingDate: number | undefined;
+  const incoming = request.recovery?.incomingRun;
+  if (incoming) {
+    const part = network.parts.find((entry) => entry.agencyId === incoming.agencyId);
+    let resolved = part ? scheduledRun(part.timetable, incoming) : null;
+    if (resolved && resolved.stops.some((stop) => stop.stopSequence === undefined)) resolved = await resolveSelectedRun(incoming).catch(() => null);
+    const localTrip = part?.timetable.tripIds.indexOf(incoming.tripId) ?? -1;
+    const localStop = part?.timetable.stopIds.indexOf(incoming.alightStopId) ?? -1;
+    const date = Number(incoming.serviceDate);
+    const day = days.findIndex((entry) => entry.date === date);
+    if (!part || !resolved || localTrip < 0 || localStop < 0 || day < 0 || atMs < Date.parse(resolved.arrives)) return [];
+    const stop = part.stopOffset + localStop;
+    if (haversineMeters(origin.lat, origin.lng, network.stopLat[stop]!, network.stopLon[stop]!) > 50) return [];
+    const trip = part.tripOffset + localTrip;
+    incomingDate = date;
+    incomingRide = { trip, stop, heldTrips: (network.timedTransfers.get(trip) ?? []).filter(([target, atStop]) => atStop === stop && active[day]![network.tripService[target]!] === 1).map(([target]) => target) };
+  }
+  const access = walkableStops(network, origin, lessWalking).flatMap((entry) => {
+    if (!incomingRide) return [entry];
+    if (entry.stop === incomingRide.stop) return [];
+    let published: number | undefined;
+    for (let slot = network.transferStart[incomingRide.stop]!; slot < network.transferStart[incomingRide.stop + 1]!; slot += 1) {
+      if (network.transferTo[slot] === entry.stop) { published = network.transferSeconds[slot]!; break; }
+    }
+    if (published !== undefined && published < 0) return [];
+    // This is a transfer walk, including the planner's published/physical walk allowance once.
+    const seconds = published ?? Math.round(entry.meters / WALK_METERS_PER_SECOND) + WALK_TRANSFER_SLACK_SECONDS + network.stationAccessSeconds(incomingRide.stop, entry.stop);
+    return [{ ...entry, seconds }];
+  });
   const egress = walkableStops(network, destination, lessWalking);
-  if (access.length === 0 || egress.length === 0) return [];
-  const context: PlanContext = {
+  if ((access.length === 0 && !incomingRide) || egress.length === 0) return [];
+  let context: PlanContext = {
     network,
     router,
     walks,
     days,
-    active: network.activeServices(days),
+    active,
     baseStartMs,
     origin,
     destination,
@@ -627,14 +750,55 @@ export async function planTransitTrip({ request, origin, destination, nowMs, est
     egress,
     arriveBy,
     time: Math.round((atMs - baseStartMs) / 1000),
+    ...(incomingRide ? { incomingRide, incomingDate } : {}),
   };
 
+  if (request.recovery) {
+    const seed = runSearches(context);
+    const routes = [
+      ...(request.recovery.preferredRoute ? [request.recovery.preferredRoute] : []),
+      ...request.recovery.excludedRuns.map((ref) => ({ agencyId: ref.agencyId, routeId: ref.routeId })),
+      ...seed.flatMap((journey) => rides(journey).map((ride) => { const route = network.routes[network.patternRoute[ride.pattern]!]!; return { agencyId: route.agencyId, routeId: route.routeId }; })),
+    ];
+    const recovery = await recoveryNetwork(network, days, baseStartMs, routes, request.recovery, nowMs, recoveryFeedLookup);
+    const baseline = context;
+    const preferred = request.recovery.preferredRoute;
+    const preferredRoutes = preferred ? new Set(recovery.network.routes.flatMap((route, index) => route.agencyId === preferred.agencyId && route.routeId === preferred.routeId ? [index] : [])) : undefined;
+    context = { ...context, network: recovery.network, router: new TransitRouter(recovery.network, MAX_ROUNDS), active: recovery.network.activeServices(days), bannedRuns: recovery.bannedRuns, baseline, recovery, ...(preferredRoutes?.size ? { firstRoutes: preferredRoutes } : {}) };
+    if (incomingRide && incomingDate !== undefined) {
+      const fromPart = network.parts.find((part) => incomingRide.trip >= part.tripOffset && incomingRide.trip < part.tripOffset + part.timetable.tripIds.length)!;
+      const intoPart = recovery.network.parts.find((part) => part.agencyId === fromPart.agencyId)!;
+      const day = days.findIndex((entry) => entry.date === incomingDate);
+      const heldTrips = incomingRide.heldTrips.flatMap((target) => [intoPart.tripOffset + target - fromPart.tripOffset,
+        ...[...recovery.liveStops.keys()].filter((trip) => recovery.baselineTrips.get(trip) === target && context.active[day]![recovery.network.tripService[trip]!] === 1)]);
+      context.incomingRide = { ...incomingRide, trip: intoPart.tripOffset + incomingRide.trip - fromPart.tripOffset, heldTrips };
+    }
+    if (context.firstRoutes && runSearches(context).length === 0) context.firstRoutes = undefined;
+  }
+
   let journeys: Journey[] = [];
+  let rejectedBaseline = false;
+  const reachableJourneys = () => runSearches(context).filter((journey) => {
+    const valid = hasBaselineInterval(context, journey);
+    if (!valid) rejectedBaseline = true;
+    return valid;
+  });
   for (let pass = 0; pass < MAX_WALK_CHECK_PASSES; pass += 1) {
-    journeys = chooseJourneys(runSearches(context), arriveBy, context.time);
+    let reachable = reachableJourneys();
+    // Measured walking can invalidate the previously feasible preferred line. Try other lines
+    // again after that correction, including when only incompatible baseline candidates remain.
+    if (reachable.length === 0 && context.firstRoutes) {
+      context.firstRoutes = undefined;
+      reachable = reachableJourneys();
+    }
+    journeys = chooseJourneys(reachable, arriveBy, context.time);
     if (!checkWalks(context, journeys)) break;
   }
-  return journeys.map((journey) => itineraryFor(context, journey, request.destination.label, estimateFare));
+  const itineraries = journeys.map((journey) => itineraryFor(context, journey, request.destination.label, estimateFare));
+  if (context.recovery) recoveryCoverages.set(itineraries, rejectedBaseline
+    ? { ...context.recovery.coverage, state: 'partial', reasons: [...context.recovery.coverage.reasons, 'baseline-timing-conflict'] }
+    : context.recovery.coverage);
+  return itineraries;
 }
 
 /** Unit-test isolation only. */
