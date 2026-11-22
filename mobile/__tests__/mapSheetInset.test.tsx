@@ -28,7 +28,7 @@ it('publishes whole-pixel sheet changes to map subscribers without resizing the 
 
 it('updates the size cap with a stable store and retains the actual scrolled position', () => {
   const scroll = new Animated.Value(350);
-  const { result, rerender } = renderHook(({ maximum }) => {
+  const { result, rerender } = renderHook(({ maximum }: { maximum: number }) => {
     const inset = useScrollSheetInset(scroll, maximum, 350);
     return { inset, covered: useSyncExternalStore(inset.subscribe, inset.get) };
   }, { initialProps: { maximum: 400 } });
@@ -47,7 +47,7 @@ it('detaches old animation sources and removes its listener on unmount', () => {
   const nextScroll = new Animated.Value(0);
   const removeOld = jest.spyOn(oldScroll, 'removeListener');
   const removeNext = jest.spyOn(nextScroll, 'removeListener');
-  const { result, rerender, unmount } = renderHook(({ scroll }) => useScrollSheetInset(scroll, 400), { initialProps: { scroll: oldScroll } });
+  const { result, rerender, unmount } = renderHook(({ scroll }: { scroll: Animated.Value }) => useScrollSheetInset(scroll, 400), { initialProps: { scroll: oldScroll } });
   const notify = jest.fn();
   result.current.subscribe(notify);
   rerender({ scroll: nextScroll });
