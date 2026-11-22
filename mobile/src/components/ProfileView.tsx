@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { signOutUser } from '../auth/authService';
 import { useAuth } from '../auth/AuthContext';
 import { discardAccount } from '../data/accountData';
-import { ThemedStatusBar, useAppSettings, useTheme, useThemedStyles, MAP_THEMES, type Appearance, type MapDotColor, type MapTheme } from '../theme/AppSettings';
+import { ThemedStatusBar, useAppSettings, useTheme, useThemedStyles, MAP_THEMES, TRANSIT_ICON_CHOICES, type Appearance, type MapDotColor, type MapTheme, type TransitIcons } from '../theme/AppSettings';
 import { mapPalette } from '../map/mapStyle';
 import { ScreenTransition } from '../theme/motion';
 import { lightColors } from '../theme/colors';
@@ -205,6 +205,27 @@ function MapThemeRow({ onFeedback }: { onFeedback: (message: string) => void }) 
   );
 }
 
+const TRANSIT_ICON_LABELS: Record<TransitIcons, string> = { all: 'All stops', stations: 'Stations only', none: 'None' };
+
+/** Which transit icons the base map shows: fewer makes a busy map calmer. */
+function TransitIconsRow({ onFeedback }: { onFeedback: (message: string) => void }) {
+  const { setTransitIcons, transitIcons } = useAppSettings();
+  return (
+    <ChoiceRow
+      label="Transit icons"
+      onSelect={(label) => {
+        const choice = TRANSIT_ICON_CHOICES.find((item) => TRANSIT_ICON_LABELS[item] === label);
+        if (!choice) return;
+        setTransitIcons(choice);
+        onFeedback(choice === 'all' ? 'Showing every stop on the map' : choice === 'stations' ? 'Bus stops hidden on the map' : 'Transit icons hidden on the map');
+      }}
+      options={TRANSIT_ICON_CHOICES.map((item) => TRANSIT_ICON_LABELS[item])}
+      selected={TRANSIT_ICON_LABELS[transitIcons]}
+      testPrefix="transit-icons"
+    />
+  );
+}
+
 const appearanceOptions: readonly { label: string; value: Appearance }[] = [
   { label: 'Light', value: 'light' },
   { label: 'Dark', value: 'dark' },
@@ -264,7 +285,7 @@ export function ProfileView({ initialRoute, onBack, onOpenAdminTools, savedPlace
           <ThemedStatusBar />
           <Header onBack={() => openRoute('hub')} title={title} />
           <ScrollView contentContainerStyle={styles.pageContent} key={route} showsVerticalScrollIndicator={false}>
-            {route === 'appearance' ? <><Card><ChoiceRow label="Theme" onSelect={(label) => { const option = appearanceOptions.find((item) => item.label === label); if (option) { setAppearance(option.value); setFeedback(`Appearance set to ${label}`); } }} options={appearanceOptions.map((item) => item.label)} selected={appearanceOptions.find((item) => item.value === appearance)?.label ?? 'Light'} testPrefix="appearance" /></Card><Card><MapThemeRow onFeedback={setFeedback} /></Card><Card><MapDotColorRow onFeedback={setFeedback} /></Card><Card><PressableScale accessibilityHint="Change your destination pin's color and face" accessibilityLabel="Customize your destination pin" accessibilityRole="button" onPress={() => openRoute('pin')} style={styles.settingRow} testID="appearance-destination-pin"><DestinationPinMarker /><View style={styles.rowCopy}><Text style={styles.settingText}>Destination pin</Text><Text style={styles.settingDetail}>Marks where you&apos;re headed on trip maps.</Text></View><Icon name="forward" color={colors.mutedInk} size={20} /></PressableScale></Card></> : null}
+            {route === 'appearance' ? <><Card><ChoiceRow label="Theme" onSelect={(label) => { const option = appearanceOptions.find((item) => item.label === label); if (option) { setAppearance(option.value); setFeedback(`Appearance set to ${label}`); } }} options={appearanceOptions.map((item) => item.label)} selected={appearanceOptions.find((item) => item.value === appearance)?.label ?? 'Light'} testPrefix="appearance" /></Card><Card><MapThemeRow onFeedback={setFeedback} /><TransitIconsRow onFeedback={setFeedback} /></Card><Card><MapDotColorRow onFeedback={setFeedback} /></Card><Card><PressableScale accessibilityHint="Change your destination pin's color and face" accessibilityLabel="Customize your destination pin" accessibilityRole="button" onPress={() => openRoute('pin')} style={styles.settingRow} testID="appearance-destination-pin"><DestinationPinMarker /><View style={styles.rowCopy}><Text style={styles.settingText}>Destination pin</Text><Text style={styles.settingDetail}>Marks where you&apos;re headed on trip maps.</Text></View><Icon name="forward" color={colors.mutedInk} size={20} /></PressableScale></Card></> : null}
             {route === 'account' ? <AccountSettings onEditAvatar={() => openRoute('avatar')} onFeedback={setFeedback} /> : null}
             {route === 'inbox' ? <InboxSettings /> : null}
             {route === 'notifications' ? <NotificationSettings onFeedback={setFeedback} /> : null}

@@ -14,6 +14,8 @@ export const MAP_ICONS: Record<string, ImageRequireSource> = {
   'transit-rail-dark': require('../../assets/map-icons/transit-rail-dark.png'),
   'transit-ferry-dark': require('../../assets/map-icons/transit-ferry-dark.png'),
   'transit-bus-dark': require('../../assets/map-icons/transit-bus-dark.png'),
+  'oneway-arrow': require('../../assets/map-icons/oneway-arrow.png'),
+  'oneway-arrow-dark': require('../../assets/map-icons/oneway-arrow-dark.png'),
 };
 
 export const WEB_MAP_ICONS: Record<string, ImageRequireSource> = {
@@ -25,6 +27,8 @@ export const WEB_MAP_ICONS: Record<string, ImageRequireSource> = {
   'transit-rail-dark': require('../../assets/map-icons/web/transit-rail-dark.png'),
   'transit-ferry-dark': require('../../assets/map-icons/web/transit-ferry-dark.png'),
   'transit-bus-dark': require('../../assets/map-icons/web/transit-bus-dark.png'),
+  'oneway-arrow': require('../../assets/map-icons/web/oneway-arrow.png'),
+  'oneway-arrow-dark': require('../../assets/map-icons/web/oneway-arrow-dark.png'),
 };
 
 export const WEB_ICON_PIXEL_RATIO = 3;

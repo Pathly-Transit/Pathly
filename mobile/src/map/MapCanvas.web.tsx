@@ -93,7 +93,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onStopPress, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
   ref,
 ) {
-  const { isDark, mapTheme } = useTheme();
+  const { isDark, mapTheme, transitIcons } = useTheme();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [map, setMap] = useState<maplibregl.Map | null>(null);
   const [styleKey, setStyleKey] = useState(0);
@@ -103,14 +103,14 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   useLayoutEffect(() => {
     latest.current = { onCameraIdle, onLongPress, onPress, onStopPress, onUserGesture, maxBounds };
   });
-  const themeAtCreation = useRef({ isDark, mapTheme });
+  const themeAtCreation = useRef({ isDark, mapTheme, transitIcons });
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return undefined;
     const instance = new maplibregl.Map({
       container,
-      style: pathlyMapStyle(themeAtCreation.current.isDark, themeAtCreation.current.mapTheme) as maplibregl.StyleSpecification,
+      style: pathlyMapStyle(themeAtCreation.current.isDark, themeAtCreation.current.mapTheme, themeAtCreation.current.transitIcons) as maplibregl.StyleSpecification,
       center: lngLatOf(initialCamera.center),
       zoom: toMapLibreZoom(initialCamera.zoom),
       bearing: initialCamera.bearing ?? 0,
@@ -219,10 +219,11 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
 
   // The theme's style; lines and dots re-add themselves once it has loaded (styleKey).
   useEffect(() => {
-    if (!map || (isDark === themeAtCreation.current.isDark && mapTheme === themeAtCreation.current.mapTheme)) return;
-    themeAtCreation.current = { isDark, mapTheme };
-    map.setStyle(pathlyMapStyle(isDark, mapTheme) as maplibregl.StyleSpecification, { diff: false });
-  }, [isDark, map, mapTheme]);
+    const current = themeAtCreation.current;
+    if (!map || (isDark === current.isDark && mapTheme === current.mapTheme && transitIcons === current.transitIcons)) return;
+    themeAtCreation.current = { isDark, mapTheme, transitIcons };
+    map.setStyle(pathlyMapStyle(isDark, mapTheme, transitIcons) as maplibregl.StyleSpecification, { diff: false });
+  }, [isDark, map, mapTheme, transitIcons]);
 
   const paddingKey = `${padding?.top ?? 0},${padding?.right ?? 0},${padding?.bottom ?? 0},${padding?.left ?? 0}`;
   useEffect(() => {

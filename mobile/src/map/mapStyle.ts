@@ -2,7 +2,7 @@
 import type { ExpressionSpecification, LayerSpecification, StyleSpecification, SymbolLayerSpecification } from '@maplibre/maplibre-gl-style-spec';
 
 import { MAP_EXPLORATION_BOUNDS } from '../data/serviceArea';
-import type { MapTheme } from '../theme/AppSettings';
+import type { MapTheme, TransitIcons } from '../theme/AppSettings';
 
 /**
  * The base map every Pathly map draws (home, route, trip, and choose-on-map; native and web):
@@ -335,6 +335,9 @@ function withLateLabels(layer: SymbolLayerSpecification & { filter: ExpressionSp
 /** The base map's layers of tappable transit icons (MapCanvas's onStopPress), bus stops first. */
 export const STOP_LAYER_IDS = ['station-bus-icon', 'station-icon'];
 
+/** The transit icon layers each Transit icons setting hides (Settings > Appearance). */
+const HIDDEN_STOP_LAYERS: Record<TransitIcons, readonly string[]> = { all: [], stations: ['station-bus-icon'], none: STOP_LAYER_IDS };
+
 export const TRANSIT_ICON_NAMES = ['transit-subway', 'transit-rail', 'transit-ferry', 'transit-bus'] as const;
 export const transitIconName = (name: (typeof TRANSIT_ICON_NAMES)[number], isDark: boolean) => (isDark ? `${name}-dark` : name);
 
@@ -436,6 +439,16 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
         'fill-opacity': ['interpolate', ['linear'], ['zoom'], 14, 0, 15, 1],
       },
     },
+    // Bus and train platforms (OpenStreetMap's), paved like Google's, over the terminal around them.
+    {
+      id: 'landuse-platform',
+      type: 'fill',
+      source: SOURCE,
+      'source-layer': 'landuse',
+      minzoom: 14,
+      filter: ['all', AREAS, ['==', ['get', 'kind'], 'platform']],
+      paint: { 'fill-color': palette.school, 'fill-outline-color': palette.buildingOutline },
+    },
     ...roadLayers(palette, 'tunnel'),
     ...roadLayers(palette, 'road'),
     {
@@ -455,6 +468,24 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
       paint: { 'line-color': palette.rail, 'line-width': width(14, 3, 18, 8), 'line-dasharray': [0.2, 4] },
     },
     ...roadLayers(palette, 'bridge'),
+    {
+      // Which way a bus ramp or lane runs, in small arrows along it, close in.
+      id: 'road-oneway-arrow',
+      type: 'symbol',
+      source: SOURCE,
+      'source-layer': 'road',
+      minzoom: 16,
+      filter: ['has', 'oneway'],
+      layout: {
+        'symbol-placement': 'line',
+        'symbol-spacing': 70,
+        'icon-image': isDark ? 'oneway-arrow-dark' : 'oneway-arrow',
+        'icon-size': ['interpolate', ['linear'], ['zoom'], 16, 0.7, 18, 1],
+        'icon-rotation-alignment': 'map',
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      },
+    },
     {
       id: 'ferry',
       type: 'line',
@@ -531,6 +562,17 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
       paint: { 'text-color': palette.roadLabel, ...halo },
     })),
     ...transitLayers(palette, isDark, halo),
+    ...withLateLabels({
+      // Platforms by name ("Ramp D", "Track 3"), close in.
+      id: 'platform-label',
+      type: 'symbol',
+      source: SOURCE,
+      'source-layer': 'landuse',
+      minzoom: 15,
+      filter: ['all', POINTS, ['==', ['get', 'kind'], 'platform']],
+      layout: { 'text-field': NAME, 'text-font': SEMIBOLD, 'text-size': ['interpolate', ['linear'], ['zoom'], 15, 10, 18, 12.5], 'text-max-width': 8, 'text-padding': 2 },
+      paint: { 'text-color': palette.label, ...halo },
+    }),
     ...withLateLabels({
       // Campuses, hospitals, zoos, and cemeteries, named in their own colors like Google's.
       id: 'landmark-area-label',
@@ -692,9 +734,15 @@ function withZoomFade(layer: LayerSpecification): LayerSpecification {
 
 const styleCache = new Map<string, StyleSpecification>();
 
-/** The base map style for the light or dark version of a map theme (built once each). */
-export function pathlyMapStyle(isDark: boolean, theme: MapTheme = 'default'): StyleSpecification {
-  const cacheKey = `${theme}-${isDark ? 'dark' : 'light'}`;
+/**
+ * The base map style for the light or dark version of a map theme, with the transit icons the
+ * rider chose (built once each). Hidden icons can't be tapped either.
+ */
+export function pathlyMapStyle(isDark: boolean, theme: MapTheme = 'default', transitIcons: TransitIcons = 'all'): StyleSpecification {
+  const cacheKey = `${theme}-${isDark ? 'dark' : 'light'}-${transitIcons}`;
+  const hidden = HIDDEN_STOP_LAYERS[transitIcons];
+  const hide = (layer: LayerSpecification): LayerSpecification =>
+    hidden.includes(layer.id) ? ({ ...layer, layout: { ...(layer as { layout?: object }).layout, visibility: 'none' } } as LayerSpecification) : layer;
   const cached = styleCache.get(cacheKey);
   if (cached) return cached;
   const palette = mapPalette(isDark, theme);
@@ -712,7 +760,7 @@ export function pathlyMapStyle(isDark: boolean, theme: MapTheme = 'default'): St
       [SOURCE]: { type: 'vector', tiles: [MAP_TILES_URL], minzoom: 0, maxzoom: TILES_MAX_ZOOM, bounds: TILE_BOUNDS, attribution: MAP_ATTRIBUTION },
     },
     glyphs: MAP_GLYPHS_URL,
-    layers: [...baseLayers(palette, isDark).map(withZoomFade), ...slots],
+    layers: [...baseLayers(palette, isDark).map(withZoomFade).map(hide), ...slots],
   };
   styleCache.set(cacheKey, style);
   return style;

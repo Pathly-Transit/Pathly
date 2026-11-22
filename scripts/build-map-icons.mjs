@@ -26,12 +26,14 @@ const ICONS = {
   'transit-rail': { glyph: 'train', points: 16 },
   'transit-ferry': { glyph: 'ferry', points: 16 },
   'transit-bus': { glyph: 'bus', points: 11 },
+  // One-way arrows along bus ramps and lanes: a light arrow, no halo.
+  'oneway-arrow': { glyph: 'arrow-right-thin', points: 12, arrow: true },
 };
 
 /** Gray glyphs with a halo in the map's land color, per theme (mapStyle.ts's road label grays). */
 const THEMES = {
-  '': { ink: [0x5f, 0x63, 0x68], halo: [0xff, 0xff, 0xff] },
-  '-dark': { ink: [0xa8, 0xad, 0xb4], halo: [0x16, 0x17, 0x1a] },
+  '': { ink: [0x5f, 0x63, 0x68], halo: [0xff, 0xff, 0xff], arrow: [0x9a, 0xa0, 0xa6] },
+  '-dark': { ink: [0xa8, 0xad, 0xb4], halo: [0x16, 0x17, 0x1a], arrow: [0x6b, 0x70, 0x78] },
 };
 
 /** The halo's width, as a share of the icon's size. */
@@ -90,11 +92,11 @@ function distanceToEdges(edges, x, y) {
   return best;
 }
 
-function draw(edges, points, scale, { ink, halo }) {
+function draw(edges, points, scale, { ink, halo }, haloed = true) {
   const size = Math.round(points * scale);
   const png = new PNG({ width: size, height: size });
   // The glyph sits inside the halo's margin.
-  const margin = HALO;
+  const margin = haloed ? HALO : 0.02;
   const toGlyph = (v) => (v - margin) / (1 - 2 * margin);
   for (let py = 0; py < size; py += 1) {
     for (let px = 0; px < size; px += 1) {
@@ -105,7 +107,7 @@ function draw(edges, points, scale, { ink, halo }) {
           const y = toGlyph((py + (sy + 0.5) / SAMPLES) / size);
           let rgb = null;
           if (inside(edges, x, y)) rgb = ink;
-          else if (distanceToEdges(edges, x, y) <= margin / (1 - 2 * margin)) rgb = halo;
+          else if (haloed && distanceToEdges(edges, x, y) <= margin / (1 - 2 * margin)) rgb = halo;
           if (!rgb) continue;
           r += rgb[0]; g += rgb[1]; b += rgb[2]; a += 1;
         }
@@ -122,14 +124,14 @@ function draw(edges, points, scale, { ink, halo }) {
 
 mkdirSync(join(OUT, 'web'), { recursive: true });
 let count = 0;
-for (const [name, { glyph, points }] of Object.entries(ICONS)) {
+for (const [name, { glyph, points, arrow = false }] of Object.entries(ICONS)) {
   const edges = glyphEdges(glyph);
   for (const [suffix, theme] of Object.entries(THEMES)) {
     const file = `${name}${suffix}`;
-    writeFileSync(join(OUT, `${file}.png`), draw(edges, points, 1, theme));
-    writeFileSync(join(OUT, `${file}@2x.png`), draw(edges, points, 2, theme));
-    writeFileSync(join(OUT, `${file}@3x.png`), draw(edges, points, 3, theme));
-    writeFileSync(join(OUT, 'web', `${file}.png`), draw(edges, points, 3, theme));
+    const colors = arrow ? { ink: theme.arrow, halo: theme.halo } : theme;
+    for (const [out, scale] of [[`${file}.png`, 1], [`${file}@2x.png`, 2], [`${file}@3x.png`, 3], [join('web', `${file}.png`), 3]]) {
+      writeFileSync(join(OUT, out), draw(edges, points, scale, colors, !arrow));
+    }
     count += 1;
   }
 }

@@ -107,9 +107,9 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onStopPress, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
   ref,
 ) {
-  const { isDark, mapTheme } = useTheme();
+  const { isDark, mapTheme, transitIcons } = useTheme();
   // As JSON, which is what the native map takes (and an unchanged theme sends nothing new).
-  const mapStyle = useMemo(() => JSON.stringify(pathlyMapStyle(isDark, mapTheme)), [isDark, mapTheme]);
+  const mapStyle = useMemo(() => JSON.stringify(pathlyMapStyle(isDark, mapTheme, transitIcons)), [isDark, mapTheme, transitIcons]);
   const mapRef = useRef<MapRef>(null);
   const cameraRef = useRef<CameraRef>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });

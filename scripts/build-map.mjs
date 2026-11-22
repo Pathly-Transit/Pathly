@@ -21,6 +21,7 @@ import { DETAIL, EXPLORATION, MAX_ZOOM, OVERVIEW, ROOT } from './map/bounds.mjs'
 import { boxesOverlap, ringBounds } from './map/geometry.mjs';
 import { addOsmLandmarks, downloadOsmLandmarks } from './map/landmarks.mjs';
 import { addOsmPaths, downloadOsmPaths } from './map/osm.mjs';
+import { addOsmTransitways, downloadOsmTransitways } from './map/transitways.mjs';
 import { LAYERS } from './map/schema.mjs';
 import { addMsBuildings, downloadMsBuildings } from './map/msbuildings.mjs';
 import { readShapefileZip } from './map/shapefile.mjs';
@@ -82,6 +83,7 @@ async function download(dir) {
   }
   await downloadOsmPaths(dir);
   await downloadOsmLandmarks(dir);
+  await downloadOsmTransitways(dir);
   await downloadMsBuildings(dir);
   console.log(`Sources ready in ${dir}.`);
 }
@@ -107,6 +109,7 @@ async function build(dir, tilesOnly) {
     addRoads(store, join(dir, 'county'), log);
     addOsmPaths(store, join(dir, 'osm'), log);
     addOsmLandmarks(store, join(dir, 'osm'), log);
+    addOsmTransitways(store, join(dir, 'osm'), log);
     addRail(store, join(dir, 'tiger'), log);
     addTransit(store, join(dir, 'gtfs'), log);
     await addBuildings(store, join(dir, 'nyc/buildings.csv'), log);

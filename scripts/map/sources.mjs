@@ -109,7 +109,7 @@ export function addPolygons(store, layer, minzoom, props, polygons, maxzoom) {
   return store.add(layer, POLYGON, minzoom, props, parts, outer, maxzoom);
 }
 
-function addLines(store, layer, minzoom, props, lines, box) {
+export function addLines(store, layer, minzoom, props, lines, box) {
   const parts = [];
   for (const line of lines) {
     if (boxContainsBox(box, ringBounds(line))) parts.push(line);
@@ -119,7 +119,7 @@ function addLines(store, layer, minzoom, props, lines, box) {
 }
 
 /** A label point; past the last zoom it carries the zoom it shows from (`lz`). */
-function addLabel(store, layer, labelZoom, props, x, y) {
+export function addLabel(store, layer, labelZoom, props, x, y) {
   if (!insideBox(OVERVIEW, x, y)) return -1;
   return store.add(layer, POINT, Math.min(labelZoom, MAX_ZOOM), labelZoom > MAX_ZOOM ? { ...props, lz: labelZoom } : props, [[x, y]]);
 }

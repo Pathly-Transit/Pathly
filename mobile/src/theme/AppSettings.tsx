@@ -27,7 +27,11 @@ export type MapDotColor = 'default' | SavedPlaceColor;
 export type MapTheme = 'default' | 'muted' | 'vibrant' | 'warm';
 export const MAP_THEMES: readonly MapTheme[] = ['default', 'muted', 'vibrant', 'warm'];
 
-type DisplaySettings = { appearance: Appearance; reducedMotion: boolean; pathlingMotion: boolean; easyMode: boolean; textSize: TextSize; highContrast: boolean; mapDotColor: MapDotColor; mapTheme: MapTheme; destinationPin: DestinationPinStyle; leftHanded: boolean };
+/** Which of the base map's transit icons show (map/mapStyle.ts): every stop, stations without bus stops, or none. */
+export type TransitIcons = 'all' | 'stations' | 'none';
+export const TRANSIT_ICON_CHOICES: readonly TransitIcons[] = ['all', 'stations', 'none'];
+
+type DisplaySettings = { appearance: Appearance; reducedMotion: boolean; pathlingMotion: boolean; easyMode: boolean; textSize: TextSize; highContrast: boolean; mapDotColor: MapDotColor; mapTheme: MapTheme; transitIcons: TransitIcons; destinationPin: DestinationPinStyle; leftHanded: boolean };
 
 type AppSettingsValue = {
   appearance: Appearance;
@@ -41,6 +45,7 @@ type AppSettingsValue = {
   setLeftHanded: (next: boolean) => void;
   mapDotColor: MapDotColor;
   mapTheme: MapTheme;
+  transitIcons: TransitIcons;
   /** True when either the app toggle or the device asks for reduced motion. */
   reducedMotionActive: boolean;
   reducedMotion: boolean;
@@ -59,6 +64,7 @@ type AppSettingsValue = {
   setHighContrast: (value: boolean) => void;
   setMapDotColor: (value: MapDotColor) => void;
   setMapTheme: (value: MapTheme) => void;
+  setTransitIcons: (value: TransitIcons) => void;
   setReducedMotion: (value: boolean) => void;
   setTextSize: (value: TextSize) => void;
 };
@@ -91,6 +97,7 @@ function parseDisplaySettings(text: string | null): Partial<DisplaySettings> {
     if (saved.destinationPin !== undefined) settings.destinationPin = normalizeDestinationPin(saved.destinationPin);
     if (saved.mapDotColor === 'default' || (typeof saved.mapDotColor === 'string' && Object.hasOwn(SAVED_PLACE_COLOR_HEX, saved.mapDotColor))) settings.mapDotColor = saved.mapDotColor as MapDotColor;
     if (typeof saved.mapTheme === 'string' && (MAP_THEMES as readonly string[]).includes(saved.mapTheme)) settings.mapTheme = saved.mapTheme as MapTheme;
+    if (typeof saved.transitIcons === 'string' && (TRANSIT_ICON_CHOICES as readonly string[]).includes(saved.transitIcons)) settings.transitIcons = saved.transitIcons as TransitIcons;
     return settings;
   } catch {
     return {};
@@ -108,7 +115,7 @@ type AppSettingsProviderProps = {
 /** App preferences every screen reads (appearance, motion, text size, contrast), saved on the device. */
 export function AppSettingsProvider({ children, initialAppearance = 'light', initialReducedMotion = false, initialTextSize = 'default', initialHighContrast = false }: AppSettingsProviderProps) {
   const systemScheme = useColorScheme();
-  const [settings, setSettings] = useState<DisplaySettings>({ appearance: initialAppearance, reducedMotion: initialReducedMotion, pathlingMotion: true, easyMode: false, textSize: initialTextSize, highContrast: initialHighContrast, mapDotColor: 'default', mapTheme: 'default', destinationPin: { ...DEFAULT_DESTINATION_PIN }, leftHanded: false });
+  const [settings, setSettings] = useState<DisplaySettings>({ appearance: initialAppearance, reducedMotion: initialReducedMotion, pathlingMotion: true, easyMode: false, textSize: initialTextSize, highContrast: initialHighContrast, mapDotColor: 'default', mapTheme: 'default', transitIcons: 'all', destinationPin: { ...DEFAULT_DESTINATION_PIN }, leftHanded: false });
   const [deviceReducedMotion, setDeviceReducedMotion] = useState(false);
   // A choice made before the saved settings finish loading wins over them.
   const changedBeforeLoad = useRef(false);
@@ -150,7 +157,7 @@ export function AppSettingsProvider({ children, initialAppearance = 'light', ini
   }, []);
 
   const value = useMemo<AppSettingsValue>(() => {
-    const { appearance, destinationPin, easyMode, highContrast, leftHanded, mapDotColor, mapTheme, pathlingMotion, reducedMotion, textSize } = settings;
+    const { appearance, destinationPin, easyMode, highContrast, leftHanded, mapDotColor, mapTheme, pathlingMotion, reducedMotion, textSize, transitIcons } = settings;
     const scheme = resolveScheme(appearance, systemScheme);
     const palette = paletteFor(scheme, highContrast);
     return {
@@ -163,6 +170,7 @@ export function AppSettingsProvider({ children, initialAppearance = 'light', ini
       setLeftHanded: (next) => update({ leftHanded: next }),
       mapDotColor,
       mapTheme,
+      transitIcons,
       pathlingMotion,
       setPathlingMotion: (next) => update({ pathlingMotion: next }),
       easyMode,
@@ -177,6 +185,7 @@ export function AppSettingsProvider({ children, initialAppearance = 'light', ini
       setHighContrast: (next) => update({ highContrast: next }),
       setMapDotColor: (next) => update({ mapDotColor: next }),
       setMapTheme: (next) => update({ mapTheme: next }),
+      setTransitIcons: (next) => update({ transitIcons: next }),
       setReducedMotion: (next) => update({ reducedMotion: next }),
       setTextSize: (next) => update({ textSize: next }),
     };
@@ -204,6 +213,7 @@ const fallback: AppSettingsValue = {
   setLeftHanded: () => undefined,
   mapDotColor: 'default',
   mapTheme: 'default',
+  transitIcons: 'all',
   pathlingMotion: true,
   setPathlingMotion: () => undefined,
   easyMode: false,
@@ -218,6 +228,7 @@ const fallback: AppSettingsValue = {
   setHighContrast: () => undefined,
   setMapDotColor: () => undefined,
   setMapTheme: () => undefined,
+  setTransitIcons: () => undefined,
   setReducedMotion: () => undefined,
   setTextSize: () => undefined,
 };
@@ -227,8 +238,8 @@ export function useAppSettings() {
 }
 
 export function useTheme() {
-  const { colors, isDark, mapTheme, scheme } = useAppSettings();
-  return { colors, isDark, mapTheme, scheme };
+  const { colors, isDark, mapTheme, scheme, transitIcons } = useAppSettings();
+  return { colors, isDark, mapTheme, scheme, transitIcons };
 }
 
 /** Half-point steps keep scaled text crisp. */
