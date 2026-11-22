@@ -68,7 +68,7 @@ it('migrates a legacy admin mock location to timestamped navigation evidence', a
     const stored = JSON.parse(raw ?? '{}') as { mockLocation?: { capturedAt?: number } };
     expect(stored.mockLocation?.capturedAt).toEqual(expect.any(Number));
   });
-  expect(screen.getByTestId('google-map-view').props.region).toMatchObject(PENN);
+  expect(screen.getByTestId('home-map').props.initialCamera.center).toMatchObject(PENN);
 });
 
 it('moves the map, Nearby, and trip planning to a mock location, and back when turned off', async () => {
@@ -84,7 +84,7 @@ it('moves the map, Nearby, and trip planning to a mock location, and back when t
   expect(within(screen.getByTestId('debug-banner')).getByText('Mock location: Penn Station')).toBeTruthy();
   // The map jumps to Penn Station and Nearby searches there.
   // The rebuilt home map opens on Penn Station, not where it was before.
-  expect(screen.getByTestId('google-map-view').props.region).toMatchObject(PENN);
+  expect(screen.getByTestId('home-map').props.initialCamera.center).toMatchObject(PENN);
   await waitFor(() => expect(callableMock('findNearbyTransit')).toHaveBeenCalledWith({ lat: PENN.latitude, lon: PENN.longitude }));
   // A real fix isn't needed: the location chip doesn't say it's unavailable.
   expect(screen.queryByText('Location unavailable — showing Stony Brook')).toBeNull();
@@ -112,7 +112,7 @@ it('sets a mock location from a long press on the home map', async () => {
   mockAuthUser.email = 'admin@gmail.com';
   const screen = render(<App />);
   await act(async () => undefined);
-  fireEvent(screen.getByTestId('google-map-view'), 'longPress', { nativeEvent: { coordinate: { latitude: 40.70331, longitude: -74.00567 } } });
+  fireEvent(screen.getByTestId('home-map'), 'longPress', { latitude: 40.70331, longitude: -74.00567 });
   expect(screen.getByText('Use as mock location?')).toBeTruthy();
   fireEvent.press(screen.getByTestId('mock-location-confirm-confirm'));
   expect(within(screen.getByTestId('debug-banner')).getByText('Mock location: Pinned spot (40.70331, -74.00567)')).toBeTruthy();
@@ -122,7 +122,7 @@ it('sets a mock location from a long press on the home map', async () => {
 it("ignores long presses for a rider", async () => {
   const screen = render(<App />);
   await act(async () => undefined);
-  fireEvent(screen.getByTestId('google-map-view'), 'longPress', { nativeEvent: { coordinate: { latitude: 40.7, longitude: -74 } } });
+  fireEvent(screen.getByTestId('home-map'), 'longPress', { latitude: 40.7, longitude: -74 });
   expect(screen.queryByText('Use as mock location?')).toBeNull();
 });
 
@@ -240,7 +240,7 @@ describe('Admin tools screen', () => {
     fireEvent(screen.getByTestId('admin-overlay-tap-coords'), 'valueChange', true);
     fireEvent.press(screen.getByTestId('admin-tools-back'));
     fireEvent.press(screen.getByTestId('profile-back'));
-    fireEvent(screen.getByTestId('google-map-view'), 'press', { nativeEvent: { coordinate: { latitude: 40.750521, longitude: -73.993451 } } });
+    fireEvent(screen.getByTestId('home-map'), 'press', { latitude: 40.750521, longitude: -73.993451 });
     expect(within(screen.getByTestId('map-tap-coords')).getByText('40.75052, -73.99345')).toBeTruthy();
     fireEvent.press(screen.getByTestId('map-tap-coords'));
     expect(screen.queryByTestId('map-tap-coords')).toBeNull();

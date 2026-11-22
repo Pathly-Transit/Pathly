@@ -1,25 +1,9 @@
-/* eslint-disable @typescript-eslint/no-require-imports -- Jest's hoisted mock factory cannot use module-scope imports. */
 import { fireEvent, render } from '@testing-library/react-native';
 
-import { GoogleMapView as NativeGoogleMapView } from '../src/components/GoogleMapView.native';
-import { GoogleMapView as WebGoogleMapView } from '../src/components/GoogleMapView.web';
+import { HomeMap } from '../src/components/HomeMap';
 import { placeFromName, placeToLocation, type SavedLocation } from '../src/data/userData';
 import { AppSettingsProvider } from '../src/theme/AppSettings';
 import { MAP_EXPLORATION_BOUNDS, SERVICE_AREA_BOUNDS } from '../src/data/serviceArea';
-
-jest.mock('@react-google-maps/api', () => {
-  const { View } = require('react-native');
-  const GoogleMap = ({ children, ...props }: { children: React.ReactNode }) => <View {...props} testID="web-google-map">{children}</View>;
-  const Marker = (props: { title?: string }) => (
-    <View
-      {...props}
-      testID={props.title === 'Your location' ? 'web-rider-marker' : `web-${props.title}`}
-    />
-  );
-  const Rectangle = (props: object) => <View {...props} testID="web-service-area" />;
-  const OverlayViewF = ({ children, ...props }: { children: React.ReactNode }) => <View {...props} testID="web-overlay">{children}</View>;
-  return { FLOAT_PANE: 'floatPane', GoogleMap, Marker, OverlayViewF, Rectangle, useJsApiLoader: () => ({ isLoaded: true }) };
-});
 
 const WORK_PLACE = { id: 'work-place', title: 'Work', subtitle: '123 Main St', location: { latitude: 40.75, longitude: -73.99 } };
 const savedWork: SavedLocation = { id: 'work-place', address: placeToLocation(WORK_PLACE, 'Destination'), dateSaved: null };
@@ -30,9 +14,13 @@ function settings(child: React.ReactNode) {
 }
 
 describe('home map saved-place markers', () => {
-  it('allows browsing beyond service coverage and gives web a soft boundary', () => {
-    const screen = render(settings(<WebGoogleMapView location={{ latitude: 40.7, longitude: -73.9 }} />));
-    expect(screen.getByTestId('web-google-map').props.options).toMatchObject({ restriction: { latLngBounds: MAP_EXPLORATION_BOUNDS, strictBounds: false }, minZoom: 6 });
+  it('allows browsing beyond service coverage, keeping the camera near it', () => {
+    const screen = render(settings(<HomeMap location={{ latitude: 40.7, longitude: -73.9 }} />));
+    const map = screen.getByTestId('home-map');
+    expect(map.props.maxBounds).toEqual(MAP_EXPLORATION_BOUNDS);
+    // Far enough out to see the whole region at once.
+    expect(map.props.minZoom).toBe(6);
+    expect(map.props.initialCamera).toEqual({ center: { latitude: 40.7, longitude: -73.9 }, zoom: 14 });
     expect(MAP_EXPLORATION_BOUNDS.north).toBeGreaterThan(SERVICE_AREA_BOUNDS.north);
     expect(MAP_EXPLORATION_BOUNDS.south).toBeLessThan(SERVICE_AREA_BOUNDS.south);
     expect(MAP_EXPLORATION_BOUNDS.east).toBeGreaterThan(SERVICE_AREA_BOUNDS.east);
@@ -41,15 +29,11 @@ describe('home map saved-place markers', () => {
     expect(MAP_EXPLORATION_BOUNDS.north).toBeGreaterThanOrEqual(42.8);
     expect(MAP_EXPLORATION_BOUNDS.west).toBeLessThanOrEqual(-75.2);
   });
-  beforeAll(() => {
-    class Point { constructor(public x: number, public y: number) {} }
-    Object.assign(globalThis, { google: { maps: { Point, SymbolPath: { CIRCLE: 'circle' } } } });
-  });
 
-  it('renders only routable saved places on native and opens the selected place', () => {
+  it('renders only routable saved places and opens the selected place', () => {
     const onSavedLocationPress = jest.fn();
     const screen = render(settings(
-      <NativeGoogleMapView
+      <HomeMap
         location={{ latitude: 40.7, longitude: -73.9 }}
         onSavedLocationPress={onSavedLocationPress}
         savedLocations={[savedWork, unresolved]}
@@ -59,17 +43,17 @@ describe('home map saved-place markers', () => {
     const marker = screen.getByTestId('saved-place-marker-work-place', { includeHiddenElements: true });
     expect(marker.props.coordinate).toEqual(WORK_PLACE.location);
     expect(marker.props.accessibilityLabel).toBe('Plan a trip to Work, 123 Main St');
-    // A round badge centered on the place, as Google Maps marks one.
-    expect(marker.props.anchor).toEqual({ x: 0.5, y: 0.5 });
+    // A round badge centered on the place.
+    expect(marker.props.anchor ?? 'center').toBe('center');
     expect(screen.queryByTestId('saved-place-marker-name%3AFuture', { includeHiddenElements: true })).toBeNull();
     fireEvent.press(marker);
     expect(onSavedLocationPress).toHaveBeenCalledWith(savedWork, [savedWork]);
   });
 
-  it('opens a favorite the rider\'s dot covers when the dot is tapped on native', () => {
+  it('opens a favorite the rider\'s dot covers when the dot is tapped', () => {
     const onSavedLocationPress = jest.fn();
     const screen = render(settings(
-      <NativeGoogleMapView
+      <HomeMap
         location={WORK_PLACE.location}
         locationKnown
         onSavedLocationPress={onSavedLocationPress}
@@ -78,70 +62,30 @@ describe('home map saved-place markers', () => {
     ));
 
     const marker = screen.getByTestId('saved-place-marker-work-place', { includeHiddenElements: true });
-    const dot = screen.getByTestId('google-map-view-user-location', { includeHiddenElements: true });
+    const dot = screen.getByTestId('home-map-user-location', { includeHiddenElements: true });
     // The dot stays drawn over the favorite, and a tap on it opens the favorite.
     expect(dot.props.zIndex).toBeGreaterThan(marker.props.zIndex);
     fireEvent.press(dot);
     expect(onSavedLocationPress).toHaveBeenCalledWith(savedWork, [savedWork]);
   });
 
-  it('does nothing when the rider\'s dot is tapped away from favorites on native', () => {
+  it('does nothing when the rider\'s dot is tapped away from favorites', () => {
     const onSavedLocationPress = jest.fn();
     const screen = render(settings(
-      <NativeGoogleMapView location={{ latitude: 40.7, longitude: -73.9 }} locationKnown onSavedLocationPress={onSavedLocationPress} savedLocations={[savedWork]} />,
+      <HomeMap location={{ latitude: 40.7, longitude: -73.9 }} locationKnown onSavedLocationPress={onSavedLocationPress} savedLocations={[savedWork]} />,
     ));
 
-    fireEvent.press(screen.getByTestId('google-map-view-user-location', { includeHiddenElements: true }));
+    fireEvent.press(screen.getByTestId('home-map-user-location', { includeHiddenElements: true }));
     expect(onSavedLocationPress).not.toHaveBeenCalled();
   });
 
-  it('keeps the rider\'s dot on top on web without blocking clicks on a favorite', () => {
-    const screen = render(settings(
-      <WebGoogleMapView location={WORK_PLACE.location} onSavedLocationPress={jest.fn()} savedLocations={[savedWork]} />,
-    ));
-
-    const marker = screen.getByTestId('web-Plan a trip to Work, 123 Main St', { includeHiddenElements: true });
-    // Not a Marker: Google Maps gives every marker, even an unclickable one, an element that
-    // swallows clicks. The dot is drawn in the floating pane, over the pins, and lets clicks through.
-    expect(screen.queryByTestId('web-rider-marker', { includeHiddenElements: true })).toBeNull();
-    const dot = screen.getByTestId('web-rider-dot', { includeHiddenElements: true });
-    expect(dot.props.pointerEvents).toBe('none');
-    const overlay = screen.getByTestId('web-overlay', { includeHiddenElements: true });
-    expect(overlay.props.mapPaneName).toBe('floatPane');
-    expect(overlay.props.position).toEqual({ lat: 40.75, lng: -73.99 });
-    // The overlay's own wrapper stays 0 px across, so it has no area to catch a click either.
-    expect(overlay.props.getPixelPositionOffset()).toEqual({ x: 0, y: 0 });
-    expect(dot.props.style).toEqual(expect.arrayContaining([expect.objectContaining({ position: 'absolute', left: -9, top: -9, width: 18, height: 18 })]));
-    expect(marker.props.clickable).toBe(true);
-  });
-
-  it('renders only routable saved places on web and opens the selected place', () => {
-    const onSavedLocationPress = jest.fn();
-    const screen = render(settings(
-      <WebGoogleMapView
-        location={{ latitude: 40.7, longitude: -73.9 }}
-        onSavedLocationPress={onSavedLocationPress}
-        savedLocations={[savedWork, unresolved]}
-      />,
-    ));
-
-    const marker = screen.getByTestId('web-Plan a trip to Work, 123 Main St', { includeHiddenElements: true });
-    expect(marker.props.position).toEqual({ lat: 40.75, lng: -73.99 });
-    expect(marker.props.icon.url).toMatch(/^data:image\/svg\+xml/);
-    expect(decodeURIComponent(marker.props.icon.url)).toContain('fill="#0B4F9C"');
-    // The 30 px badge sits in the middle of a 44 px image whose clear margin takes clicks too.
-    expect(marker.props.icon.anchor).toEqual({ x: 22, y: 22 });
-    expect(marker.props.options).toEqual({ optimized: false });
-    expect(screen.queryByTestId('web-Plan a trip to Future', { includeHiddenElements: true })).toBeNull();
-    jest.useFakeTimers();
-    try {
-      fireEvent(marker, 'click');
-      // Opens only after the browser's own click, so that click can't land on the details' backdrop.
-      expect(onSavedLocationPress).not.toHaveBeenCalled();
-      jest.runOnlyPendingTimers();
-      expect(onSavedLocationPress).toHaveBeenCalledWith(savedWork, [savedWork]);
-    } finally {
-      jest.useRealTimers();
-    }
+  it('opens on a restored camera, including an older one saved as a span', () => {
+    const at = { latitude: 40.75, longitude: -73.99 };
+    const zoomed = render(settings(<HomeMap initialCamera={{ ...at, zoom: 12 }} location={{ latitude: 40.7, longitude: -73.9 }} />));
+    expect(zoomed.getByTestId('home-map').props.initialCamera).toEqual({ center: at, zoom: 12 });
+    zoomed.unmount();
+    const spanned = render(settings(<HomeMap initialCamera={{ ...at, latitudeDelta: 0.05, longitudeDelta: 0.05 }} location={{ latitude: 40.7, longitude: -73.9 }} />));
+    // 0.05 degrees across a phone-width map.
+    expect(spanned.getByTestId('home-map').props.initialCamera.zoom).toBeCloseTo(13.4, 1);
   });
 });

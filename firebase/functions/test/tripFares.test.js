@@ -1,13 +1,11 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 
 const withoutLines = ({ lines: _lines, ...fare }) => fare;
 
 const { createFareEstimator, isLirrPeak, lirrFareCents } = require('../lib/tripFares');
 const { loadAgencyStaticData } = require('../lib/gtfsStaticData');
-const { normalizeRoutesResponse } = require('../lib/tripPlanning');
+const { itineraryFare } = require('../lib/tripPlanning');
 
 const lirrStops = loadAgencyStaticData('lirr').stopsById;
 const estimate = createFareEstimator(lirrStops.values());
@@ -18,7 +16,7 @@ const station = (name) => {
 };
 const SOMEWHERE = { lat: 40.86, lng: -73.2 };
 
-/** A transit leg as planTrip's normalizer produces it (only what fares read). */
+/** A transit leg as the trip planner produces it (only what fares read). */
 function leg(agency, { from = SOMEWHERE, to = SOMEWHERE, at, mode = 'bus', shortName = '1' }) {
   return { kind: 'transit', mode, agency: { name: agency }, line: { name: shortName, shortName }, from: { name: 'A', location: from, time: at }, to: { name: 'B', location: to, time: at }, stopCount: 1, durationSeconds: 600, path: [] };
 }
@@ -94,12 +92,17 @@ test('every LIRR passenger station has a fare zone', () => {
   assert.deepEqual(unmatched.map((stop) => stop.name), ['Hillside Facility'], 'only the employee-only facility has no fare');
 });
 
-test('every recorded itinerary gets a fare', () => {
-  for (const name of ['routes-sbu-penn.json', 'routes-sbu-mall.json']) {
-    const raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8'));
-    const itineraries = normalizeRoutesResponse(raw, '2026-10-14T12:30:00Z', 'Destination', estimate);
-    assert.ok(itineraries.every((itinerary) => itinerary.fare?.estimated === true), name);
-  }
+test('a planned trip on the subway, a bus, and the LIRR gets one fare with its discounts', () => {
+  const trip = [
+    leg('Suffolk County Transit - Central', { at: OFF_PEAK, shortName: '51' }),
+    leg(LIRR, { from: station('Ronkonkoma'), to: station('Penn Station'), at: later(OFF_PEAK, 50), mode: 'rail' }),
+    leg('MTA New York City Transit', { at: later(OFF_PEAK, 140), mode: 'subway', shortName: 'A' }),
+  ];
+  const fare = itineraryFare(trip, OFF_PEAK, estimate);
+  assert.equal(fare.cents, 225 + 1600 + 300);
+  assert.equal(fare.estimated, true);
+  assert.ok(fare.reduced.cents < fare.cents);
+  assert.equal(fare.lines.length, 3);
 });
 
 test('MTA buses: SBS is a local fare, SIM express buses cost $7.25', () => {

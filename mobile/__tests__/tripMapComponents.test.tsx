@@ -1,47 +1,8 @@
-/* eslint-disable @typescript-eslint/no-require-imports -- Jest's hoisted mock factory cannot use module-scope imports. */
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 
-import { TripMap as NativeTripMap } from '../src/components/TripMap.native';
-import { TripMap as WebTripMap } from '../src/components/TripMap.web';
+import { TripMap } from '../src/components/TripMap';
 import type { TripMapProgress } from '../src/data/tripMap';
-
-jest.mock('@react-google-maps/api', () => {
-  const React = require('react');
-  const { View: MockView } = require('react-native');
-  const mockMap = {
-    fitBounds: jest.fn(),
-    getCenter: jest.fn(() => ({ lat: () => 40.9, lng: () => -73.1 })),
-    getProjection: jest.fn(() => undefined),
-    getZoom: jest.fn(() => 14),
-    panTo: jest.fn(),
-    setZoom: jest.fn(),
-  };
-  const GoogleMap = ({ children, onLoad, ...props }: { children: React.ReactNode; onLoad?: (map: typeof mockMap) => void }) => {
-    React.useEffect(() => onLoad?.(mockMap), [onLoad]);
-    return <MockView {...props} testID="web-google-map">{children}</MockView>;
-  };
-  const Marker = (props: object) => <MockView {...props} testID="web-marker" />;
-  const OverlayViewF = ({ children }: { children: React.ReactNode }) => <MockView testID="web-overlay">{children}</MockView>;
-  // Counts mounts, so a test can tell a line drawn fresh from one reused with new options.
-  const mockPolylineMounts = { count: 0 };
-  const Polyline = (props: object) => {
-    React.useEffect(() => {
-      mockPolylineMounts.count += 1;
-    }, []);
-    return <MockView {...props} testID="web-polyline" />;
-  };
-  return {
-    FLOAT_PANE: 'floatPane',
-    GoogleMap,
-    Marker,
-    OverlayViewF,
-    Polyline,
-    mockMap,
-    mockPolylineMounts,
-    useJsApiLoader: () => ({ isLoaded: true }),
-  };
-});
 
 const ORIGIN = { lat: 40.9, lng: -73.12 };
 const DESTINATION = { lat: 40.93, lng: -73.08 };
@@ -59,396 +20,158 @@ const progress: TripMapProgress = {
   followTarget: { lat: 40.92, lng: -73.1 },
 };
 
-type WebMapMock = {
-  fitBounds: jest.Mock;
-  getZoom: jest.Mock;
-  panTo: jest.Mock;
-  setZoom: jest.Mock;
-};
+const hidden = { includeHiddenElements: true };
+const kit = () => jest.requireMock('../src/map/MapCanvas') as { mockEaseTo: jest.Mock; mockFitPoints: jest.Mock };
 
-describe('native active TripMap', () => {
+describe('active TripMap', () => {
   beforeEach(() => {
-    const maps = jest.requireMock('react-native-maps') as { mockAnimateCamera: jest.Mock; mockFitToCoordinates: jest.Mock };
-    maps.mockAnimateCamera.mockClear();
-    maps.mockFitToCoordinates.mockClear();
+    kit().mockEaseTo.mockClear();
+    kit().mockFitPoints.mockClear();
   });
 
-  it('uses an explicit stale-capable marker and progress styles', () => {
+  it('draws an explicit, stale-capable rider marker and completed/current/upcoming legs', () => {
     const screen = render(
-      <NativeTripMap
+      <TripMap
         destination={DESTINATION}
         interactive={true}
         navigationProgress={progress}
         origin={ORIGIN}
-        testID="native-nav-map"
+        testID="nav-map"
         userLocation={{ lat: 40.915, lng: -73.105 }}
         userLocationStale={true}
       />,
     );
 
-    const map = screen.getByTestId('native-nav-map', { includeHiddenElements: true });
-    expect(map.props.showsUserLocation).toBe(false);
-    expect(screen.getByTestId('native-nav-map-user-location', { includeHiddenElements: true }).props.coordinate).toEqual({ latitude: 40.915, longitude: -73.105 });
-    expect(StyleSheet.flatten(screen.getByTestId('native-nav-map-user-location-visual', { includeHiddenElements: true }).props.style).opacity).toBeLessThan(1);
-    expect(screen.getByTestId('native-nav-map-progress-completed-0', { includeHiddenElements: true }).props.strokeWidth).toBeGreaterThan(0);
-    expect(screen.getByTestId('native-nav-map-progress-current-1', { includeHiddenElements: true }).props.strokeWidth).toBe(8);
-    expect(screen.getByTestId('native-nav-map-progress-upcoming-2', { includeHiddenElements: true }).props.strokeColor).toBe('#F26A21');
+    expect(screen.getByTestId('nav-map-user-location', hidden).props.coordinate).toEqual({ latitude: 40.915, longitude: -73.105 });
+    expect(StyleSheet.flatten(screen.getByTestId('nav-map-user-location-visual', hidden).props.style).opacity).toBeLessThan(1);
+    const completed = screen.getByTestId('nav-map-progress-completed-0', hidden).props;
+    expect(completed.width).toBe(4);
+    expect(completed.opacity).toBeLessThan(1);
+    const current = screen.getByTestId('nav-map-progress-current-1', hidden).props;
+    expect(current.width).toBe(8);
+    expect(current.dotted).toBe(true);
+    const upcoming = screen.getByTestId('nav-map-progress-upcoming-2', hidden).props;
+    expect(upcoming.color).toBe('#F26A21');
+    expect(upcoming.width).toBe(6);
+    // A stop already passed is ringed gray and faded; the start is a big gray dot.
+    expect(StyleSheet.flatten(screen.getByTestId('trip-map-start-0', hidden).props.style).width).toBe(18);
   });
 
   it('follows movement, pauses after a pan, and resumes from locate', () => {
     const onFollowModeChange = jest.fn();
-    const maps = jest.requireMock('react-native-maps') as { mockFitToCoordinates: jest.Mock };
-    const screen = render(
-      <NativeTripMap
-        centerOnUserRequest={0}
-        destination={DESTINATION}
-        followUser={true}
-        interactive={true}
-        navigationProgress={progress}
-        onFollowModeChange={onFollowModeChange}
-        origin={ORIGIN}
-        testID="native-follow-map"
-        userLocation={{ lat: 40.915, lng: -73.105 }}
-      />,
-    );
-    const map = screen.getByTestId('native-follow-map', { includeHiddenElements: true });
-    fireEvent(map, 'mapReady');
-    expect(maps.mockFitToCoordinates).toHaveBeenCalledWith(
+    const props = { destination: DESTINATION, interactive: true, navigationProgress: progress, onFollowModeChange, origin: ORIGIN, testID: 'follow-map' };
+    const screen = render(<TripMap {...props} centerOnUserRequest={0} followUser={true} userLocation={{ lat: 40.915, lng: -73.105 }} />);
+    expect(kit().mockFitPoints).toHaveBeenCalledWith(
       expect.arrayContaining([{ latitude: 40.915, longitude: -73.105 }]),
-      expect.objectContaining({ animated: true }),
+      expect.objectContaining({ durationMs: expect.any(Number) }),
     );
+    expect(kit().mockFitPoints.mock.calls.at(-1)![1].durationMs).toBeGreaterThan(0);
 
-    maps.mockFitToCoordinates.mockClear();
-    screen.rerender(
-      <NativeTripMap
-        centerOnUserRequest={0}
-        destination={DESTINATION}
-        followUser={true}
-        interactive={true}
-        navigationProgress={progress}
-        onFollowModeChange={onFollowModeChange}
-        origin={ORIGIN}
-        testID="native-follow-map"
-        userLocation={{ lat: 40.916, lng: -73.104 }}
-      />,
-    );
-    expect(maps.mockFitToCoordinates).toHaveBeenCalledWith(
-      expect.arrayContaining([{ latitude: 40.916, longitude: -73.104 }]),
-      expect.objectContaining({ animated: true }),
-    );
+    kit().mockFitPoints.mockClear();
+    screen.rerender(<TripMap {...props} centerOnUserRequest={0} followUser={true} userLocation={{ lat: 40.916, lng: -73.104 }} />);
+    expect(kit().mockFitPoints).toHaveBeenCalledWith(expect.arrayContaining([{ latitude: 40.916, longitude: -73.104 }]), expect.anything());
 
-    maps.mockFitToCoordinates.mockClear();
-    fireEvent(map, 'panDrag');
+    kit().mockFitPoints.mockClear();
+    fireEvent(screen.getByTestId('follow-map', hidden), 'userGesture');
     expect(onFollowModeChange).toHaveBeenLastCalledWith(false);
-    expect(maps.mockFitToCoordinates).not.toHaveBeenCalled();
-    screen.rerender(
-      <NativeTripMap
-        centerOnUserRequest={0}
-        destination={DESTINATION}
-        followUser={false}
-        interactive={true}
-        navigationProgress={progress}
-        onFollowModeChange={onFollowModeChange}
-        origin={ORIGIN}
-        testID="native-follow-map"
-        userLocation={{ lat: 40.918, lng: -73.102 }}
-      />,
-    );
-    maps.mockFitToCoordinates.mockClear();
-    screen.rerender(
-      <NativeTripMap
-        centerOnUserRequest={1}
-        destination={DESTINATION}
-        followUser={false}
-        interactive={true}
-        navigationProgress={progress}
-        onFollowModeChange={onFollowModeChange}
-        origin={ORIGIN}
-        testID="native-follow-map"
-        userLocation={{ lat: 40.918, lng: -73.102 }}
-      />,
-    );
+    expect(kit().mockFitPoints).not.toHaveBeenCalled();
+    screen.rerender(<TripMap {...props} centerOnUserRequest={0} followUser={false} userLocation={{ lat: 40.918, lng: -73.102 }} />);
+    expect(kit().mockFitPoints).not.toHaveBeenCalled();
+    screen.rerender(<TripMap {...props} centerOnUserRequest={1} followUser={false} userLocation={{ lat: 40.918, lng: -73.102 }} />);
     expect(onFollowModeChange).toHaveBeenLastCalledWith(true);
-    expect(maps.mockFitToCoordinates).toHaveBeenCalledWith(
-      expect.arrayContaining([{ latitude: 40.918, longitude: -73.102 }]),
-      expect.objectContaining({ animated: true }),
-    );
+    expect(kit().mockFitPoints).toHaveBeenCalledWith(expect.arrayContaining([{ latitude: 40.918, longitude: -73.102 }]), expect.anything());
   });
 
   it('opens on a held camera without framing the trip, and frames it once the hold is cleared', () => {
-    const maps = jest.requireMock('react-native-maps') as { mockFitToCoordinates: jest.Mock };
-    const held = { latitude: 40.95, longitude: -73.2, latitudeDelta: 0.01, longitudeDelta: 0.01 };
-    const screen = render(<NativeTripMap destination={DESTINATION} holdCamera={held} interactive={true} origin={ORIGIN} testID="native-held-map" />);
-    const map = screen.getByTestId('native-held-map', { includeHiddenElements: true });
-    expect(map.props.initialRegion).toEqual(held);
-    fireEvent(map, 'mapReady');
-    expect(maps.mockFitToCoordinates).not.toHaveBeenCalled();
+    const held = { latitude: 40.95, longitude: -73.2, zoom: 16 };
+    const screen = render(<TripMap destination={DESTINATION} holdCamera={held} interactive={true} origin={ORIGIN} testID="held-map" />);
+    expect(screen.getByTestId('held-map', hidden).props.initialCamera).toEqual({ center: { latitude: 40.95, longitude: -73.2 }, zoom: 16 });
+    expect(kit().mockFitPoints).not.toHaveBeenCalled();
 
-    screen.rerender(<NativeTripMap destination={DESTINATION} holdCamera={null} interactive={true} origin={ORIGIN} testID="native-held-map" />);
-    expect(maps.mockFitToCoordinates).toHaveBeenCalled();
+    screen.rerender(<TripMap destination={DESTINATION} holdCamera={null} interactive={true} origin={ORIGIN} testID="held-map" />);
+    expect(kit().mockFitPoints).toHaveBeenCalledWith(
+      expect.arrayContaining([{ latitude: ORIGIN.lat, longitude: ORIGIN.lng }, { latitude: DESTINATION.lat, longitude: DESTINATION.lng }]),
+      expect.objectContaining({ durationMs: 0 }),
+    );
   });
 
   it('reports where the map rests only after the rider moves it', () => {
     const onUserCameraChange = jest.fn();
-    const screen = render(<NativeTripMap destination={DESTINATION} interactive={true} onUserCameraChange={onUserCameraChange} origin={ORIGIN} testID="native-report-map" />);
-    const map = screen.getByTestId('native-report-map', { includeHiddenElements: true });
-    const framed = { latitude: 40.91, longitude: -73.1, latitudeDelta: 0.05, longitudeDelta: 0.05 };
-    fireEvent(map, 'regionChangeComplete', framed, { isGesture: false });
+    const screen = render(<TripMap destination={DESTINATION} interactive={true} onUserCameraChange={onUserCameraChange} origin={ORIGIN} testID="report-map" />);
+    const map = screen.getByTestId('report-map', hidden);
+    fireEvent(map, 'cameraIdle', { center: { latitude: 40.91, longitude: -73.1 }, zoom: 13, bearing: 0, pitch: 0, userInteraction: false });
     expect(onUserCameraChange).not.toHaveBeenCalled();
 
-    const panned = { latitude: 40.97, longitude: -73.3, latitudeDelta: 0.02, longitudeDelta: 0.02 };
-    fireEvent(map, 'panDrag');
-    fireEvent(map, 'regionChangeComplete', panned, { isGesture: true });
-    expect(onUserCameraChange).toHaveBeenLastCalledWith(panned);
+    fireEvent(map, 'userGesture');
+    fireEvent(map, 'cameraIdle', { center: { latitude: 40.97, longitude: -73.3 }, zoom: 14.5, bearing: 0, pitch: 0, userInteraction: true });
+    expect(onUserCameraChange).toHaveBeenLastCalledWith({ latitude: 40.97, longitude: -73.3, zoom: 14.5 });
   });
 
   it('keeps the raw marker visible without following an unaccepted jump', () => {
-    const maps = jest.requireMock('react-native-maps') as { mockFitToCoordinates: jest.Mock };
     const accepted = { lat: 40.915, lng: -73.105 };
     const rawJump = { lat: 41.2, lng: -72.7 };
     const screen = render(
-      <NativeTripMap
-        destination={DESTINATION}
-        followLocation={accepted}
-        followUser={true}
-        interactive={true}
-        navigationProgress={progress}
-        origin={ORIGIN}
-        testID="native-credible-follow-map"
-        userLocation={rawJump}
-      />,
+      <TripMap destination={DESTINATION} followLocation={accepted} followUser={true} interactive={true} navigationProgress={progress} origin={ORIGIN} testID="credible-follow-map" userLocation={rawJump} />,
     );
-
-    fireEvent(screen.getByTestId('native-credible-follow-map', { includeHiddenElements: true }), 'mapReady');
-    expect(screen.getByTestId('native-credible-follow-map-user-location', { includeHiddenElements: true }).props.coordinate)
-      .toEqual({ latitude: rawJump.lat, longitude: rawJump.lng });
-    expect(maps.mockFitToCoordinates).toHaveBeenCalledWith(
-      expect.arrayContaining([{ latitude: accepted.lat, longitude: accepted.lng }]),
-      expect.objectContaining({ animated: true }),
-    );
-    expect(maps.mockFitToCoordinates).not.toHaveBeenCalledWith(
-      expect.arrayContaining([{ latitude: rawJump.lat, longitude: rawJump.lng }]),
-      expect.anything(),
-    );
+    expect(screen.getByTestId('credible-follow-map-user-location', hidden).props.coordinate).toEqual({ latitude: rawJump.lat, longitude: rawJump.lng });
+    expect(kit().mockFitPoints).toHaveBeenCalledWith(expect.arrayContaining([{ latitude: accepted.lat, longitude: accepted.lng }]), expect.anything());
+    expect(kit().mockFitPoints).not.toHaveBeenCalledWith(expect.arrayContaining([{ latitude: rawJump.lat, longitude: rawJump.lng }]), expect.anything());
   });
 
   it('centers the raw marker once on Locate without automatically following an unaccepted fix', () => {
     const onFollowModeChange = jest.fn();
-    const maps = jest.requireMock('react-native-maps') as { mockAnimateCamera: jest.Mock; mockFitToCoordinates: jest.Mock };
     const rawLocation = { lat: 41.2, lng: -72.7 };
-    const props = {
-      destination: DESTINATION,
-      followLocation: null,
-      interactive: true,
-      navigationProgress: progress,
-      onFollowModeChange,
-      origin: ORIGIN,
-      testID: 'native-unaccepted-locate-map',
-    };
-    const screen = render(
-      <NativeTripMap {...props} centerOnUserRequest={0} followUser={false} userLocation={rawLocation} />,
-    );
-
-    fireEvent(screen.getByTestId('native-unaccepted-locate-map', { includeHiddenElements: true }), 'mapReady');
-    maps.mockAnimateCamera.mockClear();
-    maps.mockFitToCoordinates.mockClear();
-    screen.rerender(
-      <NativeTripMap {...props} centerOnUserRequest={1} followUser={false} userLocation={rawLocation} />,
-    );
+    const props = { destination: DESTINATION, followLocation: null, interactive: true, navigationProgress: progress, onFollowModeChange, origin: ORIGIN, testID: 'unaccepted-locate-map' };
+    const screen = render(<TripMap {...props} centerOnUserRequest={0} followUser={false} userLocation={rawLocation} />);
+    kit().mockEaseTo.mockClear();
+    kit().mockFitPoints.mockClear();
+    screen.rerender(<TripMap {...props} centerOnUserRequest={1} followUser={false} userLocation={rawLocation} />);
 
     expect(onFollowModeChange).toHaveBeenLastCalledWith(true);
-    expect(maps.mockAnimateCamera).toHaveBeenCalledWith(
-      // Just south of the rider, so they sit in the middle of the map's uncovered part.
-      { center: { latitude: expect.closeTo(rawLocation.lat, 2), longitude: rawLocation.lng }, zoom: 15 },
-      { duration: 350 },
-    );
-    expect(maps.mockFitToCoordinates).not.toHaveBeenCalled();
+    expect(kit().mockEaseTo).toHaveBeenCalledWith({
+      center: { latitude: expect.closeTo(rawLocation.lat, 2), longitude: rawLocation.lng },
+      zoom: 15,
+      durationMs: 350,
+    });
+    // The default padding covers more of the top than the bottom, so the camera centers a little
+    // north of the rider, putting them in the middle of the map's uncovered part.
+    expect(kit().mockEaseTo.mock.calls.at(-1)![0].center.latitude).toBeGreaterThan(rawLocation.lat);
+    expect(kit().mockFitPoints).not.toHaveBeenCalled();
 
-    maps.mockAnimateCamera.mockClear();
-    screen.rerender(
-      <NativeTripMap
-        {...props}
-        centerOnUserRequest={1}
-        followUser={true}
-        userLocation={{ lat: rawLocation.lat + 0.01, lng: rawLocation.lng + 0.01 }}
-      />,
-    );
-    expect(maps.mockAnimateCamera).not.toHaveBeenCalled();
-    expect(maps.mockFitToCoordinates).not.toHaveBeenCalled();
+    kit().mockEaseTo.mockClear();
+    screen.rerender(<TripMap {...props} centerOnUserRequest={1} followUser={true} userLocation={{ lat: rawLocation.lat + 0.01, lng: rawLocation.lng + 0.01 }} />);
+    expect(kit().mockEaseTo).not.toHaveBeenCalled();
+    expect(kit().mockFitPoints).not.toHaveBeenCalled();
   });
 
   it('frames active navigation while the first trustworthy location is unavailable', () => {
-    const maps = jest.requireMock('react-native-maps') as { mockFitToCoordinates: jest.Mock };
-    const screen = render(
-      <NativeTripMap
-        destination={DESTINATION}
-        followUser={true}
-        interactive={true}
-        navigationProgress={progress}
-        origin={ORIGIN}
-        testID="native-no-fix-map"
-      />,
-    );
-
-    fireEvent(screen.getByTestId('native-no-fix-map', { includeHiddenElements: true }), 'mapReady');
-
-    expect(maps.mockFitToCoordinates).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        { latitude: ORIGIN.lat, longitude: ORIGIN.lng },
-        { latitude: DESTINATION.lat, longitude: DESTINATION.lng },
-      ]),
-      expect.objectContaining({ animated: false }),
+    render(<TripMap destination={DESTINATION} followUser={true} interactive={true} navigationProgress={progress} origin={ORIGIN} testID="no-fix-map" />);
+    expect(kit().mockFitPoints).toHaveBeenCalledWith(
+      expect.arrayContaining([{ latitude: ORIGIN.lat, longitude: ORIGIN.lng }, { latitude: DESTINATION.lat, longitude: DESTINATION.lng }]),
+      expect.objectContaining({ durationMs: 0 }),
     );
   });
-});
 
-describe('web active TripMap', () => {
-  beforeAll(() => {
-    class MockLatLngBounds {
-      points: { lat: number; lng: number }[] = [];
-
-      extend(point: { lat: number; lng: number }) {
-        this.points.push(point);
-        return this;
-      }
-    }
-    (globalThis as unknown as { google: unknown }).google = {
-      maps: {
-        LatLngBounds: MockLatLngBounds,
-        Point: class { constructor(public x: number, public y: number) {} },
-        SymbolPath: { CIRCLE: 'circle' },
-      },
-    };
-  });
-
-  beforeEach(() => {
-    const { mockMap } = jest.requireMock('@react-google-maps/api') as { mockMap: WebMapMock };
-    Object.values(mockMap).forEach((method) => method.mockClear());
-    mockMap.getZoom.mockReturnValue(14);
-  });
-
-  it('matches native marker freshness and completed/current/upcoming styling', async () => {
-    const screen = render(
-      <WebTripMap
-        destination={DESTINATION}
-        interactive={true}
-        navigationProgress={progress}
-        origin={ORIGIN}
-        testID="web-nav-map"
-        userLocation={{ lat: 40.915, lng: -73.105 }}
-        userLocationStale={true}
-      />,
-    );
-    await waitFor(() => expect(screen.getByTestId('web-nav-map-user-location')).toBeTruthy());
-    expect(StyleSheet.flatten(screen.getByTestId('web-nav-map-user-location').props.style).opacity).toBeLessThan(1);
-
-    const lines = screen.getAllByTestId('web-polyline', { includeHiddenElements: true });
-    expect(lines[0]!.props.options).toMatchObject({ strokeOpacity: 0.45, strokeWeight: 4 });
-    expect(lines[1]!.props.options.icons[0].icon.scale).toBe(4.25);
-    expect(lines[2]!.props.options).toMatchObject({ strokeColor: '#F26A21', strokeOpacity: 1, strokeWeight: 6 });
-  });
-
-  it('draws a piece fresh when it turns from walk to ride, so the walk dots leave the ride', async () => {
-    const mounts = (jest.requireMock('@react-google-maps/api') as { mockPolylineMounts: { count: number } }).mockPolylineMounts;
-    const props = { destination: DESTINATION, interactive: true, origin: ORIGIN, testID: 'web-moved-map' };
-    const screen = render(<WebTripMap {...props} navigationProgress={progress} />);
-    await act(async () => undefined);
-    const before = mounts.count;
+  it('draws a piece fresh when it turns from walk to ride, so the walk dots leave the ride', () => {
+    const props = { destination: DESTINATION, interactive: true, origin: ORIGIN, testID: 'moved-map' };
+    const screen = render(<TripMap {...props} navigationProgress={progress} />);
+    expect(screen.getByTestId('moved-map-progress-current-1', hidden).props.dotted).toBe(true);
     // A moved trip re-split: the second piece is now the ride, not the walk.
-    const moved: TripMapProgress = {
-      ...progress,
-      segments: [progress.segments[1]!, { ...progress.segments[2]!, state: 'current' }],
-    };
-    screen.rerender(<WebTripMap {...props} navigationProgress={moved} />);
-    await act(async () => undefined);
-    expect(mounts.count).toBe(before + 2);
-    const lines = screen.getAllByTestId('web-polyline', { includeHiddenElements: true });
-    expect(lines[1]!.props.options.icons).toBeUndefined();
-    expect(lines[1]!.props.options).toMatchObject({ strokeColor: '#F26A21', strokeWeight: 8 });
+    const moved: TripMapProgress = { ...progress, segments: [progress.segments[0]!, { ...progress.segments[2]!, state: 'current' }] };
+    screen.rerender(<TripMap {...props} navigationProgress={moved} />);
+    const ride = screen.getByTestId('moved-map-progress-current-1', hidden);
+    expect(ride.props.dotted).toBe(false);
+    expect(ride.props.id).toBe('trip-leg-1-ride');
   });
 
-  it('follows mock movement, pauses on pan or zoom, and resumes from locate', async () => {
-    const onFollowModeChange = jest.fn();
-    const { mockMap } = jest.requireMock('@react-google-maps/api') as { mockMap: WebMapMock };
-    const props = {
-      destination: DESTINATION,
-      interactive: true,
-      navigationProgress: progress,
-      onFollowModeChange,
-      origin: ORIGIN,
-      testID: 'web-follow-map',
-    };
-    const screen = render(<WebTripMap {...props} centerOnUserRequest={0} followUser={true} userLocation={{ lat: 40.915, lng: -73.105 }} />);
-    await waitFor(() => expect(mockMap.fitBounds).toHaveBeenCalled());
-    const latestBounds = mockMap.fitBounds.mock.calls.at(-1)![0] as { points: { lat: number; lng: number }[] };
-    expect(latestBounds.points).toContainEqual({ lat: 40.915, lng: -73.105 });
-
-    mockMap.fitBounds.mockClear();
-    screen.rerender(<WebTripMap {...props} centerOnUserRequest={0} followUser={true} userLocation={{ lat: 40.916, lng: -73.104 }} />);
-    await waitFor(() => expect(mockMap.fitBounds).toHaveBeenCalled());
-    const movedBounds = mockMap.fitBounds.mock.calls.at(-1)![0] as { points: { lat: number; lng: number }[] };
-    expect(movedBounds.points).toContainEqual({ lat: 40.916, lng: -73.104 });
-
-    const map = screen.getByTestId('web-google-map', { includeHiddenElements: true });
-    fireEvent(map, 'dragStart');
-    expect(onFollowModeChange).toHaveBeenLastCalledWith(false);
-    fireEvent(map, 'idle');
-    fireEvent(map, 'zoomChanged');
-    expect(onFollowModeChange).toHaveBeenLastCalledWith(false);
-
-    screen.rerender(<WebTripMap {...props} centerOnUserRequest={0} followUser={false} userLocation={{ lat: 40.918, lng: -73.102 }} />);
-    mockMap.fitBounds.mockClear();
-    screen.rerender(<WebTripMap {...props} centerOnUserRequest={1} followUser={false} userLocation={{ lat: 40.918, lng: -73.102 }} />);
-    await act(async () => undefined);
-    expect(onFollowModeChange).toHaveBeenLastCalledWith(true);
-    expect(mockMap.fitBounds).toHaveBeenCalled();
-    const resumedBounds = mockMap.fitBounds.mock.calls.at(-1)![0] as { points: { lat: number; lng: number }[] };
-    expect(resumedBounds.points).toContainEqual({ lat: 40.918, lng: -73.102 });
-  });
-
-  it('centers the raw marker once on Locate without automatically following an unaccepted fix', async () => {
-    const onFollowModeChange = jest.fn();
-    const { mockMap } = jest.requireMock('@react-google-maps/api') as { mockMap: WebMapMock };
-    const rawLocation = { lat: 41.2, lng: -72.7 };
-    const props = {
-      destination: DESTINATION,
-      followLocation: null,
-      interactive: true,
-      navigationProgress: progress,
-      onFollowModeChange,
-      origin: ORIGIN,
-      testID: 'web-unaccepted-locate-map',
-    };
-    const screen = render(
-      <WebTripMap {...props} centerOnUserRequest={0} followUser={false} userLocation={rawLocation} />,
-    );
-    await waitFor(() => expect(mockMap.fitBounds).toHaveBeenCalled());
-    mockMap.fitBounds.mockClear();
-    mockMap.panTo.mockClear();
-    mockMap.setZoom.mockClear();
-
-    screen.rerender(
-      <WebTripMap {...props} centerOnUserRequest={1} followUser={false} userLocation={rawLocation} />,
-    );
-    await waitFor(() => expect(mockMap.panTo).toHaveBeenCalledWith(rawLocation));
-    expect(onFollowModeChange).toHaveBeenLastCalledWith(true);
-    // It glides: the zoom steps in a level after the pan starts, rather than jumping with it.
-    await waitFor(() => expect(mockMap.setZoom).toHaveBeenCalledWith(15));
-    expect(mockMap.fitBounds).not.toHaveBeenCalled();
-
-    mockMap.panTo.mockClear();
-    mockMap.setZoom.mockClear();
-    screen.rerender(
-      <WebTripMap
-        {...props}
-        centerOnUserRequest={1}
-        followUser={true}
-        userLocation={{ lat: rawLocation.lat + 0.01, lng: rawLocation.lng + 0.01 }}
-      />,
-    );
-    await act(async () => undefined);
-    expect(mockMap.panTo).not.toHaveBeenCalled();
-    expect(mockMap.setZoom).not.toHaveBeenCalled();
-    expect(mockMap.fitBounds).not.toHaveBeenCalled();
+  it('labels a tapped stop and clears the label on a tap elsewhere', () => {
+    const screen = render(<TripMap destination={DESTINATION} interactive={true} navigationProgress={progress} origin={ORIGIN} testID="label-map" />);
+    expect(screen.queryByTestId('trip-map-stop-label', hidden)).toBeNull();
+    fireEvent.press(screen.getByTestId('trip-map-stop-1', hidden));
+    // Progress stops carry no label of their own, so none shows; a still map has no taps at all.
+    expect(screen.queryByTestId('trip-map-stop-label', hidden)).toBeNull();
+    const still = render(<TripMap destination={DESTINATION} navigationProgress={progress} origin={ORIGIN} testID="still-map" />);
+    expect(still.getByTestId('trip-map-stop-1', hidden).props.onPress).toBeUndefined();
+    expect(still.getByTestId('still-map', hidden).props.interactive).toBe(false);
   });
 });

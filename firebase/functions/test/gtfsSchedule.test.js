@@ -6,7 +6,6 @@ const test = require('node:test');
 
 const { getStopPredictions } = require('../lib/gtfsSchedule');
 const { gtfsServiceDaysFor } = require('../lib/gtfsServiceTime');
-const { serviceDaysFor } = require('../lib/tripStops');
 const { resetGtfsStaticDataForTests, setAgencyDataForTests } = require('../lib/gtfsStaticData');
 
 let fixtureDir;
@@ -94,16 +93,16 @@ test('an existing live trip only deduplicates its own run, leaving the same trip
 });
 
 test('selected-trip matching shares independent noon anchors before both DST transitions', () => {
-  const spring = serviceDaysFor(Date.parse('2026-03-08T05:30:00Z'));
+  const spring = gtfsServiceDaysFor(Date.parse('2026-03-08T05:30:00Z'));
   assert.equal(new Date(spring[0].startMs).toISOString(), '2026-03-08T04:00:00.000Z');
   assert.equal(spring[0].seconds, 90 * 60);
   assert.equal(new Date(spring[1].startMs).toISOString(), '2026-03-07T05:00:00.000Z');
-  const fall = serviceDaysFor(Date.parse('2026-11-01T04:30:00Z'));
+  const fall = gtfsServiceDaysFor(Date.parse('2026-11-01T04:30:00Z'));
   assert.equal(new Date(fall[0].startMs).toISOString(), '2026-11-01T05:00:00.000Z');
   assert.equal(fall[0].seconds, -30 * 60);
   assert.equal(new Date(fall[1].startMs).toISOString(), '2026-10-31T04:00:00.000Z');
   // The next service day is relevant before spring's civil midnight as well.
-  const eve = serviceDaysFor(Date.parse('2026-03-08T04:30:00Z'));
+  const eve = gtfsServiceDaysFor(Date.parse('2026-03-08T04:30:00Z'));
   assert.equal(eve[2].dateKey, '20260308');
   assert.equal(eve[2].seconds, 30 * 60);
 });

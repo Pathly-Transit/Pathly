@@ -24,7 +24,7 @@ export function FareSheet({ fare, fareType, onClose }: FareSheetProps) {
   const noDiscount = fareType !== 'full' && fare != null && !discounted;
   const source = discounted || fare?.estimated
     ? "Estimated from each agency's published fares. Your actual fare can differ."
-    : 'This total comes from Google, for one adult paying as they go.';
+    : 'For one adult paying as they go.';
   return (
     <Modal animationType="fade" onRequestClose={onClose} statusBarTranslucent={true} transparent={true} visible={fare != null}>
       <View style={styles.viewport}>

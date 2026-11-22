@@ -7,7 +7,7 @@ import { applyRouteLive } from '../data/applyRouteLive';
 import { NEARBY_CACHE_KEY, RIDE_GUIDE_CACHE_KEY, readCache, writeCache } from '../data/deviceCache';
 import { guidanceForNavigation, type TripEndpointReference } from '../data/enrouteNavigation';
 import { isRideGuideTrip, type RideGuideRequest } from '../data/rideGuide';
-import { describeTransitLine, discoveredRouteToRouteDetail, fetchNearbyTransit, fetchRouteAtStop, filterOutPinnedDuplicates, type DiscoveredRoute } from '../data/nearbyTransit';
+import { describeTransitLine, discoveredRouteToRouteDetail, fetchNearbyTransit, fetchRouteAtStop, filterOutPinnedDuplicates, routeDetailAt, type DiscoveredRoute } from '../data/nearbyTransit';
 import type { IndexedLine } from '../data/lineIndex';
 import { distanceMeters } from '../data/routeDirection';
 import { SERVICE_AREA_FALLBACK } from '../data/serviceArea';
@@ -54,6 +54,7 @@ import { ThemedStatusBar, useThemedStyles } from '../theme/AppSettings';
 import { ScreenTransition } from '../theme/motion';
 import type { Palette } from '../theme/colors';
 import { fontFamilies } from '../theme/typography';
+import { SavedPlacesProvider } from './SavedPlaceMarkers';
 import { ConfirmDialog } from './ConfirmDialog';
 import { CurrentLocationButton } from './CurrentLocationButton';
 import { DeparturesView } from './DeparturesView';
@@ -61,7 +62,7 @@ import { EnrouteRecoveryView, TripDemoControls, type EnrouteLocationState } from
 import { PlannedTripDetailView, type LiveTripFollow } from './PlannedTripDetailView';
 import { useHurryUp } from '../hooks/useHurryUp';
 import { RideGuideView } from './RideGuideView';
-import { GoogleMapView, type HomeMapCamera } from './GoogleMapView';
+import { HomeMap, type HomeMapCamera } from './HomeMap';
 import { LineLayersSheet } from './LineLayersSheet';
 import { LoadingScreen } from './LoadingScreen';
 import { MAP_CONTROL_SIZE, MapControlButton } from './MapControlButton';
@@ -74,6 +75,8 @@ import { MapPickerView } from './MapPickerView';
 import { RouteAlertsPrompt, type RouteAlertsRequest } from './RouteAlertsPrompt';
 import { RouteDetailView, type TappedStop } from './RouteDetailView';
 import { SavedPlaceDetailsSheet } from './SavedPlaceDetailsSheet';
+import { StopRoutesSheet } from './StopRoutesSheet';
+import type { MapStop } from '../map/mapTypes';
 import { Toast, type ToastMessage } from './Toast';
 import { SavePlaceSheet, type SavePlaceRequest } from './SavePlaceSheet';
 import { OnboardingScreen } from './OnboardingScreen';
@@ -614,6 +617,17 @@ export function HomeScreen() {
     );
   }, []);
 
+  // A station or bus stop tapped on the home map: its name pill, then the lines there, then one
+  // line's route view at that stop (Back returns home).
+  const [mapStop, setMapStop] = useState<MapStop | null>(null);
+  const [stopRoutesFor, setStopRoutesFor] = useState<MapStop | null>(null);
+  const openRouteAtMapStop = useCallback((discovered: DiscoveredRoute, stop: MapStop) => {
+    const route = routeDetailAt(discovered, stop.coordinate);
+    setStopRoutesFor(null);
+    setMapStop(null);
+    setActiveView({ name: 'route', routeId: route.id, route });
+  }, []);
+
   const thumb = useThumbSide();
   const mapHeight = mapPageMapHeight(height);
   // The transit menu scrolls over the map in one page scroll; the location button rides up with it.
@@ -881,7 +895,9 @@ export function HomeScreen() {
   const activeLiveRouteIds = activeView.name === 'home' ? visibleRouteIds : openedRoute ? [openedRoute.id] : [];
   const screen = (node: ReactNode) => (
     <TransitLiveProvider activeRouteIds={activeLiveRouteIds} extraRoutes={liveRoutes} key={user?.uid ?? 'signed-out'} location={livePoint}>
+      <SavedPlacesProvider locations={savedLocations}>
       <ScreenTransition depth={activeView.name === 'home' ? 0 : activeView.name === 'search' ? 1 : 2} group="home" key={transitionKey}>{node}</ScreenTransition>
+      </SavedPlacesProvider>
       {savePlaceSheet}
       <Toast message={actionFeedback?.uid === uid ? actionFeedback : null} onHidden={() => setActionFeedback(null)} />
       <ConfirmDialog
@@ -1296,16 +1312,23 @@ export function HomeScreen() {
 
   const homeMap = (
       <>
-        {/* The map stays fixed while the sheet scrolls over it, filling the window TransitSheet gives it, which reaches one card below the resting sheet for a sheet dragged lower.
-            Google's logo and credits must stay visible: on phones the bottom padding lifts them above the resting sheet; on web, where they can't be moved, TransitSheet ends the map's window at the sheet's edge. */}
+        {/* The map stays fixed while the sheet scrolls over it, filling the window TransitSheet gives it, which reaches below the resting sheet for a sheet dragged lower.
+            The map's credit must stay visible: on phones the bottom padding lifts it above the resting sheet; on web TransitSheet ends the map's window at the sheet's edge. */}
         <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} testID="home-map-viewport">
-        <GoogleMapView
+        <HomeMap
           initialCamera={homeCamera}
           lines={mapLines}
           location={location}
           onCameraChange={setHomeCamera}
           onLongPress={isAdmin ? setPendingMockPoint : undefined}
-          onPress={overlays.tapCoords ? setTappedPoint : undefined}
+          onPress={overlays.tapCoords || mapStop ? (point) => {
+            // A tap off the stop puts its pill away.
+            setMapStop(null);
+            if (overlays.tapCoords) setTappedPoint(point);
+          } : undefined}
+          onOpenStop={setStopRoutesFor}
+          onStopPress={setMapStop}
+          selectedStop={mapStop}
           onUserMoveEnd={setSearchCenter}
           onUserPan={() => {
             setIsLocationCentered(false);
@@ -1448,6 +1471,7 @@ export function HomeScreen() {
         {/* Admin tools' preview of a new account's onboarding (it saves for real). */}
         {popupPreview === 'onboarding' ? <View style={StyleSheet.absoluteFill}><OnboardingScreen onDone={() => setPopupPreview(null)} /></View> : null}
         <LineLayersSheet choice={lineChoice} lines={layerCandidates} onChange={changeLineChoice} onClose={() => setLayersOpen(false)} visible={layersOpen} />
+        <StopRoutesSheet onClose={() => setStopRoutesFor(null)} onOpenRoute={openRouteAtMapStop} stop={stopRoutesFor} />
         <SavedPlaceDetailsSheet
           onClose={() => setMapPlaces([])}
           onEdit={uid ? (place) => {

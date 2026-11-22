@@ -1,8 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { entranceCorner, stationEntrances, withStopEntrances } = require('../lib/stationEntrances');
-const { addTripStops } = require('../lib/tripStops');
+const { entranceCorner, legEntrances, stationEntrances, withStopEntrances } = require('../lib/stationEntrances');
 const { readAgencyStaticData } = require('../lib/gtfsFeed');
 
 test('PATH stations have the entrances its own stops.txt publishes, not as stops', () => {
@@ -46,14 +45,9 @@ test('route stops carry entrances only where their station has some', () => {
   assert.equal('entrances' in lirr[0], false);
 });
 
-test('a matched leg says where to go in at its boarding station and out at its alighting one', async () => {
-  const step = { kind: 'transit', from: { time: '2026-10-14T12:30:00Z' }, to: {}, stopCount: 1 };
-  const match = async () => ({ stops: [], live: { agencyId: 'subway', routeId: '1', boardStopId: '101S', alightStopId: '103S' } });
-  const [itinerary] = await addTripStops([{ steps: [step] }], 1_000, match);
-  assert.equal(itinerary.steps[0].boardEntrances.length, 4);
-  assert.ok(itinerary.steps[0].alightEntrances.length >= 3);
-
-  const bus = { kind: 'transit', from: { time: '2026-10-14T12:30:00Z' }, to: {}, stopCount: 1 };
-  await addTripStops([{ steps: [bus] }], 1_000, async () => ({ stops: [], live: { agencyId: 'nice', routeId: 'n6', boardStopId: 'a', alightStopId: 'b' } }));
-  assert.equal(bus.boardEntrances, undefined);
+test('a leg says where to go in at its boarding station and out at its alighting one', () => {
+  const subway = legEntrances('subway', '101S', '103S');
+  assert.equal(subway.boardEntrances.length, 4);
+  assert.ok(subway.alightEntrances.length >= 3);
+  assert.deepEqual(legEntrances('nice', 'a', 'b'), {});
 });

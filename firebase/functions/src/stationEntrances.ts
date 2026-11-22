@@ -87,3 +87,13 @@ export function withStopEntrances<T extends { stopId: string }>(agencyId: Agency
     return entrances.length > 0 ? { ...stop, entrances } : stop;
   });
 }
+
+/** Where to go in at a leg's boarding station and out at its alighting one, where they have entrances. */
+export function legEntrances(agencyId: AgencyId, boardStopId: string, alightStopId: string): { boardEntrances?: StationEntrance[]; alightEntrances?: StationEntrance[] } {
+  const boardEntrances = stationEntrances(agencyId, boardStopId);
+  const alightEntrances = stationEntrances(agencyId, alightStopId);
+  return {
+    ...(boardEntrances.length > 0 ? { boardEntrances } : {}),
+    ...(alightEntrances.length > 0 ? { alightEntrances } : {}),
+  };
+}

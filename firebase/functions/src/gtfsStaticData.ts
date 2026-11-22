@@ -11,6 +11,7 @@ import {
   DERIVED_VERSION,
   GEOMETRY_DIR,
   MANIFEST_FILE,
+  ROUTING_FILE,
   STOP_INDEXES_FILE,
   STOP_TIMES_DIR,
   derivedSources,
@@ -104,6 +105,37 @@ async function readPreparedRouteFile(agencyId: AgencyId, dir: string, routeId: s
   }
   const path = join(dataDirFor(agencyId), DERIVED_DIR, dir, routeFileName(routeId));
   return existsSync(path) ? readFile(path, 'utf-8') : null;
+}
+
+/**
+ * The agency's routing timetable (routingTimetable.ts) for trip planning: from its prepared files
+ * (on disk, or from Cloud Storage for on-demand agencies), else built from its raw feed when this
+ * instance has one (a checkout without `npm run build:gtfs`, or a snapshot whose prepared files
+ * couldn't be built). Null when the agency can't be read here.
+ */
+export async function readRoutingTimetableFile(agencyId: AgencyId): Promise<Buffer | null> {
+  if (!isAgencyAvailable(agencyId)) return null;
+  const root = activeDataRoots.get(agencyId);
+  if (root?.routeFilesPrefix !== undefined) {
+    const expected = (await routeFileIndex(agencyId))?.[ROUTING_FILE];
+    if (!expected) return null;
+    try {
+      return await downloadRouteFile(`${root.routeFilesPrefix}/${ROUTING_FILE}`, expected);
+    } catch (error) {
+      logger.warn('Could not load an agency routing timetable', {
+        agencyId,
+        event: 'gtfs_routing_file_failed',
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+  const dataDir = dataDirFor(agencyId);
+  const path = join(dataDir, DERIVED_DIR, ROUTING_FILE);
+  if (useDerived(agencyId) && existsSync(path)) return readFile(path);
+  if (!existsSync(join(dataDir, 'stop_times.txt'))) return null;
+  const { buildRoutingTimetableFromFeed } = await import('./routingTimetableBuild');
+  return buildRoutingTimetableFromFeed(agencyId, dataDir, loadAgencyStaticData(agencyId));
 }
 
 type LruEntry<T> = { promise: Promise<T>; weight: number };

@@ -333,44 +333,62 @@ jest.mock('expo-location', () => ({
   Accuracy: { Balanced: 3, High: 4, BestForNavigation: 6 },
 }));
 
-// react-native-maps needs a real native module (TurboModule) that doesn't exist under Jest.
-jest.mock('react-native-maps', () => {
-  const { forwardRef, useImperativeHandle } = require('react');
+// The map kit (src/map) draws with MapLibre, which needs a real native module (or WebGL) that
+// doesn't exist under Jest. Each piece renders as a plain view carrying its props, so tests read a
+// line's color or a stop dot's look from the view, and fire the map's events on it directly.
+jest.mock('./src/map/MapCanvas', () => {
+  const { forwardRef, useEffect, useImperativeHandle } = require('react');
   const { View } = require('react-native');
-  // Shared across every map instance so tests can assert when a map was told to move, and set
-  // the camera a map reports (e.g. rotated by the rider).
-  const mockAnimateToRegion = jest.fn();
-  const mockAnimateCamera = jest.fn();
-  const mockFitToCoordinates = jest.fn();
+  // Shared across every map so tests can assert when a map was told to move, set the camera a
+  // map reports (e.g. rotated by the rider), and say where a point is on the screen.
+  const mockEaseTo = jest.fn();
+  const mockFitPoints = jest.fn();
   const mockPointForCoordinate = jest.fn(() => Promise.resolve({ x: 0, y: 0 }));
-  const mockCamera = { heading: 0, pitch: 0 };
-  const MockMapView = forwardRef((props, ref) => {
+  const mockCamera = { bearing: 0, pitch: 0 };
+  const MockMapCanvas = forwardRef(({ children, onReady, ...props }, ref) => {
+    // The base map the real canvas would draw for the theme, for tests to read.
+    const { useTheme } = require('./src/theme/AppSettings');
+    const { pathlyMapStyle } = require('./src/map/mapStyle');
+    const mapStyle = pathlyMapStyle(useTheme().isDark);
     useImperativeHandle(ref, () => ({
-      animateToRegion: mockAnimateToRegion,
-      animateCamera: mockAnimateCamera,
-      fitToCoordinates: mockFitToCoordinates,
+      easeTo: mockEaseTo,
+      fitPoints: mockFitPoints,
+      getCamera: () => Promise.resolve({ center: props.initialCamera.center, zoom: props.initialCamera.zoom, ...mockCamera }),
       pointForCoordinate: mockPointForCoordinate,
-      getCamera: () => Promise.resolve({ ...mockCamera, center: { latitude: 0, longitude: 0 }, zoom: 14 }),
     }));
-    return <View {...props} />;
+    // Loaded at once, as a real map is soon after it mounts.
+    useEffect(() => {
+      onReady?.();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    return <View {...props} mapStyle={mapStyle}>{children}</View>;
   });
-  const MockPolygon = (props) => <View {...props} />;
-  const MockMarker = (props) => <View {...props} />;
-  const MockPolyline = (props) => <View {...props} />;
-  const MockCallout = (props) => <View {...props} />;
+  const MockMapPolyline = (props) => <View {...props} />;
+  // Each circle as a view styled as it's drawn, named by its testID.
+  const MockMapCircles = ({ circles, onPress, testID }) => (
+    <View testID={testID}>
+      {circles.map((circle) => (
+        <View
+          circle={circle}
+          key={circle.key}
+          onPress={onPress ? () => onPress(circle.key) : undefined}
+          style={{ width: circle.radius * 2, height: circle.radius * 2, borderRadius: circle.radius, backgroundColor: circle.color, borderColor: circle.strokeColor, borderWidth: circle.strokeWidth ?? 0, opacity: circle.opacity ?? 1 }}
+          testID={circle.testID ?? `${testID}-${circle.key}`}
+        />
+      ))}
+    </View>
+  );
+  const MockMapMarker = ({ children, ...props }) => <View {...props}>{children}</View>;
   return {
     __esModule: true,
-    default: MockMapView,
-    mockAnimateToRegion,
-    mockAnimateCamera,
+    MapCanvas: MockMapCanvas,
+    MapPolyline: MockMapPolyline,
+    MapCircles: MockMapCircles,
+    MapMarker: MockMapMarker,
     mockCamera,
-    mockFitToCoordinates,
+    mockEaseTo,
+    mockFitPoints,
     mockPointForCoordinate,
-    PROVIDER_GOOGLE: 'google',
-    Polygon: MockPolygon,
-    Marker: MockMarker,
-    Polyline: MockPolyline,
-    Callout: MockCallout,
   };
 });
 

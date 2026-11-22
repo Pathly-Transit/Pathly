@@ -6,16 +6,27 @@ import type { LiveSource } from './transit';
 type AgencyId = LiveSource['agencyId'];
 
 /** The home map's "show every line" switches: one per agency the rider knows, not per feed. */
+/** The kinds of transit the Layers sheet sorts agencies into, in the order it lists them. */
+export const LINE_LAYER_MODES = [
+  { id: 'train', label: 'Trains' },
+  { id: 'bus', label: 'Buses' },
+  { id: 'ferry', label: 'Ferries' },
+] as const;
+
+export type LineLayerMode = (typeof LINE_LAYER_MODES)[number]['id'];
+
+/** Each agency the rider can switch on as a whole, grouped by mode (busiest first within one). */
 export const LINE_LAYER_GROUPS = [
-  { id: 'subway', label: 'MTA Subway', icon: 'subway', agencies: ['subway'] },
-  { id: 'bus', label: 'MTA Buses', icon: 'bus', agencies: ['bx', 'bk', 'mn', 'qn', 'si', 'busco'] },
-  { id: 'lirr', label: 'LIRR', icon: 'rail', agencies: ['lirr'] },
-  { id: 'metronorth', label: 'Metro-North', icon: 'rail', agencies: ['metronorth'] },
-  { id: 'ferry', label: 'NYC Ferries', icon: 'ferry', agencies: ['nycferry', 'siferry'] },
-  { id: 'nice', label: 'NICE Buses', icon: 'bus', agencies: ['nice'] },
-  { id: 'suffolk', label: 'Suffolk Buses', icon: 'bus', agencies: ['suffolk'] },
-  { id: 'path', label: 'PATH', icon: 'subway', agencies: ['path'] },
-] as const satisfies readonly { id: string; label: string; icon: string; agencies: readonly AgencyId[] }[];
+  { id: 'subway', mode: 'train', label: 'MTA Subway', icon: 'subway', agencies: ['subway'] },
+  { id: 'path', mode: 'train', label: 'PATH', icon: 'subway', agencies: ['path'] },
+  { id: 'lirr', mode: 'train', label: 'LIRR', icon: 'rail', agencies: ['lirr'] },
+  { id: 'metronorth', mode: 'train', label: 'Metro-North', icon: 'rail', agencies: ['metronorth'] },
+  { id: 'bus', mode: 'bus', label: 'MTA Buses', icon: 'bus', agencies: ['bx', 'bk', 'mn', 'qn', 'si', 'busco'] },
+  { id: 'nice', mode: 'bus', label: 'NICE Buses', icon: 'bus', agencies: ['nice'] },
+  { id: 'suffolk', mode: 'bus', label: 'Suffolk Buses', icon: 'bus', agencies: ['suffolk'] },
+  // One switch for both: riders think of the Staten Island Ferry as one of the city's ferries.
+  { id: 'ferry', mode: 'ferry', label: 'NYC Ferries', icon: 'ferry', agencies: ['nycferry', 'siferry'] },
+] as const satisfies readonly { id: string; mode: LineLayerMode; label: string; icon: string; agencies: readonly AgencyId[] }[];
 
 export type LineLayerGroupId = (typeof LINE_LAYER_GROUPS)[number]['id'];
 
@@ -35,7 +46,15 @@ const CHOICE_KEY = 'pathly.lineLayers.v1';
 const CHOICE_MAX_AGE_MS = Number.MAX_SAFE_INTEGER;
 
 export async function readLineLayerChoice(): Promise<LineLayerChoice> {
-  return (await readCache<LineLayerChoice>(CHOICE_KEY, CHOICE_MAX_AGE_MS)) ?? EMPTY_LINE_LAYERS;
+  const saved = await readCache<LineLayerChoice>(CHOICE_KEY, CHOICE_MAX_AGE_MS);
+  return saved ? migrateLineLayerChoice(saved) : EMPTY_LINE_LAYERS;
+}
+
+/** A choice saved before the Staten Island Ferry's own switch ('siferry') joined NYC Ferry's ('ferry'). */
+export function migrateLineLayerChoice(choice: LineLayerChoice): LineLayerChoice {
+  const ids = choice.groups.map((id) => ((id as string) === 'siferry' ? 'ferry' : id));
+  const groups = LINE_LAYER_GROUPS.map((group) => group.id).filter((id) => ids.includes(id));
+  return groups.length === choice.groups.length && groups.every((id, i) => id === choice.groups[i]) ? choice : { ...choice, groups };
 }
 
 export function writeLineLayerChoice(choice: LineLayerChoice): Promise<void> {

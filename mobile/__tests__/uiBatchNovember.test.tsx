@@ -14,6 +14,7 @@ import { SavePlaceSheet } from '../src/components/SavePlaceSheet';
 import { SystemNoticeBanner } from '../src/components/SystemNoticeBanner';
 import { RouteMap } from '../src/components/RouteMap';
 import { openingDirectionIndex } from '../src/components/TransitCard';
+import { LINE_LAYER_GROUPS, migrateLineLayerChoice } from '../src/data/lineLayers';
 import { groupNotices, type RouteNotice } from '../src/data/routeNotices';
 import { upcomingSystemNotices, useSystemNotice } from '../src/data/systemNotices';
 import { routeById, type RouteDetail } from '../src/data/transit';
@@ -205,16 +206,59 @@ describe('Home reminder for system-wide holidays', () => {
 });
 
 describe('Layers popup', () => {
-  it('names its sections "Show agency lines" and "Show nearby & saved lines"', () => {
+  it('sorts agencies under Trains, Buses, and Ferries, then "Show nearby & saved lines"', () => {
     const screen = render(
       <AppSettingsProvider>
         <LineLayersSheet choice={{ groups: [], routes: [] }} lines={[{ agencyId: 'suffolk', routeId: '51', shortName: '51', color: '#C43D4B', agency: 'Suffolk County Transit' }]} onChange={jest.fn()} onClose={jest.fn()} visible={true} />
       </AppSettingsProvider>,
     );
-    expect(screen.getByTestId('line-layers-agency-heading')).toHaveTextContent('Show agency lines');
+    expect(screen.getByTestId('line-layers-mode-train')).toHaveTextContent('Trains');
+    expect(screen.getByTestId('line-layers-mode-bus')).toHaveTextContent('Buses');
+    expect(screen.getByTestId('line-layers-mode-ferry')).toHaveTextContent('Ferries');
     expect(screen.getByTestId('line-layers-nearby-heading')).toHaveTextContent('Show nearby and saved lines');
     expect(screen.queryByText('SHOW EVERY LINE')).toBeNull();
     expect(screen.queryByText('LINES')).toBeNull();
+  });
+
+  it('switches one agency, or every agency of a mode at once', () => {
+    const onChange = jest.fn();
+    const screen = render(
+      <AppSettingsProvider>
+        <LineLayersSheet choice={{ groups: ['lirr'], routes: [] }} lines={[]} onChange={onChange} onClose={jest.fn()} visible={true} />
+      </AppSettingsProvider>,
+    );
+    fireEvent(screen.getByTestId('line-layer-group-nice'), 'valueChange', true);
+    expect(onChange).toHaveBeenLastCalledWith({ groups: ['lirr', 'nice'], routes: [] });
+    expect(screen.getByTestId('line-layers-mode-train-all')).toHaveTextContent('Show all');
+    fireEvent.press(screen.getByTestId('line-layers-mode-train-all'));
+    expect(onChange).toHaveBeenLastCalledWith({ groups: ['lirr', 'subway', 'path', 'metronorth'], routes: [] });
+  });
+
+  it('hides a whole mode when all of its agencies are on', () => {
+    const onChange = jest.fn();
+    const screen = render(
+      <AppSettingsProvider>
+        <LineLayersSheet choice={{ groups: ['ferry', 'lirr'], routes: [] }} lines={[]} onChange={onChange} onClose={jest.fn()} visible={true} />
+      </AppSettingsProvider>,
+    );
+    expect(screen.getByTestId('line-layers-mode-ferry-all')).toHaveTextContent('Hide all');
+    fireEvent.press(screen.getByTestId('line-layers-mode-ferry-all'));
+    expect(onChange).toHaveBeenLastCalledWith({ groups: ['lirr'], routes: [] });
+  });
+});
+
+describe('Ferry layers', () => {
+  it('shows the Staten Island Ferry under the one NYC Ferries switch', () => {
+    const ferries = LINE_LAYER_GROUPS.filter((group) => group.mode === 'ferry');
+    expect(ferries.map((group) => group.label)).toEqual(['NYC Ferries']);
+    expect(ferries[0]?.agencies).toEqual(['nycferry', 'siferry']);
+  });
+
+  it('carries an old Staten Island Ferry switch over to NYC Ferry', () => {
+    const old = { groups: ['lirr', 'siferry'], routes: [] } as never;
+    expect(migrateLineLayerChoice(old)).toEqual({ groups: ['lirr', 'ferry'], routes: [] });
+    const both = { groups: ['ferry', 'siferry'], routes: [] } as never;
+    expect(migrateLineLayerChoice(both)).toEqual({ groups: ['ferry'], routes: [] });
   });
 });
 

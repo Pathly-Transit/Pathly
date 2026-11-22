@@ -46,6 +46,23 @@
     ],
     "headers": [
       {
+        "source": "/map/**/*.pbf",
+        "headers": [
+          {
+            "key": "Access-Control-Allow-Origin",
+            "value": "*"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/x-protobuf"
+          },
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=604800"
+          }
+        ]
+      },
+      {
         "source": "/app/_expo/**",
         "headers": [
           {

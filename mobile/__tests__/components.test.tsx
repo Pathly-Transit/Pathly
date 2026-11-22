@@ -248,7 +248,7 @@ describe('RouteMap', () => {
     const screen = render(<RouteMap color="#A626AA" focusStopId="0" stops={stops} vehicles={[]} walkPath={walkPath} />);
     const walk = screen.getByTestId('route-walk', { includeHiddenElements: true });
     expect(walk.props.coordinates).toEqual(walkPath.map((point) => ({ latitude: point.lat, longitude: point.lon })));
-    expect(walk.props.lineDashPattern).toEqual([1, 10]);
+    expect(walk.props.dotted).toBe(true);
   });
 });
 

@@ -4,8 +4,7 @@ import type { GtfsStop } from './gtfsFeed';
 import type { FareEstimator, FareLine, TransitStep, TripFare } from './tripPlanning';
 
 /**
- * Fare estimates for itineraries Google can't price (it has no fares for the LIRR, NICE, or
- * Suffolk County Transit; it does price NYC subway and bus trips, and its fare always wins).
+ * Fares for every itinerary Pathly plans, from the agencies' published fare rules.
  *
  * Sources, all effective January 4, 2026:
  *   - LIRR: MTA/Long Island Rail Road Station Fares fare chart (https://www.mta.info/document/194866):
@@ -19,7 +18,7 @@ import type { FareEstimator, FareLine, TransitStep, TripFare } from './tripPlann
  *     its own ticket with no transfers to or from other systems.
  *   - Staten Island Ferry: free (NYC DOT).
  *
- * Reduced fares (65+, disability, Medicare), which Google never prices:
+ * Reduced fares (65+, disability, Medicare):
  *   - LIRR: the same chart's "One-Way Sr.Cit/Disabled/M'care" rows.
  *   - NYC Transit: $1.50 (MTA board, effective January 4, 2026). NICE: $1.50, half its base fare
  *     like the MTA's; NICE's own page wasn't current when this was written.

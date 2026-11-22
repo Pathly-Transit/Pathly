@@ -42,9 +42,10 @@ describe('FareSheet', () => {
     expect(screen.getByTestId('fare-sheet-no-reduced')).toBeTruthy();
   });
 
-  it('credits Google for a total with no parts', () => {
+  it('explains a total with no parts as one adult paying as they go', () => {
     show({ fare: { text: '$3.00', cents: 300, currency: 'USD', estimated: false } });
-    expect(screen.getByText(/comes from Google/)).toBeTruthy();
+    expect(screen.getByText(/one adult paying as they go/)).toBeTruthy();
+    expect(screen.queryByText(/Google/)).toBeNull();
     expect(screen.queryByTestId('fare-line-0')).toBeNull();
   });
 });

@@ -14,6 +14,7 @@ import { filterItinerariesByWalk, filterWalkOnlyItineraries } from '../src/data/
 import { resetLineIndexForTests } from '../src/data/lineIndex';
 import { recordSearch, saveLocation } from '../src/data/userData';
 import { DEFAULT_PREFERENCES, parsePreferences, preferencesKey, UserPreferencesProvider } from '../src/data/userPreferences';
+import { pathlyMapStyle } from '../src/map/mapStyle';
 import { AppSettingsProvider, DISPLAY_SETTINGS_KEY, scaleTypography, useAppSettings } from '../src/theme/AppSettings';
 import { highContrastDarkColors, highContrastLightColors, lightColors } from '../src/theme/colors';
 
@@ -201,11 +202,27 @@ describe('Settings', () => {
       act(() => result.current.setAppearance('dark'));
       expect(result.current.colors).toBe(highContrastDarkColors);
       act(() => result.current.setReducedMotion(true));
-      await waitFor(async () => expect(JSON.parse((await AsyncStorage.getItem(DISPLAY_SETTINGS_KEY))!)).toEqual({ appearance: 'dark', reducedMotion: true, pathlingMotion: true, easyMode: false, textSize: 'default', highContrast: true, mapDotColor: 'default', destinationPin: { color: 'red' }, leftHanded: false }));
+      await waitFor(async () => expect(JSON.parse((await AsyncStorage.getItem(DISPLAY_SETTINGS_KEY))!)).toEqual({ appearance: 'dark', reducedMotion: true, pathlingMotion: true, easyMode: false, textSize: 'default', highContrast: true, mapDotColor: 'default', mapTheme: 'default', transitIcons: 'all', destinationPin: { color: 'red' }, leftHanded: false }));
 
       const reloaded = renderHook(() => useAppSettings(), { wrapper: ({ children }) => <AppSettingsProvider>{children}</AppSettingsProvider> });
       await waitFor(() => expect(reloaded.result.current.colors).toBe(highContrastDarkColors));
       expect(reloaded.result.current.reducedMotion).toBe(true);
+    });
+
+    it('hides bus stops, or every transit icon, on the map and remembers the choice', async () => {
+      const screen = renderSettings();
+      await openPage(screen, 'appearance');
+      expect(screen.getByTestId('transit-icons-all-stops').props.accessibilityState).toEqual({ selected: true });
+      fireEvent.press(screen.getByTestId('transit-icons-stations-only'));
+      expect(screen.getByTestId('transit-icons-stations-only').props.accessibilityState).toEqual({ selected: true });
+      await waitFor(async () => expect(JSON.parse((await AsyncStorage.getItem(DISPLAY_SETTINGS_KEY))!)).toMatchObject({ transitIcons: 'stations' }));
+      screen.unmount();
+
+      const visibility = (choice: 'all' | 'stations' | 'none', id: string) =>
+        (pathlyMapStyle(false, 'default', choice).layers.find((layer) => layer.id === id)?.layout as { visibility?: string } | undefined)?.visibility ?? 'visible';
+      expect([visibility('all', 'station-bus-icon'), visibility('all', 'station-icon')]).toEqual(['visible', 'visible']);
+      expect([visibility('stations', 'station-bus-icon'), visibility('stations', 'station-icon')]).toEqual(['none', 'visible']);
+      expect([visibility('none', 'station-bus-icon'), visibility('none', 'station-icon')]).toEqual(['none', 'none']);
     });
 
     it('keeps text styles unchanged at the default size and ignores bad saved entries', async () => {
@@ -465,15 +482,30 @@ describe('Settings', () => {
       openURL.mockRestore();
     });
 
-    it('credits OpenStreetMap for walking distances and links to its copyright page', async () => {
+    it('credits OpenStreetMap for footpaths and walking distances and links to its copyright page', async () => {
       const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
       const screen = renderSettings();
       await openPage(screen, 'about');
-      expect(screen.getByText('Map data © OpenStreetMap')).toBeTruthy();
+      expect(screen.getByText('Footpaths and walking routes © OpenStreetMap contributors')).toBeTruthy();
       await act(async () => {
         fireEvent.press(screen.getByTestId('about-osm'));
       });
       expect(openURL).toHaveBeenCalledWith('https://www.openstreetmap.org/copyright');
+    });
+
+    it('credits the map’s data, renderer, and font sources, each linking to its source or license', async () => {
+      const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+      const screen = renderSettings();
+      await openPage(screen, 'about');
+      for (const label of ['Map data: U.S. Census Bureau', 'Place names: U.S. Geological Survey', 'Buildings: City of New York', 'Made with Natural Earth', 'Map display: MapLibre', 'Map labels: Nunito', 'Place search: Google']) {
+        expect(screen.getByText(label)).toBeTruthy();
+      }
+      expect(screen.getByText('© MapLibre contributors, © Mapbox · BSD license')).toBeTruthy();
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('about-credit-census'));
+      });
+      expect(openURL).toHaveBeenCalledWith('https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html');
+      openURL.mockRestore();
     });
   });
 });

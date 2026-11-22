@@ -11,7 +11,7 @@ import type { Palette } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { CurrentLocationButton } from './CurrentLocationButton';
 import { DESTINATION_PIN_HEIGHT, DestinationPinMarker } from './DestinationPinMarker';
-import { GoogleMapView } from './GoogleMapView';
+import { HomeMap } from './HomeMap';
 import { MapControlButton } from './MapControlButton';
 import { PressableScale } from './PressableScale';
 import { radii } from '../theme/shape';
@@ -93,7 +93,7 @@ export function MapPickerView({ location, locationKnown = false, onCancel, onPic
     <View style={styles.viewport}>
       <View style={styles.screen} testID="map-picker">
         <ThemedStatusBar />
-        <GoogleMapView
+        <HomeMap
           initialCamera={{ latitude: location.latitude, longitude: location.longitude, zoom: 16 }}
           location={location}
           locationKnown={locationKnown}

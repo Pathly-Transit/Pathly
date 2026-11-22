@@ -30,7 +30,7 @@ import { fontFamilies, typography } from '../theme/typography';
 import { SheetPanel } from './SheetPanel';
 import { ConfirmDialog } from './ConfirmDialog';
 import { RouteAlertsPrompt, type RouteAlertsRequest } from './RouteAlertsPrompt';
-import { Card, ChoiceRow, createStyles as createProfileStyles, SettingRow, ToggleRow } from './ProfileView';
+import { Card, ChoiceRow, createStyles as createProfileStyles, SettingRow, ToggleRow } from './SettingsKit';
 import { Icon } from './Icon';
 import { PressableScale } from './PressableScale';
 import { badgeLabel, RouteBadge, transitModeForAgency, type TransitMode } from './RouteBadge';
@@ -896,19 +896,41 @@ export async function contactSupport(onFeedback: (message: string) => void): Pro
 const FAQ: readonly { q: string; a: string }[] = [
   { q: 'Where does Pathly work?', a: 'Pathly plans trips and shows live times for transit around New York, Long Island and New Jersey, including the LIRR, Metro-North, MTA subway and buses, NICE and Suffolk County buses, NYC Ferry, and PATH.' },
   { q: 'Where do arrival times come from?', a: 'Live times come from each agency’s real-time feed when one is available, marked with a live signal. Otherwise Pathly shows the published timetable.' },
-  { q: 'How are trips planned?', a: 'Trips come from Google’s transit planner. Your travel preferences set the modes, sorting, and walking used for each new search.' },
+  { q: 'How are trips planned?', a: 'Pathly plans trips itself from the transit agencies’ schedules and live data. Your travel preferences set the modes, sorting, and walking used for each new search.' },
   { q: 'How do I add a favorite?', a: 'Tap the star on a trip, or go to Settings > Favorites to set Home, Work, and other places.' },
   { q: 'Why can’t Pathly find my location?', a: 'Check Settings > Privacy > Location access. Without it, Pathly centers on Stony Brook and you can search for a starting point.' },
 ];
 
 const TERMS: readonly string[] = [
   'Pathly is a prototype trip planner provided as is, without warranty.',
-  'Schedules, live times, fares, and trip plans come from transit agencies and Google and can be late, incomplete, or wrong. Check official agency sources for critical travel.',
+  'Schedules, live times, fares, and trip plans come from transit agencies’ data and can be late, incomplete, or wrong. Check official agency sources for critical travel.',
   'Don’t use Pathly while driving or in ways that put you or others at risk.',
-  'Map and trip data are provided by Google and subject to Google’s terms.',
+  'Place search results come from Google and are subject to Google’s terms.',
 ];
 
 export const OSM_COPYRIGHT_URL = 'https://www.openstreetmap.org/copyright';
+
+/**
+ * Where the map, its labels, and Pathly's data come from. OpenStreetMap's license (ODbL) and the
+ * map renderer's (BSD) and font's (SIL OFL) require their notices; the government sources are
+ * public domain and credited as their publishers ask.
+ */
+const CREDITS: readonly { id: string; label: string; detail: string; url?: string }[] = [
+  { id: 'census', label: 'Map data: U.S. Census Bureau', detail: 'TIGER/Line streets, water, parks, and places; population estimates', url: 'https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html' },
+  { id: 'usgs', label: 'Place names: U.S. Geological Survey', detail: 'Geographic Names Information System', url: 'https://www.usgs.gov/us-board-on-geographic-names/domestic-names' },
+  { id: 'nyc', label: 'Buildings: City of New York', detail: 'NYC Open Data building footprints', url: 'https://data.cityofnewyork.us/d/5zhs-2jue' },
+  { id: 'microsoft', label: 'Buildings outside NYC: Microsoft', detail: 'Global ML Building Footprints, Open Database License', url: 'https://github.com/microsoft/GlobalMLBuildingFootprints' },
+  { id: 'natural-earth', label: 'Made with Natural Earth', detail: 'Coastlines and cities around the region', url: 'https://www.naturalearthdata.com' },
+  {
+    id: 'maplibre',
+    label: 'Map display: MapLibre',
+    detail: '© MapLibre contributors, © Mapbox · BSD license',
+    url: Platform.OS === 'web' ? 'https://github.com/maplibre/maplibre-gl-js/blob/main/LICENSE.txt' : 'https://github.com/maplibre/maplibre-native/blob/main/LICENSE.md',
+  },
+  { id: 'nunito', label: 'Map labels: Nunito', detail: '© The Nunito Project Authors · SIL Open Font License', url: 'https://github.com/googlefonts/nunito' },
+  { id: 'transit', label: 'Schedules and live times', detail: 'MTA, NICE, Suffolk County Transit, NYC Ferry, and NYC DOT' },
+  { id: 'google', label: 'Place search: Google', detail: 'Google Places', url: 'https://maps.google.com/help/terms_maps/' },
+];
 /** The full policy, with account deletion, as Google Play links to it (mobile/public/privacy). */
 export const PRIVACY_POLICY_URL = 'https://pathly.web.app/privacy';
 
@@ -920,17 +942,31 @@ export function FaqSettings() {
 
 /** About's policies and credits. */
 export function LegalSettings({ onFeedback }: PageProps) {
-  const { page } = useStyles();
+  const { page, profile } = useStyles();
   const [termsOpen, setTermsOpen] = useState(false);
   return (
-    <Card>
-      {/* The whole policy, the same page Google Play links to, rather than a shorter copy in the app. */}
-      <SettingRow detail="pathly.web.app/privacy" label="Privacy policy" onPress={() => void openLink(PRIVACY_POLICY_URL, onFeedback)} testID="about-privacy" />
-      <SettingRow label="Terms of use" onPress={() => setTermsOpen((open) => !open)} testID="about-terms" />
-      {termsOpen ? <View style={page.doc} testID="about-terms-content">{TERMS.map((line) => <Text key={line} style={[page.docBody, page.docItem]}>{line}</Text>)}</View> : null}
-      {/* Nearby's walking distances come from OpenStreetMap, whose license (ODbL) requires this credit. */}
-      <SettingRow label="Map data © OpenStreetMap" onPress={() => void openLink(OSM_COPYRIGHT_URL, onFeedback)} testID="about-osm" />
-    </Card>
+    <>
+      <Card>
+        {/* The whole policy, the same page Google Play links to, rather than a shorter copy in the app. */}
+        <SettingRow detail="pathly.web.app/privacy" label="Privacy policy" onPress={() => void openLink(PRIVACY_POLICY_URL, onFeedback)} testID="about-privacy" />
+        <SettingRow label="Terms of use" onPress={() => setTermsOpen((open) => !open)} testID="about-terms" />
+        {termsOpen ? <View style={page.doc} testID="about-terms-content">{TERMS.map((line) => <Text key={line} style={[page.docBody, page.docItem]}>{line}</Text>)}</View> : null}
+      </Card>
+      <Text style={profile.sectionLabel}>Credits</Text>
+      <Card>
+        {CREDITS.map((credit) => (
+          <SettingRow
+            detail={credit.detail}
+            key={credit.id}
+            label={credit.label}
+            onPress={credit.url ? () => void openLink(credit.url!, onFeedback) : undefined}
+            testID={`about-credit-${credit.id}`}
+          />
+        ))}
+        {/* Walking distances (Nearby and trip plans) come from OpenStreetMap, whose license (ODbL) requires this credit. */}
+        <SettingRow detail="Open Database License" label="Footpaths and walking routes © OpenStreetMap contributors" onPress={() => void openLink(OSM_COPYRIGHT_URL, onFeedback)} testID="about-osm" />
+      </Card>
+    </>
   );
 }
 

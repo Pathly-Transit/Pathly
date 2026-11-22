@@ -17,7 +17,7 @@ const { displayRouteColor } = require('../lib/routeColors');
 const { isInServiceArea } = require('../lib/serviceArea');
 const { searchStops } = require('../lib/stopSearch');
 const { agencyIdsForStep, modeForAgency } = require('../lib/tripAgencies');
-const { normalizeRoutesResponse } = require('../lib/tripPlanning');
+const { modeForRoute } = require('../lib/transitNetwork');
 
 const HOBOKEN = { lat: 40.7359, lng: -74.0292 };
 const originalFetch = global.fetch;
@@ -194,12 +194,8 @@ test('Google\'s PATH legs map to PATH and ride with the subway', () => {
 });
 
 test('a planned New Jersey trip files PATH as subway', () => {
-  const raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'routes-sbu-penn.json'), 'utf8'));
-  const route = raw.routes[0];
-  const transit = route.legs[0].steps.filter((item) => item.transitDetails);
-  transit[0].transitDetails.transitLine = { agencies: [{ name: 'PATH' }], name: 'Newark - World Trade Center', nameShort: 'NWK-WTC', vehicle: { type: 'HEAVY_RAIL' } };
-  raw.routes = [route];
-  const [itinerary] = normalizeRoutesResponse(raw, '2026-10-14T12:30:00Z', 'Newark');
-  const steps = itinerary.steps.filter((item) => item.kind === 'transit');
-  assert.equal(steps.find((item) => item.agency.name === 'PATH').mode, 'subway');
+  // PATH's feed calls its lines rail (route_type 2); Pathly's planner rides them as the subway.
+  assert.equal(modeForRoute('path', 2), 'subway');
+  assert.equal(modeForRoute('lirr', 2), 'rail');
+  assert.equal(modeForRoute('subway', 1), 'subway');
 });

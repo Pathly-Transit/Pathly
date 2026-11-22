@@ -1,19 +1,26 @@
 import type { transit_realtime } from 'gtfs-realtime-bindings';
 
-import { agencyConfig } from './gtfsAgencies';
+import { agencyConfig, type AgencyId } from './gtfsAgencies';
 import { alertLabel, getLineAlerts, type LineAlert } from './gtfsAlerts';
 import { fetchFeedEntities } from './gtfsRealtime';
 import { loadAgencyStaticData } from './gtfsStaticData';
 import type { LegAlert, LegConnection, LegLive, TransitStep, WalkStep } from './tripPlanning';
-import { liveTripRefs, type LiveTripRef } from './tripStops';
 
 /**
- * Checks a planned trip against the agencies' live feeds, which Google's plan (timetables, plus
- * live data for only some agencies) can miss: a leg whose trip is cancelled or won't stop where
- * the rider boards or gets off, live departure and arrival times, and connections the rider will
- * likely miss once those live times are in. Only legs matched to one scheduled trip
- * (tripStops.ts) are checked; any leg not answered within the budget simply goes without.
+ * Checks a planned trip (tripPlanner.ts, from the published timetables) against the agencies'
+ * live feeds: a leg whose trip is cancelled or won't stop where the rider boards or gets off,
+ * live departure and arrival times, and connections the rider will likely miss once those live
+ * times are in. Any leg not answered within the budget simply goes without.
  */
+
+/**
+ * Where a planned leg's trip is found in its agency's live feed: by `tripId`, else by line, stops,
+ * and the live time nearest the planned departure.
+ */
+export type LiveTripRef = { agencyId: AgencyId; routeId: string; tripId?: string; boardStopId: string; alightStopId: string; directionId?: number; stopIdsBetween?: string[] };
+
+/** Each planned leg's live-feed reference, kept off the step itself so it never reaches the app. */
+export const liveTripRefs = new WeakMap<TransitStep, LiveTripRef>();
 
 /** Feeds carry trips about to run (and running): a leg further out has nothing to check yet. */
 const LOOKAHEAD_MS = 90 * 60 * 1000;

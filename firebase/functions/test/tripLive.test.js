@@ -1,11 +1,7 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 
 const { addConnections, addLiveStatus, alertAffectsLeg, isSameTrip, legLiveFrom } = require('../lib/tripLive');
-const { normalizeRoutesResponse } = require('../lib/tripPlanning');
-const { matchTripStops } = require('../lib/tripStops');
 
 const at = (minutes) => new Date(Date.UTC(2026, 9, 26, 16, 0) + minutes * 60_000).toISOString();
 const seconds = (minutes) => Math.round(Date.parse(at(minutes)) / 1000);
@@ -149,18 +145,6 @@ test("every matched leg carries its line's service alerts, looked up once per li
   assert.deepEqual(trip.steps[1].alerts, [legAlert]);
   assert.equal(trip.steps[2].alerts, undefined);
   assert.equal(trip.steps[3].alerts, undefined);
-});
-
-test('an exactly matched LIRR leg carries where to find its trip in the live feed', async () => {
-  const response = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'routes-sbu-penn.json'), 'utf8'));
-  const steps = normalizeRoutesResponse(response, '2026-10-14T12:30:00Z', 'Penn Station')
-    .flatMap((itinerary) => itinerary.steps)
-    .filter((step) => step.kind === 'transit' && step.agency.name === 'Long Island Rail Road');
-  const result = await matchTripStops(steps[0]);
-  assert.ok(result?.tripId);
-  assert.equal(result.live.agencyId, 'lirr');
-  assert.equal(result.live.tripId, result.tripId);
-  assert.ok(result.live.routeId && result.live.boardStopId && result.live.alightStopId);
 });
 
 test('only alerts that touch the ride itself are kept for it', () => {

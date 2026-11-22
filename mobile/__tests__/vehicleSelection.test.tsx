@@ -1,9 +1,8 @@
 import { act, fireEvent, render, within } from '@testing-library/react-native';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { Animated, StyleSheet, View } from 'react-native';
 
-import { RouteMap } from '../src/components/RouteMap.native';
-import { WebVehicleMarker } from '../src/components/RouteMap.web';
+import { RouteMap } from '../src/components/RouteMap';
 import { VehicleSheet } from '../src/components/VehicleSheet';
 import type { VehicleScreenPoint } from '../src/components/SelectedVehicleOverlay';
 import type { RouteLiveVehicle } from '../src/data/transitLive';
@@ -11,11 +10,6 @@ import { stopsAwayLabel, vehicleArrival, vehicleProgress } from '../src/data/veh
 import { AppSettingsProvider } from '../src/theme/AppSettings';
 import { lightColors } from '../src/theme/colors';
 import { radii } from '../src/theme/shape';
-
-jest.mock('@react-google-maps/api', () => ({
-  OverlayViewF: ({ children }: { children: ReactNode }) => children,
-  OVERLAY_MOUSE_TARGET: 'overlayMouseTarget',
-}));
 
 // Four stops along a straight east-west line, about 840 m apart, two minutes apart on the timetable.
 const stops = ['Newark', 'Harrison', 'Journal Square', 'Grove Street'].map((name, index) => ({
@@ -124,7 +118,7 @@ describe('VehicleSheet layout', () => {
 });
 
 describe('selected vehicle on the map', () => {
-  const { mockPointForCoordinate } = jest.requireMock('react-native-maps') as { mockPointForCoordinate: jest.Mock };
+  const { mockPointForCoordinate } = jest.requireMock('../src/map/MapCanvas') as { mockPointForCoordinate: jest.Mock };
   beforeEach(() => {
     mockPointForCoordinate.mockReset().mockResolvedValue({ x: 0, y: 0 });
   });
@@ -185,11 +179,11 @@ describe('selected vehicle on the map', () => {
   });
 
   it('draws the tapped icon and its timestamp above the backdrop and follows the map until dismissed', async () => {
-    mockPointForCoordinate.mockResolvedValueOnce({ x: 116, y: 160 }).mockResolvedValueOnce({ x: 134, y: 170 });
+    // Window coordinates: the map's own place on the screen is already added in.
+    mockPointForCoordinate.mockResolvedValueOnce({ x: 136, y: 190 }).mockResolvedValueOnce({ x: 154, y: 200 });
     const viewPrototype = View.prototype as { measureInWindow: (callback: (x: number, y: number) => void) => void };
     jest.spyOn(viewPrototype, 'measureInWindow').mockImplementation(function (this: { props: { testID?: string } }, callback) {
-      const isOverlay = this.props.testID === 'selected-vehicle-overlay';
-      callback(isOverlay ? 0 : 20, isOverlay ? 24 : 30);
+      if (this.props.testID === 'selected-vehicle-overlay') callback(0, 24);
     });
 
     function MapAndSheet() {
@@ -213,35 +207,12 @@ describe('selected vehicle on the map', () => {
     expect(badge()).toHaveStyle({ left: 115, top: 145, width: 42, height: 42, transform: [{ scale: 1.3 }] });
     expect(within(badge()).getByTestId('selected-vehicle-overlay-age', hidden)).toHaveTextContent(/^\d+[smh]$/);
 
-    await act(async () => fireEvent(screen.getByTestId('route-map', hidden), 'regionChange'));
+    // The map comes to rest somewhere else: the vehicle is found on the screen again.
+    await act(async () => fireEvent(screen.getByTestId('route-map', hidden), 'cameraIdle', { center: { latitude: 40.73, longitude: -74.08 }, zoom: 13, bearing: 0, pitch: 0, userInteraction: true }));
     expect(badge()).toHaveStyle({ left: 133, top: 155 });
 
     fireEvent.press(backdrop);
     expect(screen.queryByTestId('selected-vehicle-overlay-badge', hidden)).toBeNull();
-  });
-
-  it('follows the selected web vehicle at its on-screen center until dismissed', () => {
-    jest.useFakeTimers();
-    try {
-      const onPosition = jest.fn();
-      const getBoundingClientRect = jest.fn(() => ({ left: 100, top: 140, width: 42, height: 42 }));
-      const marker = (selected: boolean) => (
-        <AppSettingsProvider>
-          <WebVehicleMarker color="#D93A30" now={Date.now()} onPosition={selected ? onPosition : undefined} selected={selected} title="Train" vehicle={vehicles[0]!} zIndex={2} />
-        </AppSettingsProvider>
-      );
-      const screen = render(marker(true), { createNodeMock: () => ({ getBoundingClientRect }) });
-      expect(onPosition).toHaveBeenLastCalledWith(expect.objectContaining({ tripId: 'a', x: 121, y: 161, badgeUrl: expect.stringContaining('data:image/svg+xml') }));
-      getBoundingClientRect.mockReturnValue({ left: 97, top: 139, width: 54, height: 54 });
-      act(() => jest.advanceTimersByTime(32));
-      expect(onPosition).toHaveBeenLastCalledWith(expect.objectContaining({ tripId: 'a', x: 124, y: 166 }));
-      screen.rerender(marker(false));
-      act(() => jest.advanceTimersByTime(32));
-      expect(onPosition.mock.calls).toHaveLength(3);
-      expect(onPosition).toHaveBeenLastCalledWith(null);
-    } finally {
-      jest.useRealTimers();
-    }
   });
 
   it('glides to a new vehicle position and projects the intermediate frames for the overlay', async () => {

@@ -1,9 +1,8 @@
 import type { Location, SavedPlaceColor } from './userData';
 
 /**
- * The home map's saved-place marker, as in Google Maps: a round badge right on the place, in the
- * place's color, with its icon centered. The web map draws the badge and icon from this SVG; the
- * native map draws the same badge from views (GoogleMapView.native.tsx).
+ * The home map's saved-place marker: a round badge right on the place, in the place's color, with
+ * its icon centered (drawn from views by HomeMap.tsx), and how markers stack when zoomed out.
  */
 
 /**
@@ -11,11 +10,6 @@ import type { Location, SavedPlaceColor } from './userData';
  * so a pin is easy to hit even with the rider's dot drawn over it. The marker's anchor is its center.
  */
 export const SAVED_PIN = { size: 30, hitSize: 44 } as const;
-
-/** The icon's size in px inside the badge (the native badge draws it the same size). */
-const ICON_SIZE = 16;
-
-const RING_WIDTH = 2.5;
 
 /** Marker fills for the colors a rider can pick, bright enough to stand out on the map in light and dark. */
 export const SAVED_PLACE_COLOR_HEX: Record<SavedPlaceColor, string> = {
@@ -33,26 +27,6 @@ export const SAVED_PLACE_COLOR_HEX: Record<SavedPlaceColor, string> = {
 /** A saved place's marker fill: its picked color, else `fallback` (the brand color). */
 export function savedPlaceColor(location: Location, fallback: string): string {
   return location.color ? SAVED_PLACE_COLOR_HEX[location.color] ?? fallback : fallback;
-}
-
-/**
- * The badge as an SVG data URL: a filled circle outlined in `ring`, with `icon` (path data on a
- * 256-unit square) centered in it in `iconColor`. Without an icon, the badge is empty. The image
- * is `hitSize` square with the badge in its middle, so the clear margin takes clicks too.
- */
-export function savedPinSvgUrl(fill: string, ring: string, icon?: readonly string[] | null, iconColor = ring): string {
-  const { size, hitSize } = SAVED_PIN;
-  const c = hitSize / 2;
-  const r = size / 2;
-  const inset = (hitSize - ICON_SIZE) / 2;
-  const glyph = icon?.length
-    ? `<g transform="translate(${inset} ${inset}) scale(${ICON_SIZE / 256})" fill="${iconColor}">${icon.map((d) => `<path d="${d}"/>`).join('')}</g>`
-    : '';
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${hitSize}" height="${hitSize}" viewBox="0 0 ${hitSize} ${hitSize}">`
-    + `<circle cx="${c}" cy="${c}" r="${r - RING_WIDTH / 2}" fill="${fill}" stroke="${ring}" stroke-width="${RING_WIDTH}"/>`
-    + glyph
-    + '</svg>';
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
 export type PinPoint = { latitude: number; longitude: number };
@@ -85,14 +59,9 @@ export function savedPinUnderDot<T extends { position: PinPoint }>(pins: readonl
   return nearest;
 }
 
-/** Ground meters one screen pixel covers on a Google (Web Mercator) map at `zoom`. */
+/** Ground meters one screen pixel covers on a Web Mercator map at `zoom` (the app's 256-px scale, map/mapTypes.ts). */
 export function metersPerPixelAtZoom(zoom: number, latitude: number): number {
   return (156_543.03392 * Math.cos((latitude * Math.PI) / 180)) / 2 ** zoom;
-}
-
-/** Ground meters one screen pixel covers when `longitudeDelta` degrees span `widthPixels`. */
-export function metersPerPixelForSpan(longitudeDelta: number, widthPixels: number, latitude: number): number {
-  return (longitudeDelta * METERS_PER_DEGREE * Math.cos((latitude * Math.PI) / 180)) / Math.max(1, widthPixels);
 }
 
 /**

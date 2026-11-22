@@ -2,6 +2,7 @@
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { callable } from '../lib/firebase';
 import { whenWarm } from './backendWarmup';
+import { distanceMeters } from './rideGeometry';
 import { preferredDirectionIndex, compassOrdered, type LiveSource, type RouteDetail, type TransitDirection } from './transit';
 
 type DiscoveredDirection = { stopId: string; name: string; headsign: string | null; distanceMeters?: number; stopsAhead?: number | null; lat?: number; lon?: number } | null;
@@ -213,3 +214,39 @@ export function routeDetailAt(discovered: DiscoveredRoute, at: Coordinates): Rou
     liveSource: { ...route.liveSource!, anchor: at },
   };
 }
+
+/** How near a line's stop must be to a tapped map stop to count as stopping there (meters). */
+const AT_STOP_METERS = 60;
+const routesAtStopCache = new Map<string, Promise<readonly DiscoveredRoute[]>>();
+const simplified = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * The lines that stop at a station or bus stop tapped on the map: nearby lines whose stop, in
+ * either direction, has the stop's name (a terminal's "Ramp D S44 & S94" counts for Ramp D); when
+ * none has, the lines whose stop is right there. Searched at the stop itself without replacing
+ * Nearby's own search, and kept for the session. Throws when the search fails, so the list can
+ * say it couldn't check.
+ */
+export function fetchRoutesAtStop(at: Coordinates, name: string): Promise<readonly DiscoveredRoute[]> {
+  const key = `${name}|${at.latitude.toFixed(5)},${at.longitude.toFixed(5)}`;
+  const cached = routesAtStopCache.get(key);
+  if (cached) return cached;
+  const target = simplified(name);
+  const directionsOf = (route: DiscoveredRoute) => [route.direction0, route.direction1].filter((direction): direction is NonNullable<typeof direction> => direction !== null);
+  const promise = whenWarm('findNearbyTransit')
+    .then(() => findNearbyTransitCallable({ lat: at.latitude, lon: at.longitude }))
+    .then(({ data }) => {
+      const named = data.routes.filter((route) => directionsOf(route).some((direction) => simplified(direction.name).startsWith(target)));
+      if (named.length) return named;
+      return data.routes.filter((route) => directionsOf(route).some((direction) => {
+        const meters = direction.lat !== undefined && direction.lon !== undefined
+          ? distanceMeters({ lat: at.latitude, lon: at.longitude }, { lat: direction.lat, lon: direction.lon })
+          : direction.distanceMeters;
+        return meters !== undefined && meters <= AT_STOP_METERS;
+      }));
+    });
+  routesAtStopCache.set(key, promise);
+  promise.catch(() => routesAtStopCache.delete(key));
+  return promise;
+}
+

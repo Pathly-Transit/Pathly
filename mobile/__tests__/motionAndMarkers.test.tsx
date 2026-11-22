@@ -1,29 +1,14 @@
-import { act, fireEvent, render, renderHook } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 import { Animated, StyleSheet, Text } from 'react-native';
 
 import { AnimatedSwitch } from '../src/components/AnimatedSwitch';
 import { SheetPanel } from '../src/components/SheetPanel';
-import { MARKER_SETTLE_MS, useMarkerTracking } from '../src/hooks/useMarkerTracking';
 import { AppSettingsProvider } from '../src/theme/AppSettings';
 import { ScreenTransition } from '../src/theme/motion';
 
 afterEach(() => {
   jest.restoreAllMocks();
   jest.useRealTimers();
-});
-
-describe('useMarkerTracking', () => {
-  it('tracks a marker only briefly after its look changes, so Android stops re-picturing it', () => {
-    jest.useFakeTimers();
-    const { result, rerender } = renderHook(({ look }: { look: string }) => useMarkerTracking(look), { initialProps: { look: 'light' } });
-    expect(result.current).toBe(true);
-    act(() => jest.advanceTimersByTime(MARKER_SETTLE_MS));
-    expect(result.current).toBe(false);
-    rerender({ look: 'dark' });
-    expect(result.current).toBe(true);
-    act(() => jest.advanceTimersByTime(MARKER_SETTLE_MS));
-    expect(result.current).toBe(false);
-  });
 });
 
 describe('AnimatedSwitch', () => {
