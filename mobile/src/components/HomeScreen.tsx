@@ -41,12 +41,18 @@ import { DebugBanner } from '../debug/DebugBanner';
 import { useDebug } from '../debug/DebugContext';
 import { pinnedSpotLabel } from '../debug/presets';
 import { useCurrentLocation, type Coordinates } from '../hooks/useCurrentLocation';
-import { useActiveTrip } from '../hooks/useActiveTrip';
+import { useActiveTrip, type ActiveTripCoordinator } from '../hooks/useActiveTrip';
 import { AccountWriteCancelled, useAccountWrites } from '../hooks/useAccountWrites';
 import { discardAccount } from '../data/accountData';
 import { useTripGuidanceAlerts } from '../hooks/useTripGuidanceAlerts';
 import { useBackgroundTripAlerts } from '../hooks/useBackgroundTripAlerts';
 import { useTripRide } from '../hooks/useTripRide';
+import { useTripLiveStatus } from '../hooks/useTripLiveStatus';
+import { useTripDisruptions } from '../hooks/useTripDisruptions';
+import { projectNavigationTiming, projectTripTiming } from '../data/tripTiming';
+import { remainingWalkSeconds } from '../data/tripRecovery';
+import { useAutomaticTripRecovery } from '../hooks/useAutomaticTripRecovery';
+import { tripRunRefKey } from '../data/tripRunRef';
 import { useNow } from '../hooks/useNow';
 import { useThumbSide } from '../hooks/useThumbSide';
 import { useViewportSize } from '../hooks/useViewportSize';
@@ -268,6 +274,7 @@ export function HomeScreen() {
     resetForAdmin: resetTripForAdmin,
     retry: retryTrip,
     start: startActiveTrip,
+    applyRecovery: applyRouteRecovery,
   } = trip;
   // The ride page a Route View GO trip is followed on, kept on the device so Resume (or reopening
   // the app) goes back to that page instead of the separate navigation screen.
@@ -293,6 +300,20 @@ export function HomeScreen() {
   const savedLocations = savedPlaceState && savedPlaceState.uid === uid ? savedPlaceState.locations : NO_SAVED_LOCATIONS;
   const { height } = useViewportSize();
   const { location, mocked: locationMocked, navigationFix, navigationStale, provisional: locationProvisional, refresh: refreshLocation, status: locationStatus } = useCurrentLocation(trip.active != null);
+  const selectedStatus = useTripLiveStatus({ uid: user?.uid, sessionId: trip.active?.sessionId, itinerary: trip.active?.itinerary });
+  const activeTiming = useMemo(() => trip.active ? projectTripTiming(trip.active.itinerary, selectedStatus.statuses, selectedStatus.now,
+    { cursor: trip.active.cursor, remainingWalkSeconds: remainingWalkSeconds(trip.active, navigationFix, selectedStatus.now) }) : null,
+    [trip.active, navigationFix, selectedStatus.statuses, selectedStatus.now]);
+  const activeViewPlan = useMemo(() => trip.active && activeTiming ? projectNavigationTiming(trip.active.plan, activeTiming) : trip.active?.plan,
+    [trip.active, activeTiming]);
+  const disruptions = useTripDisruptions(trip.active, selectedStatus.statuses, activeTiming, selectedStatus.now);
+  const recoveredFromId = trip.active?.itinerary.id;
+  const applyRecoveredTrip = useCallback<ActiveTripCoordinator['applyRecovery']>((input) => applyRouteRecovery({ ...input, beforePublish: () => {
+    // An old one-line page must not auto-start its old service after an autonomous onward route.
+    setActiveView((view) => view?.name === 'rideGuide' && recoveredFromId && isRideGuideTrip(view.request, recoveredFromId) ? { name: 'activeTrip' } : view);
+    input.beforePublish?.();
+  } }), [applyRouteRecovery, recoveredFromId]);
+  useAutomaticTripRecovery(trip.active, selectedStatus.statuses, navigationFix, applyRecoveredTrip);
   // Shares the ride the trip's on, wherever in the app the rider is, Route View included.
   const tripStep = trip.active && (trip.active.cursor.phase === 'waiting-to-board' || trip.active.cursor.phase === 'riding')
     ? trip.active.itinerary.steps[trip.active.cursor.stepIndex]
@@ -301,21 +322,22 @@ export function HomeScreen() {
   const tripLeg = tripStep?.kind === 'transit' ? tripStep.liveRoute : undefined;
   const { isAdmin, mockLocation, overlays, setMockLocation } = useDebug();
   const resumeGuidance = useMemo(
-    () => (trip.active ? guidanceForNavigation(trip.active.plan, trip.active.cursor) : null),
-    [trip.active],
+    () => (trip.active && activeViewPlan ? guidanceForNavigation(activeViewPlan, trip.active.cursor) : null),
+    [trip.active, activeViewPlan],
   );
   // Spoken steps, vibrations, and the lock-screen notification, wherever in the app the rider is.
   useTripGuidanceAlerts({
     uid: user?.uid,
     stepIndex: trip.active?.cursor.stepIndex,
+    journeyKey: tripStep?.kind === 'transit' && tripStep.runRef ? tripRunRefKey(tripStep.runRef) : trip.active?.selection.fingerprint,
     sessionId: trip.active?.sessionId ?? null,
     guidance: resumeGuidance,
     arrivedDestination,
     settings: userPreferences.tripGuidance,
     notificationsEnabled: userPreferences.notifications.enabled && userPreferences.notifications.tripReminders,
   });
-  useBackgroundTripAlerts(trip.active, !locationMocked && userPreferences.tripGuidance.notification
-    && userPreferences.notifications.enabled && userPreferences.notifications.tripReminders, trip.advance,
+  useBackgroundTripAlerts(trip.active, !locationMocked && userPreferences.notifications.enabled
+    && ((userPreferences.tripGuidance.notification && userPreferences.notifications.tripReminders) || userPreferences.notifications.disruptions), trip.advance,
   { hydrating: trip.status === 'hydrating', recovery: trip.recovery });
   const hasResumableTrip = trip.status === 'active' || trip.status === 'recovery';
   const supportPopup = useSupportPopup(hasResumableTrip, userPreferences.supportPrompts);
@@ -975,7 +997,8 @@ export function HomeScreen() {
         : 'located';
 
   // How the trip page follows the trip under way, whichever page (Trip Details or Route View's ride) shows it.
-  const hurryUp = useHurryUp(trip.active ?? null, navigationFix, enrouteLocationState === 'located');
+  const hurrySession = useMemo(() => trip.active && activeViewPlan ? { ...trip.active, plan: activeViewPlan } : null, [trip.active, activeViewPlan]);
+  const hurryUp = useHurryUp(hurrySession, navigationFix, enrouteLocationState === 'located');
   const activeTrip = trip.status === 'active' ? trip.active : null;
   const followPoint = activeTrip && followEvidence?.sessionId === activeTrip.sessionId ? followEvidence.fix.point : null;
   const followProgress = useMemo(
@@ -1025,6 +1048,9 @@ export function HomeScreen() {
             isActive={true}
             isFavorite={false}
             itinerary={activeTrip.itinerary}
+            timing={activeTiming}
+            disruption={disruptions.notice}
+            onDismissDisruption={disruptions.dismiss}
             live={liveFollow}
             onBack={showHome}
             onEnd={() => {
@@ -1209,6 +1235,9 @@ export function HomeScreen() {
     return screen(
       <>
         <RideGuideView
+          timing={rideTrip ? activeTiming : null}
+          disruption={rideTrip ? disruptions.notice : null}
+          onDismissDisruption={disruptions.dismiss}
           follow={rideTrip ? liveFollow : null}
           live={rideTrip}
           onBack={closeCurrentView}

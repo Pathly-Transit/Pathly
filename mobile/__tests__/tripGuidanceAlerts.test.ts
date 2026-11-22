@@ -62,6 +62,14 @@ describe('trip announcements', () => {
     expect(tripNotificationContent(riding).body).toBe('Next: Continue to Woodside. 3 stops left. Arrive 6:42 PM');
     expect(tripNotificationContent(stopNext).body).toBe('Your stop, Jamaica, is next. Arrive 6:42 PM');
   });
+
+  it('ages the arrival projection and labels a timetable fallback honestly', () => {
+    const now = Date.parse('2026-11-12T18:00:00-05:00');
+    const current = guidance({ timing: { confidence: 'live', observedAt: now, expiresAt: now + 90_000, arrivalTime: ARRIVE } });
+    expect(tripNotificationContent(current, now).body).toContain('Arrive 6:42 PM');
+    expect(tripNotificationContent(current, now + 90_000).body).toContain('Arrival updating');
+    expect(tripNotificationContent(guidance({ timing: { confidence: 'scheduled', observedAt: null, expiresAt: null, arrivalTime: ARRIVE } }), now).body).toContain('Scheduled arrival 6:42 PM');
+  });
 });
 
 describe('useTripGuidanceAlerts', () => {

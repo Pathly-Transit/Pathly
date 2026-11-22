@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import {
   CURRENT_LOCATION_LABEL,
@@ -70,11 +70,16 @@ export function useTripPlan({ endpoints, time, preference, modes, ferry = true, 
   });
   // The refresh count the current criteria were first planned at: later counts are refreshes.
   const plannedAt = useRef<{ key: string; refresh: number } | null>(null);
+  const currentKey = useRef(key);
+  useLayoutEffect(() => { currentKey.current = key; }, [key]);
+  const pendingRequest = useRef<{ key: string } | null>(null);
 
   useEffect(() => {
     if (waitsForLocation) return undefined;
     const refresh = plannedAt.current?.key === key && plannedAt.current.refresh !== refreshCount;
     plannedAt.current = { key, refresh: refreshCount };
+    const pending = { key };
+    pendingRequest.current = pending;
     let cancelled = false;
     void planTrip({ endpoints, location: locationRef.current, time, preference, modes, ferry, lessWalking, walkOnlyMaxMinutes, refresh }).then((result) => {
       if (cancelled) return;
@@ -85,14 +90,17 @@ export function useTripPlan({ endpoints, time, preference, modes, ferry = true, 
           ? { status: 'loaded', itineraries: result.itineraries, fetchedAt: result.fetchedAt, refreshing: false, resumeRequest: result.resumeRequest }
           : { status: 'problem', problem: result.problem, ...(result.field ? { field: result.field } : {}) },
       });
-    });
+    }).finally(() => { if (pendingRequest.current === pending) pendingRequest.current = null; });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` covers every input that changes the plan
   }, [key, refreshCount, waitsForLocation]);
 
-  const refresh = useCallback(() => setRefreshCount((count) => count + 1), []);
+  const refresh = useCallback(() => {
+    if (pendingRequest.current?.key === currentKey.current) return;
+    setRefreshCount((count) => count + 1);
+  }, []);
 
   let state: TripPlanState;
   if (waitsForLocation || !answer || answer.key !== key) state = { status: 'loading' };

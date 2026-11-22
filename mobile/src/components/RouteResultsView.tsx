@@ -28,6 +28,7 @@ import {
 import type { TripMapCamera } from '../data/tripMap';
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useClock } from '../hooks/useClock';
+import { useAppActive } from '../hooks/useAppActive';
 import { useThumbSide } from '../hooks/useThumbSide';
 import { useTripPlan } from '../hooks/useTripPlan';
 import { useViewportSize } from '../hooks/useViewportSize';
@@ -250,7 +251,8 @@ export function RouteResultsView({
   // A refresh under way keeps them; the times shown are still the last live ones.
   const liveFresh = plan.status === 'loaded' && now - plan.fetchedAt < LIVE_FRESH_MS;
   // Leaving now, plan again every minute (Trip Details included) so live times don't age out.
-  const autoRefresh = tripTime.mode === 'now' && plan.status === 'loaded';
+  const appActive = useAppActive();
+  const autoRefresh = appActive && !selectedItinerary && tripTime.mode === 'now' && plan.status === 'loaded' && !plan.refreshing;
   useEffect(() => {
     if (!autoRefresh) return undefined;
     const timer = setInterval(refresh, AUTO_REFRESH_MS);
@@ -282,7 +284,6 @@ export function RouteResultsView({
           destination={destination}
           destinationAddress={criteria.destinationPlace?.subtitle}
           destinationLines={stopLineBadges(criteria.destinationPlace)}
-          liveFresh={liveFresh}
           isActive={false}
           isFavorite={isDestinationSaved}
           itinerary={selectedItinerary}
