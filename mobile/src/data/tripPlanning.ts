@@ -118,6 +118,8 @@ export type ResumePlanRequest = {
   time: { mode: 'depart' | 'arrive'; at: string };
   preference: 'fastest' | 'transfers';
   modes: TripMode[];
+  /** The Ferry switch is independent of the three land-transit modes. */
+  ferry?: false;
   /** Planned asking for less walking, so a resumed trip is looked for among the same results. */
   lessWalking?: true;
 };
@@ -347,7 +349,7 @@ export type PlanTripOptions = {
  * coordinates of a place it found.
  */
 export function createResumePlanRequest(
-  { endpoints, location, time, preference, modes, lessWalking = false, now = new Date(appNow()) }: PlanTripOptions,
+  { endpoints, location, time, preference, modes, ferry = true, lessWalking = false, now = new Date(appNow()) }: PlanTripOptions,
   savedAt = Date.now(),
 ): ResumePlanRequest | null {
   const origin = endpointFor(endpoints.origin, endpoints.originPlace, location);
@@ -365,6 +367,7 @@ export function createResumePlanRequest(
       : { mode: time.mode, at: tripTimeAt(time, now).at },
     preference: preference === 'transfers' ? 'transfers' : 'fastest',
     modes: [...modes],
+    ...(ferry ? {} : { ferry: false as const }),
     ...(asksLessWalking(preference, lessWalking) ? { lessWalking: true as const } : {}),
   };
 }
@@ -404,7 +407,7 @@ export async function planTrip({ endpoints, location, time, preference, modes, f
   };
   // Coordinate retention is based on when the device actually saved it, not the admin's mock
   // planning clock (which can deliberately be months in the past or future).
-  const resumeRequest = createResumePlanRequest({ endpoints, location, time, preference, modes, lessWalking, now }, Date.now());
+  const resumeRequest = createResumePlanRequest({ endpoints, location, time, preference, modes, ferry, lessWalking, now }, Date.now());
   if (!resumeRequest) return { ok: false, problem: 'needs-place' };
   const key = JSON.stringify({ ...request, minute: time.mode === 'now' ? Math.floor(now.getTime() / ONE_MINUTE_MS) : undefined });
   const cached = cache.get(key);
@@ -497,6 +500,7 @@ export async function planTripForResume(request: ResumePlanRequest, selection: T
       destination: requestEndpoint(request.destination),
       preference: request.preference,
       modes: [...request.modes],
+      ...(request.ferry === false ? { ferry: false as const } : {}),
       ...(request.lessWalking ? { lessWalking: true } : {}),
       // A walk-only trip resumes too: it's planned again only to be matched exactly.
       ...(request.lessWalking ? {} : { walkOnlyMaxMinutes: MAX_WALK_ONLY_MINUTES }),

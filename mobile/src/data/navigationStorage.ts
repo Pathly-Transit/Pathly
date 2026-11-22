@@ -151,8 +151,9 @@ function isResumeRequest(value: unknown): value is ResumePlanRequest {
     && isIsoTime(value.time.at)
     && (value.preference === 'fastest' || value.preference === 'transfers')
     && (value.lessWalking === undefined || value.lessWalking === true)
+    && (value.ferry === undefined || value.ferry === false)
     && Array.isArray(value.modes)
-    && value.modes.length > 0
+    && (value.modes.length > 0 || value.ferry !== false)
     && value.modes.every((mode) => typeof mode === 'string' && tripModes.has(mode));
 }
 
