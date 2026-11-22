@@ -67,21 +67,22 @@ Destination search uses Google Places Autocomplete (Places API (New)). Without a
 
 ### Base map
 
-Every map in the app (web, iOS, and Android) draws Pathly's own base map: vector tiles of New York City, Long Island, and the region around them, plus label fonts made from Nunito, the app's typeface. MapLibre, an open-source map renderer built into the app, draws them, with no logo. Most of the data is public domain; the footpaths come from OpenStreetMap and the buildings outside NYC from Microsoft, whose license requires a credit, so each map has a small (i) button showing "© OpenStreetMap contributors, Microsoft" (also listed in Settings → About):
+Every map in the app (web, iOS, and Android) draws Pathly's own base map: vector tiles of New York City, Long Island, and the region around them, plus label fonts made from Nunito, the app's typeface. MapLibre, an open-source map renderer built into the app, draws them, with no logo. Every source is public domain or asks no credit on the map, so the map shows none; Settings → About lists them all:
 
 - US Census Bureau TIGER/Line: streets, rail, water, parks and landmarks, towns, and state lines.
 - US Census Bureau population estimates: which town names show first.
 - USGS Geographic Names (GNIS): neighborhoods, bays, and islands.
-- NYC Open Data: New York City's building footprints.
-- Microsoft Global ML Building Footprints: buildings outside New York City, over the area riders explore.
+- NYC Open Data: New York City's building footprints, with their measured roof heights (buildings stand up in 3D when the map is tilted); its paths, boardwalks, and step streets (Street Centerline); and its sports fields and above-ground station platforms (Planimetric Database).
+- FEMA USA Structures, as the USGS National Map publishes them: buildings outside New York City, over the area riders explore (they have no heights, so tilted they rise to about two stories).
+- USGS National Digital Trails: trails in parks and on public lands (drawn dashed), from federal and state agencies.
+- Wikidata (public domain): notable landmarks, such as stadiums, museums, malls, and sights, that are still standing and have a Wikipedia article.
 - Natural Earth: coastlines, highways, and cities around the detailed area, for zoomed-out maps.
 - The transit agencies' GTFS feeds (the ones Pathly routes on): stations and ferry routes.
-- OpenStreetMap (via the Overpass API): footpaths, campus walks, park trails (drawn dashed), steps, pedestrian streets, and walkable bike paths, which TIGER/Line mostly lacks, plus sports fields. Sidewalks show only where no street runs beside them, crosswalks are left out, and short dead ends show only zoomed in close.
 
-The map is published with the site at `pathly.web.app/map`, so `npm run deploy:web` publishes it along with the web app. The built files stay out of Git (`maptiles/`). To build them, set aside about 3 GB of disk and 8 GB of memory:
+The map is published with the site at `pathly.web.app/map`, so `npm run deploy:web` publishes it along with the web app. The built files stay out of Git (`maptiles/`). To build them, set aside about 8 GB of disk and 8 GB of memory:
 
 ```sh
-npm run map:download -- ../map-data   # fetch the sources into a folder outside the repo (footpaths come from the Overpass API, about 30 minutes)
+npm run map:download -- ../map-data   # fetch the sources (about 6 GB) into a folder outside the repo
 npm run map:build -- ../map-data      # build maptiles/tiles (about 15 minutes)
 npm run map:fonts                     # build maptiles/fonts
 ```
@@ -179,7 +180,7 @@ These commands run in `firebase/functions` (`npm --prefix firebase/functions run
 | Command         | Purpose                                                                 |
 | --------------- | ----------------------------------------------------------------------- |
 | `build:gtfs`    | Build the per-route timetable indexes (add `-- --force` to rebuild all) |
-| `build:walking` | Build the walking-graph tiles from an OpenStreetMap extract             |
+| `build:walking` | Build the walking-graph tiles from the map's sources (`map:download`)  |
 | `serve`         | Build the indexes and start the local Functions emulator                |
 | `logs`          | Show deployed Functions logs                                            |
 
@@ -238,7 +239,7 @@ npx eas-cli submit -p android --profile production # upload the latest build as 
 The Cloud Functions in `firebase/functions/` serve live departures, trip plans, and nearby stops. Two generated data sets aren't committed:
 
 - **Timetable indexes.** Build them with `npm --prefix firebase/functions run build:gtfs`. Tests and deploys build them automatically. Without them, the Functions still work locally, just more slowly.
-- **Walking-graph tiles.** Build them from an OpenStreetMap extract with `build:walking`. Nearby uses them to find the closest stop on foot, and deploys fail without them.
+- **Walking-graph tiles.** Build them from the base map's sources with `build:walking` (after `npm run map:download`). Nearby uses them to find the closest stop on foot, and deploys fail without them.
 
 Backend credentials live in Firebase Secret Manager, never in `mobile/.env`. For the local emulator, copy `firebase/functions/.secret.local.example` to `firebase/functions/.secret.local`.
 

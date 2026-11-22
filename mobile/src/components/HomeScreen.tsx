@@ -1321,8 +1321,7 @@ export function HomeScreen() {
 
   const homeMap = (
       <>
-        {/* The map stays fixed while the sheet scrolls over it, filling the window TransitSheet gives it, which reaches below the resting sheet for a sheet dragged lower.
-            The map's credit must stay visible: on phones the bottom padding lifts it above the resting sheet; on web TransitSheet ends the map's window at the sheet's edge. */}
+        {/* The map stays fixed while the sheet scrolls over it, filling the window TransitSheet gives it, which reaches below the resting sheet for a sheet dragged lower. */}
         <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} testID="home-map-viewport">
         <HomeMap
           initialCamera={homeCamera}

@@ -8,7 +8,6 @@ import type { RouteDetail } from '../data/transit';
 import { sortSavedLocations, type SavedLocation } from '../data/userData';
 import { useNow } from '../hooks/useNow';
 import { useTouchScroll } from '../hooks/useTouchScroll';
-import { useThumbSide } from '../hooks/useThumbSide';
 import { useAppSettings, useThemedStyles } from '../theme/AppSettings';
 import { useLayoutEase, useNativeDriver } from '../theme/motion';
 import type { Palette } from '../theme/colors';
@@ -19,9 +18,7 @@ import { NearbySkeleton } from './Skeleton';
 import { TransitCard } from './TransitCard';
 import { PressableScale } from './PressableScale';
 import { SHEET_AT_REST_TOLERANCE, SheetHandle } from './SheetHandle';
-import { creditBesideButton, MapCredit } from '../map/MapCredit';
 import { MapSheetInsetContext, useScrollSheetInset } from '../map/mapSheetInset';
-import { MAP_CONTROL_SIZE } from './MapControlButton';
 import { SHEET_LOWER_DROP } from './mapSheetLayout';
 import { Icon } from './Icon';
 
@@ -148,7 +145,6 @@ export function TransitSheet({
   const bothFavoriteKinds = savedRouteIds.length > 0 && savedLocations.length > 0;
   const ease = useLayoutEase();
   const { reducedMotionActive } = useAppSettings();
-  const thumb = useThumbSide();
   const [tabsWidth, setTabsWidth] = useState(0);
   const [indicatorX] = useState(() => new Animated.Value(0));
   const tabWidth = Math.max(0, (tabsWidth - TAB_ROW_PADDING * 2 - TAB_GAP * (tabs.length - 1)) / tabs.length);
@@ -384,18 +380,18 @@ export function TransitSheet({
         <>
           {/* The map is always as tall as it shows with the sheet at its lowest, so it never resizes
               (which made its bottom edge flicker); the sheet over it pads it instead, keeping what
-              it's centered on in the middle of what shows, and its credit just above the sheet. */}
+              it's centered on in the middle of what shows. */}
           <View style={[styles.stickyMap, { height: mapHeight + restOffset }]} testID="transit-map-window">
             <MapSheetInsetContext.Provider value={sheetInset}>{webMap}</MapSheetInsetContext.Provider>
           </View>
           {/* The map buttons sit just above the sheet, so their box ends where the sheet's top edge does. */}
           <View pointerEvents="box-none" style={[styles.mapButtonsOverSticky, { height: mapHeight + restOffset, marginTop: -(mapHeight + restOffset), paddingTop: restOffset }]}>
-            <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}<MapCredit bottomInset={creditBesideButton(14 + thumb.mapBottomClearance, MAP_CONTROL_SIZE)} /></View>
+            <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}</View>
           </View>
         </>
       ) : (
         <View pointerEvents="box-none" style={{ height: mapHeight + restOffset, paddingTop: restOffset }} testID="transit-map-window">
-          <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}<MapCredit bottomInset={creditBesideButton(14 + thumb.mapBottomClearance, MAP_CONTROL_SIZE)} /></View>
+          <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}</View>
         </View>
       )}
       <SafeAreaView

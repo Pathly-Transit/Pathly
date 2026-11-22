@@ -7,9 +7,10 @@ import type { MapTheme, TransitIcons } from '../theme/AppSettings';
 /**
  * The base map every Pathly map draws (home, route, trip, and choose-on-map; native and web):
  * Pathly's own vector tiles of New York City, Long Island, and the region around them, built from
- * public-domain government data (Census TIGER/Line streets, water, parks, and places; USGS names;
- * NYC building footprints) and OpenStreetMap's footpaths, by scripts/build-map.mjs, and labeled in Nunito, the app's typeface
- * (scripts/build-map-fonts.mjs). Styled to read like the familiar maps riders know (white streets
+ * public data that asks no credit on the map itself (Census TIGER/Line streets, water, parks, and
+ * places; USGS names, trails, and building outlines; New York City's footprints, paths, fields, and
+ * platforms; Wikidata's landmarks) by scripts/build-map.mjs, and labeled in Nunito, the app's
+ * typeface (scripts/build-map-fonts.mjs). Settings → About lists the sources. Styled to read like the familiar maps riders know (white streets
  * with gray edges, blue water, green parks) with Pathly's own changes: highways in quiet gray so
  * route lines stand out, no business labels (stations keep theirs), and a dark version.
  *
@@ -19,8 +20,6 @@ import type { MapTheme, TransitIcons } from '../theme/AppSettings';
 
 const SITE = 'https://pathly.web.app/map';
 
-/** The credit the map shows (OpenStreetMap's footpaths and Microsoft's buildings need it; the government data doesn't). */
-export const MAP_ATTRIBUTION = '© OpenStreetMap contributors, Microsoft';
 export const MAP_TILES_URL = process.env.EXPO_PUBLIC_MAP_TILES_URL || `${SITE}/tiles/{z}/{x}/{y}.pbf`;
 const MAP_GLYPHS_URL = process.env.EXPO_PUBLIC_MAP_GLYPHS_URL || `${SITE}/fonts/{fontstack}/{range}.pbf`;
 
@@ -32,6 +31,8 @@ const TILE_BOUNDS: [number, number, number, number] = [
   MAP_EXPLORATION_BOUNDS.north + 4,
 ];
 const TILES_MAX_ZOOM = 14;
+/** A building's height when its data has none (meters: about two stories). */
+const DEFAULT_BUILDING_METERS = 6;
 
 /**
  * Empty layers at the top of the style that Pathly's own lines and dots are slotted beneath
@@ -410,7 +411,7 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
     // National parks (in the tiles from zoom 9, with the detailed water over their bays) ease in.
     { id: 'park-national', type: 'fill', source: SOURCE, 'source-layer': 'park', minzoom: 9, filter: ['all', AREAS, ['==', ['get', 'kind'], 'national_park']], paint: { 'fill-color': palette.park } },
     { id: 'park-golf', type: 'fill', source: SOURCE, 'source-layer': 'park', minzoom: 10, filter: ['all', AREAS, ['==', ['get', 'kind'], 'golf_course']], paint: { 'fill-color': palette.grass, 'fill-opacity': fadeIn(10) } },
-    // Sports fields, courts, and stadiums, like a park (OpenStreetMap's; small courts show from closer in).
+    // Sports fields, courts, and tracks, like a park (New York City's; small courts show from closer in).
     { id: 'park-pitch', type: 'fill', source: SOURCE, 'source-layer': 'park', minzoom: 13, filter: ['all', AREAS, ['==', ['get', 'kind'], 'pitch']], paint: { 'fill-color': palette.park, 'fill-opacity': fadeIn(13) } },
     // The water over parks and the like, whose outlines often run out over a bay.
     { id: 'water', type: 'fill', source: SOURCE, 'source-layer': 'water', paint: { 'fill-color': palette.water } },
@@ -439,7 +440,7 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
         'fill-opacity': ['interpolate', ['linear'], ['zoom'], 14, 0, 15, 1],
       },
     },
-    // Bus and train platforms (OpenStreetMap's), paved like Google's, over the terminal around them.
+    // Train and subway platforms above ground (New York City's), paved like Google's.
     {
       id: 'landuse-platform',
       type: 'fill',
@@ -469,7 +470,22 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
     },
     ...roadLayers(palette, 'bridge'),
     {
-      // Which way a bus ramp or lane runs, in small arrows along it, close in.
+      // Buildings standing up when the map is tilted, as Google's do: from street level they rise to
+      // their height (New York City's measured roofs; elsewhere a low default), over the streets.
+      id: 'building-3d',
+      type: 'fill-extrusion',
+      source: SOURCE,
+      'source-layer': 'building',
+      minzoom: 15,
+      paint: {
+        'fill-extrusion-color': palette.building,
+        'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'], 15, 0, 16, ['coalesce', ['get', 'h'], DEFAULT_BUILDING_METERS]],
+        'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.92,
+      },
+    },
+    {
+      // Which way a one-way road runs, in small arrows along it, close in (roads marked `oneway`).
       id: 'road-oneway-arrow',
       type: 'symbol',
       source: SOURCE,
@@ -588,7 +604,7 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
       },
     }),
     {
-      // Stadiums, malls, museums, and sights (OpenStreetMap's notable ones; businesses stay hidden).
+      // Stadiums, malls, museums, and sights (Wikidata's notable ones; businesses stay hidden).
       id: 'landmark-label',
       type: 'symbol',
       source: SOURCE,
@@ -756,8 +772,8 @@ export function pathlyMapStyle(isDark: boolean, theme: MapTheme = 'default', tra
     version: 8,
     name: `Pathly ${cacheKey}`,
     sources: {
-      // Footpaths come from OpenStreetMap, whose license asks for this credit on the map.
-      [SOURCE]: { type: 'vector', tiles: [MAP_TILES_URL], minzoom: 0, maxzoom: TILES_MAX_ZOOM, bounds: TILE_BOUNDS, attribution: MAP_ATTRIBUTION },
+      // No attribution: none of the tiles' sources asks for a credit on the map.
+      [SOURCE]: { type: 'vector', tiles: [MAP_TILES_URL], minzoom: 0, maxzoom: TILES_MAX_ZOOM, bounds: TILE_BOUNDS },
     },
     glyphs: MAP_GLYPHS_URL,
     layers: [...baseLayers(palette, isDark).map(withZoomFade).map(hide), ...slots],

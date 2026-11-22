@@ -6,7 +6,7 @@
 //   landuse     kind: airport, cemetery, hospital, university, school, military, commercial,
 //               industrial, theme_park, zoo; airport names as points (kind airport, name)
 //   park        kind: park, national_park, golf_course, pitch (sports fields); park names as points (kind park, name)
-//   building    building outlines
+//   building    building outlines; h: the roof's height in meters, where known (New York City's)
 //   road        kind: motorway, primary, secondary, tertiary, minor, service, path; trail (an
 //               informal or unpaved path), stub (a short dead-end path: last zoom only), link (ramps),
 //               brunnel (bridge/tunnel), name, ref (route number)

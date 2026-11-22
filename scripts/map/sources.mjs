@@ -70,7 +70,7 @@ function geojsonLines(geometry) {
   return list.map((line) => line.flat()).filter((line) => line.length >= 4);
 }
 
-function polygonsArea(polygons) {
+export function polygonsArea(polygons) {
   let area = 0;
   for (const polygon of polygons) {
     let polygonArea = ringAreaMeters(polygon[0]);
@@ -607,7 +607,7 @@ export function addLandmarks(store, tigerDir, log) {
 
 // ── Places and names ─────────────────────────────────────────────────────────
 
-function parseCsvLine(line) {
+export function parseCsvLine(line) {
   const out = [];
   let field = '';
   let quoted = false;
@@ -777,7 +777,7 @@ export function addGnisWaterNames(store, gnis, already, log) {
 // ── Buildings ─────────────────────────────────────────────────────────────────
 
 /** "MULTIPOLYGON (((x y, ...), (...)), ((...)))" as polygons [outer, ...holes]. */
-function parseMultiPolygon(wkt) {
+export function parseMultiPolygon(wkt) {
   const body = wkt.slice(wkt.indexOf('(((') + 3, wkt.lastIndexOf(')))'));
   return body.split(/\)\)\s*,\s*\(\(/).map((polygon) => polygon.split(/\)\s*,\s*\(/).map((ring, i) => {
     const flat = [];
@@ -790,7 +790,10 @@ function parseMultiPolygon(wkt) {
   }).filter((ring) => ring.length >= 6)).filter((rings) => rings.length > 0);
 }
 
-/** New York City's building footprints (NYC Open Data). */
+/**
+ * New York City's building footprints (NYC Open Data), each with its roof's height in meters (`h`,
+ * from the city's measured roof heights), which the map raises buildings to when it's tilted.
+ */
 export async function addBuildings(store, csvPath, log) {
   if (!existsSync(csvPath)) {
     log('  buildings: no NYC footprint file; skipped');
@@ -800,12 +803,15 @@ export async function addBuildings(store, csvPath, log) {
   let header = null;
   let geomAt = 0;
   let codeAt = -1;
+  let heightAt = -1;
   let count = 0;
+  let withHeight = 0;
   for await (const line of lines) {
     if (!header) {
       header = parseCsvLine(line);
       geomAt = header.indexOf('the_geom');
       codeAt = header.indexOf('Feature Code');
+      heightAt = header.indexOf('Height Roof');
       continue;
     }
     const row = parseCsvLine(line);
@@ -815,9 +821,15 @@ export async function addBuildings(store, csvPath, log) {
     const wkt = row[geomAt];
     if (!wkt || !wkt.startsWith('MULTIPOLYGON')) continue;
     const polygons = parseMultiPolygon(wkt);
-    if (addPolygons(store, 'building', 14, {}, polygons) >= 0) count += 1;
+    // Feet above the ground to meters, to the nearest meter (finer than any map shows).
+    const meters = Math.round(Number(row[heightAt]) * 0.3048);
+    const props = Number.isFinite(meters) && meters >= 1 && meters <= 600 ? { h: meters } : {};
+    if (addPolygons(store, 'building', 14, props, polygons) >= 0) {
+      count += 1;
+      if (props.h) withHeight += 1;
+    }
   }
-  log(`  buildings: ${count}`);
+  log(`  buildings: ${count} (${withHeight} with their roof's height)`);
 }
 
 // ── Pathly's transit data ────────────────────────────────────────────────────

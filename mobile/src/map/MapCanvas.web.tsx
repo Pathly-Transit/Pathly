@@ -6,7 +6,6 @@ import { StyleSheet, View } from 'react-native';
 
 import { useTheme } from '../theme/AppSettings';
 import { sheetPaddingExtra, useSheetInset } from './mapSheetInset';
-import { SheetMapCredit } from './MapCredit';
 import { WEB_ICON_PIXEL_RATIO, WEB_MAP_ICONS } from './mapIcons';
 import { mapLandColor, overlaySlotId, pathlyMapStyle, STOP_LAYER_IDS } from './mapStyle';
 import {
@@ -119,7 +118,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       bearing: initialCamera.bearing ?? 0,
       pitch: initialCamera.pitch ?? 0,
       ...(minZoom !== undefined ? { minZoom: toMapLibreZoom(minZoom) } : {}),
-      // The map's credit is added below, on the left.
+      // No attribution: the base map's sources ask no credit on the map (Settings → About lists them).
       attributionControl: false,
       interactive,
       dragRotate: interactive && rotateEnabled,
@@ -292,8 +291,6 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
     <View style={[StyleSheet.absoluteFill, { backgroundColor: mapLandColor(isDark, mapTheme) }]} testID={testID}>
       <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
       {context ? <MapContext.Provider value={context}>{children}</MapContext.Provider> : null}
-      {/* The map's credit, in the app's own button style (MapLibre's is turned off above). */}
-      <SheetMapCredit bottomInset={padding?.bottom ?? 0} />
     </View>
   );
 });
