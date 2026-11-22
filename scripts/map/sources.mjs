@@ -454,11 +454,12 @@ function roadProps(list) {
     // Ramps wait for street level, like Google's (further out they were scattered dashes).
     case 'S1630': kind = 'motorway'; minzoom = 12; link = true; break;
     case 'S1200':
-      if (routes.some((a) => a.rttyp === 'I' || a.rttyp === 'U' || a.rttyp === 'S')) { kind = 'primary'; minzoom = 7; } else { kind = 'secondary'; minzoom = 9; }
+      if (routes.some((a) => a.rttyp === 'I' || a.rttyp === 'U' || a.rttyp === 'S')) { kind = 'primary'; minzoom = 7; } else { kind = 'secondary'; minzoom = 8; }
       break;
+    // Like Google's, main roads fill in from far out and side streets follow as a faint texture.
     case 'S1400':
     case 'S1640':
-      if (/\b(Ave|Blvd|Pkwy|Hwy|Tpke|Expy|Broadway|Concourse)\b/.test(name ?? '')) { kind = 'tertiary'; minzoom = 10; } else { kind = 'minor'; minzoom = 12; }
+      if (/\b(Ave|Blvd|Pkwy|Hwy|Tpke|Expy|Broadway|Concourse)\b/.test(name ?? '')) { kind = 'tertiary'; minzoom = 9; } else { kind = 'minor'; minzoom = 11; }
       break;
     case 'S1730':
     case 'S1740': kind = 'service'; minzoom = 13; break;
@@ -513,7 +514,7 @@ function shortAvenuesToStreets(lines) {
     if (props.kind === 'tertiary') total.set(find(i), (total.get(find(i)) ?? 0) + lineMeters(line));
   });
   return lines.map((entry, i) => (entry.props.kind === 'tertiary' && total.get(find(i)) < AVENUE_MIN_METERS
-    ? { ...entry, props: { ...entry.props, kind: 'minor' }, minzoom: 12 }
+    ? { ...entry, props: { ...entry.props, kind: 'minor' }, minzoom: 11 }
     : entry));
 }
 
@@ -657,10 +658,11 @@ function placeSize(kind, population) {
   // [kind shown, zoom], by how many people live there.
   if (population >= 1e6) return ['city', 4];
   if (kind === 'city' && population >= 1e5) return ['city', 7];
-  if (population >= 5e4) return ['town', 9];
-  if (population >= 1.5e4) return ['town', 10];
-  if (population >= 4e3) return ['village', 11];
-  return ['hamlet', 12];
+  // Towns are named about as far out as Google's map names them.
+  if (population >= 5e4) return ['town', 8];
+  if (population >= 1.5e4) return ['town', 9];
+  if (population >= 4e3) return ['village', 10];
+  return ['hamlet', 11];
 }
 
 /**
@@ -734,7 +736,7 @@ export function addPlaces(store, tigerDir, gnisDir, log) {
   for (const g of populated) {
     if (usedGnis.has(g)) continue;
     const before = placed.length;
-    add(g.name, 'neighbourhood', 13, 40, g.x, g.y);
+    add(g.name, 'neighbourhood', 11, 40, g.x, g.y);
     if (placed.length > before) neighborhoods += 1;
   }
   log(`  places: ${placed.length - neighborhoods} towns and boroughs, ${neighborhoods} neighborhoods`);

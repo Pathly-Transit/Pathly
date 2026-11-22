@@ -248,18 +248,19 @@ type RoadKind = { id: string; kinds: string[]; fill: keyof MapPalette; casing: k
 const ROADS: RoadKind[] = [
   { id: 'path', kinds: ['path'], fill: 'path', casing: 'path', minzoom: 13, fillWidth: width(13, 0.5, 15, 0.9, 16, 1.2, 18, 2.5), casingWidth: width(13, 0, 18, 0) },
   { id: 'service', kinds: ['service'], fill: 'minor', casing: 'casing', minzoom: 14, fillWidth: width(14, 0.6, 16, 3, 18, 8), casingWidth: width(14, 1.2, 16, 4.5, 18, 10) },
-  { id: 'minor', kinds: ['minor'], fill: 'minor', casing: 'casing', minzoom: 12, fillWidth: width(12, 0.9, 13, 1.6, 14, 2.6, 16, 6, 18, 16), casingWidth: width(12, 0.9, 13, 1.6, 14, 3.6, 16, 7.5, 18, 18.5) },
-  { id: 'tertiary', kinds: ['tertiary'], fill: 'arterial', casing: 'arterialCasing', minzoom: 10, fillWidth: width(10, 0.9, 12, 1.9, 14, 3.8, 16, 8, 18, 20), casingWidth: width(10, 0.9, 12, 1.9, 14, 5, 16, 10, 18, 23) },
-  { id: 'secondary', kinds: ['secondary'], fill: 'arterial', casing: 'arterialCasing', minzoom: 9, fillWidth: width(8, 0.6, 12, 2.1, 14, 4.5, 16, 10, 18, 24), casingWidth: width(8, 0.9, 12, 2.8, 14, 6, 16, 12, 18, 27) },
+  { id: 'minor', kinds: ['minor'], fill: 'minor', casing: 'casing', minzoom: 11, fillWidth: width(11, 0.5, 12, 0.9, 13, 1.6, 14, 2.6, 16, 6, 18, 16), casingWidth: width(11, 0.5, 12, 1.9, 13, 2.8, 14, 3.6, 16, 7.5, 18, 18.5) },
+  { id: 'tertiary', kinds: ['tertiary'], fill: 'arterial', casing: 'arterialCasing', minzoom: 9, fillWidth: width(9, 0.6, 10, 0.9, 12, 1.9, 14, 3.8, 16, 8, 18, 20), casingWidth: width(9, 0.6, 10, 0.9, 11, 1.9, 12, 3, 14, 5, 16, 10, 18, 23) },
+  { id: 'secondary', kinds: ['secondary'], fill: 'arterial', casing: 'arterialCasing', minzoom: 8, fillWidth: width(8, 0.6, 12, 2.1, 14, 4.5, 16, 10, 18, 24), casingWidth: width(8, 0.9, 12, 2.8, 14, 6, 16, 12, 18, 27) },
   { id: 'primary', kinds: ['primary'], fill: 'arterial', casing: 'arterialCasing', minzoom: 7, fillWidth: width(6, 0.6, 10, 1.5, 12, 2.6, 14, 5.5, 16, 12, 18, 28), casingWidth: width(6, 0.9, 10, 2, 12, 3.6, 14, 7.2, 16, 14, 18, 31) },
   { id: 'motorway', kinds: ['motorway'], fill: 'motorway', casing: 'motorwayCasing', minzoom: 4, fillWidth: widthWithLinks(4, 0.5, 10, 1.8, 12, 3.2, 14, 6.5, 16, 14, 18, 32), casingWidth: widthWithLinks(4, 0.8, 10, 2.6, 12, 4.4, 14, 8.4, 16, 16, 18, 35) },
 ];
 
 /**
- * Like Google's, streets have no edges zoomed out: every road is one plain line (white in the light
- * themes, on light gray land), and the edges ease in from here over a zoom, at street level.
+ * Like Google's, streets have no edges far out: every road is one plain line (white in the light
+ * themes, on light gray land), and the edges ease in from here over a zoom, as town streets come
+ * into view, so a suburb's streets stand out from the land around them.
  */
-const EDGE_ZOOM = 13.5;
+const EDGE_ZOOM = 11;
 
 /** Highways keep their edges at every zoom, so they still read as the biggest roads. */
 const ALWAYS_EDGED = new Set(['motorway']);
@@ -349,7 +350,7 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
     },
     { id: 'landuse-airport', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 9, filter: ['all', AREAS, ['==', ['get', 'kind'], 'airport']], paint: { 'fill-color': palette.aeroArea, 'fill-opacity': fadeIn(9) } },
     { id: 'landuse-hospital', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['all', AREAS, ['==', ['get', 'kind'], 'hospital']], paint: { 'fill-color': palette.hospital, 'fill-opacity': fadeIn(12) } },
-    { id: 'landuse-school', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['all', AREAS, ['match', ['get', 'kind'], ['school', 'university'], true, false]], paint: { 'fill-color': palette.school, 'fill-opacity': fadeIn(12) } },
+    { id: 'landuse-school', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 11, filter: ['all', AREAS, ['match', ['get', 'kind'], ['school', 'university'], true, false]], paint: { 'fill-color': palette.school, 'fill-opacity': fadeIn(11) } },
     { id: 'landuse-cemetery', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 11, filter: ['all', AREAS, ['==', ['get', 'kind'], 'cemetery']], paint: { 'fill-color': palette.grass, 'fill-opacity': fadeIn(11) } },
     { id: 'landuse-recreation', type: 'fill', source: SOURCE, 'source-layer': 'landuse', minzoom: 12, filter: ['all', AREAS, ['match', ['get', 'kind'], ['theme_park', 'zoo'], true, false]], paint: { 'fill-color': palette.grass, 'fill-opacity': fadeIn(12) } },
     { id: 'park', type: 'fill', source: SOURCE, 'source-layer': 'park', filter: ['all', AREAS, ['==', ['get', 'kind'], 'park']], paint: { 'fill-color': palette.park } },
@@ -457,8 +458,8 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
     // Like Google's, a side street's name waits until it's close (a main road's shows sooner), and a
     // driveway's or parking aisle's later still.
     ...([
-      ['road-label', 13, ['motorway', 'primary', 'secondary', 'tertiary']],
-      ['road-label-minor', 14, ['minor']],
+      ['road-label', 12, ['motorway', 'primary', 'secondary', 'tertiary']],
+      ['road-label-minor', 13, ['minor']],
       ['road-label-service', 15.5, ['service']],
     ] as const).map(([id, minzoom, kinds]): LayerSpecification => ({
       id,
@@ -471,7 +472,7 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
         'symbol-placement': 'line',
         'text-field': NAME,
         'text-font': REGULAR,
-        'text-size': ['interpolate', ['linear'], ['zoom'], 13, 10, 16, 12.5, 18, 14],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10, 16, 12.5, 18, 14],
         'text-padding': 4,
         'symbol-spacing': 280,
         'text-rotation-alignment': 'map',
@@ -535,10 +536,10 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
       type: 'symbol',
       source: SOURCE,
       'source-layer': 'place',
-      minzoom: 13,
+      minzoom: 11,
       maxzoom: 17,
       filter: ['==', ['get', 'kind'], 'neighbourhood'],
-      layout: { 'text-field': NAME, 'text-font': REGULAR, 'text-size': ['interpolate', ['linear'], ['zoom'], 13, 10.5, 16, 12.5], 'text-max-width': 7, 'text-padding': 6 },
+      layout: { 'text-field': NAME, 'text-font': REGULAR, 'text-size': ['interpolate', ['linear'], ['zoom'], 11, 10, 16, 12.5], 'text-max-width': 7, 'text-padding': 6 },
       paint: { 'text-color': palette.neighborhoodLabel, ...halo },
     },
     {
@@ -546,7 +547,7 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
       type: 'symbol',
       source: SOURCE,
       'source-layer': 'place',
-      minzoom: 11,
+      minzoom: 10,
       maxzoom: 16,
       filter: ['match', ['get', 'kind'], ['village', 'hamlet'], true, false],
       layout: { 'text-field': NAME, 'text-font': REGULAR, 'text-size': ['interpolate', ['linear'], ['zoom'], 11, 10.5, 15, 13.5], 'text-max-width': 7, 'text-padding': 8, 'symbol-sort-key': ['get', 'rank'] },
