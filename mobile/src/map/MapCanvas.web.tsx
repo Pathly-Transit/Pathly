@@ -6,7 +6,8 @@ import { StyleSheet, View } from 'react-native';
 
 import { useTheme } from '../theme/AppSettings';
 import { MapCredit } from './MapCredit';
-import { mapLandColor, overlaySlotId, pathlyMapStyle } from './mapStyle';
+import { WEB_ICON_PIXEL_RATIO, WEB_MAP_ICONS } from './mapIcons';
+import { mapLandColor, overlaySlotId, pathlyMapStyle, STOP_LAYER_IDS } from './mapStyle';
 import {
   boundsForMaxZoom,
   boundsOfPoints,
@@ -16,6 +17,7 @@ import {
   walkDotRadius,
   walkDotZoom,
   walkingDots,
+  mapStopOf,
   type MapCanvasProps,
   type MapCanvasRef,
   type MapCirclesProps,
@@ -48,6 +50,35 @@ const MapContext = createContext<MapContextValue | null>(null);
 const lngLatOf = (point: MapPoint): [number, number] => [point.longitude, point.latitude];
 const pointOf = (lngLat: { lng: number; lat: number }): MapPoint => ({ latitude: lngLat.lat, longitude: lngLat.lng });
 
+/** A bundled image's URL (the web bundler gives a URL, or an object holding one). */
+function assetUri(source: unknown): string | undefined {
+  if (typeof source === 'string') return source;
+  if (source && typeof source === 'object') {
+    const value = source as { uri?: unknown; default?: unknown };
+    if (typeof value.uri === 'string') return value.uri;
+    if (value.default !== undefined) return assetUri(value.default);
+  }
+  return undefined;
+}
+
+/** The base map's icons, loaded once per page and shared by every map. */
+const iconImages = new Map<string, Promise<HTMLImageElement>>();
+function loadIcon(name: string): Promise<HTMLImageElement> | undefined {
+  const uri = assetUri(WEB_MAP_ICONS[name]);
+  if (!uri) return undefined;
+  let image = iconImages.get(name);
+  if (!image) {
+    image = new Promise((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = reject;
+      element.src = uri;
+    });
+    iconImages.set(name, image);
+  }
+  return image;
+}
+
 /** Removes a layer and its source, if the map (and its current style) still has them. */
 function removeOverlay(map: maplibregl.Map, layerId: string, sourceId: string) {
   try {
@@ -59,7 +90,7 @@ function removeOverlay(map: maplibregl.Map, layerId: string, sourceId: string) {
 }
 
 export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCanvas(
-  { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
+  { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onStopPress, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
   ref,
 ) {
   const { isDark, mapTheme } = useTheme();
@@ -68,9 +99,9 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   const [styleKey, setStyleKey] = useState(0);
   const [tapTargets] = useState(() => new Map<string, TapTarget>());
   // The latest props, for the map's own event handlers (bound once).
-  const latest = useRef({ onCameraIdle, onLongPress, onPress, onUserGesture, maxBounds });
+  const latest = useRef({ onCameraIdle, onLongPress, onPress, onStopPress, onUserGesture, maxBounds });
   useLayoutEffect(() => {
-    latest.current = { onCameraIdle, onLongPress, onPress, onUserGesture, maxBounds };
+    latest.current = { onCameraIdle, onLongPress, onPress, onStopPress, onUserGesture, maxBounds };
   });
   const themeAtCreation = useRef({ isDark, mapTheme });
 
@@ -103,6 +134,12 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       longPress = null;
     };
     instance.on('style.load', () => setStyleKey((key) => key + 1));
+    // The style's icons (transit stops), added as the map asks for them (each new style asks again).
+    instance.on('styleimagemissing', ({ id }: { id: string }) => {
+      void loadIcon(id)?.then((image) => {
+        if (!instance.hasImage(id)) instance.addImage(id, image, { pixelRatio: WEB_ICON_PIXEL_RATIO });
+      }).catch(() => undefined);
+    });
     instance.once('load', () => {
       setMap(instance);
       onReady?.();
@@ -138,6 +175,23 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
         const key = features[0]?.properties?.key;
         if (typeof key === 'string') {
           target.onPress(key);
+          return;
+        }
+      }
+      // A station's or bus stop's icon on the base map.
+      if (latest.current.onStopPress) {
+        const { x, y } = event.point;
+        const layers = STOP_LAYER_IDS.filter((id) => instance.getLayer(id));
+        const features = layers.length ? instance.queryRenderedFeatures([[x - TAP_SLOP_PX, y - TAP_SLOP_PX], [x + TAP_SLOP_PX, y + TAP_SLOP_PX]], { layers }) : [];
+        const stops = features.map(mapStopOf).filter((stop): stop is NonNullable<typeof stop> => stop !== null);
+        // A station before a bus stop; otherwise the stop nearest the tap.
+        const away = (stop: NonNullable<ReturnType<typeof mapStopOf>>) => {
+          const at = instance.project(lngLatOf(stop.coordinate));
+          return Math.hypot(at.x - x, at.y - y);
+        };
+        const stop = stops.find((candidate) => candidate.kind !== 'bus') ?? [...stops].sort((a, b) => away(a) - away(b))[0];
+        if (stop) {
+          latest.current.onStopPress(stop);
           return;
         }
       }

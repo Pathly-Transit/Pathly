@@ -45,7 +45,8 @@ export function readFont(buffer) {
       const start = buffer.readUInt32BE(at);
       const end = buffer.readUInt32BE(at + 4);
       const glyph = buffer.readUInt32BE(at + 8);
-      for (let c = start; c <= end && c <= 0xffff; c += 1) characters.set(c, glyph + (c - start));
+      // Past 0xFFFF too: icon fonts (Material Community Icons) keep their glyphs up there.
+      for (let c = start; c <= end && c <= 0x10ffff; c += 1) characters.set(c, glyph + (c - start));
     }
   } else if (format === 4) {
     const segments = buffer.readUInt16BE(pick.offset + 6) / 2;

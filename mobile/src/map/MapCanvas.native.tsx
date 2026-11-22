@@ -1,6 +1,7 @@
 import {
   Camera,
   GeoJSONSource,
+  Images,
   Layer,
   Map,
   Marker,
@@ -13,7 +14,8 @@ import { StyleSheet, View, type NativeSyntheticEvent } from 'react-native';
 
 import { useTheme } from '../theme/AppSettings';
 import { MapCredit } from './MapCredit';
-import { mapLandColor, overlaySlotId, pathlyMapStyle } from './mapStyle';
+import { MAP_ICONS } from './mapIcons';
+import { mapLandColor, overlaySlotId, pathlyMapStyle, STOP_LAYER_IDS } from './mapStyle';
 import {
   boundsForMaxZoom,
   boundsOfPoints,
@@ -23,6 +25,7 @@ import {
   walkDotRadius,
   walkDotZoom,
   walkingDots,
+  mapStopOf,
   type MapCamera,
   type MapCanvasProps,
   type MapCanvasRef,
@@ -93,12 +96,15 @@ function useMapBearing(enabled: boolean): number {
 
 const pointOf = ([longitude, latitude]: [number, number]): MapPoint => ({ latitude, longitude });
 
+/** Taps within this many points of a stop's icon count as tapping it. */
+const STOP_TAP_SLOP = 12;
+
 function cameraOf(state: ViewStateChangeEvent): MapCamera {
   return { center: pointOf(state.center), zoom: fromMapLibreZoom(state.zoom), bearing: state.bearing, pitch: state.pitch };
 }
 
 export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCanvas(
-  { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
+  { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onStopPress, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
   ref,
 ) {
   const { isDark, mapTheme } = useTheme();
@@ -174,7 +180,22 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
         mapStyle={mapStyle}
         onDidFinishLoadingMap={onReady ? () => onReady() : undefined}
         onLongPress={onLongPress ? (event) => onLongPress(pointOf(event.nativeEvent.lngLat)) : undefined}
-        onPress={onPress ? (event) => onPress(pointOf(event.nativeEvent.lngLat)) : undefined}
+        onPress={onPress || onStopPress ? (event) => {
+          const lngLat = event.nativeEvent.lngLat;
+          const [x, y] = event.nativeEvent.point;
+          if (!onStopPress) {
+            onPress?.(pointOf(lngLat));
+            return;
+          }
+          // A station's or bus stop's icon on the base map (stations first), else the map itself.
+          void mapRef.current?.queryRenderedFeatures([[x - STOP_TAP_SLOP, y - STOP_TAP_SLOP], [x + STOP_TAP_SLOP, y + STOP_TAP_SLOP]], { layers: STOP_LAYER_IDS })
+            .then((features) => {
+              const stops = features.map(mapStopOf).filter((stop): stop is NonNullable<typeof stop> => stop !== null);
+              const stop = stops.find((candidate) => candidate.kind !== 'bus') ?? stops[0];
+              if (stop) onStopPress(stop);
+              else onPress?.(pointOf(lngLat));
+            }, () => onPress?.(pointOf(lngLat)));
+        } : undefined}
         onRegionDidChange={(event: NativeSyntheticEvent<ViewStateChangeEvent>) => {
           bearingStore.set(event.nativeEvent.bearing);
           zoomStore.set(fromMapLibreZoom(event.nativeEvent.zoom));
@@ -196,6 +217,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
         touchRotate={interactive && rotateEnabled}
         touchZoom={interactive}
       >
+        <Images images={MAP_ICONS} />
         <Camera
           initialViewState={initialViewState}
           maxBounds={maxBounds ? [maxBounds.west, maxBounds.south, maxBounds.east, maxBounds.north] : undefined}

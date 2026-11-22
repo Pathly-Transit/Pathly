@@ -1605,7 +1605,7 @@ describe('Pathly prototype navigation', () => {
   it('hides places\' labels (not stations\') and grays highways on the home and route maps', async () => {
     const hidesPlaces = (map: { props: { mapStyle: { layers: { id: string; 'source-layer'?: string; paint?: Record<string, unknown> }[] } } }) => {
       const { layers } = map.props.mapStyle;
-      expect(layers.filter((layer) => layer['source-layer'] === 'poi').map((layer) => layer.id)).toEqual(['station-dot', 'station-label']);
+      expect(layers.filter((layer) => layer['source-layer'] === 'poi').map((layer) => layer.id)).toEqual(['station-bus-icon', 'station-icon']);
       expect(layers.find((layer) => layer.id === 'road-road-motorway')?.paint?.['line-color']).toBe('#DADCE0');
     };
     const screen = await renderHome();

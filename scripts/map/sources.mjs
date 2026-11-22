@@ -562,7 +562,17 @@ const LANDMARKS = {
   K2362: ['landuse', 'industrial', { lo: 11, px: 16 }],
 };
 
-/** Parks, cemeteries, campuses, airports, and the like, with park, airport, and island names. */
+/** Where landmarks' names show from: the zoom (`lo`) and the area on screen (`px`) it takes. */
+const LANDMARK_NAMES = {
+  university: { lo: 12, px: 60 * 60, rank: 20 },
+  hospital: { lo: 12, px: 40 * 40, rank: 22 },
+  zoo: { lo: 12, px: 40 * 40, rank: 24 },
+  theme_park: { lo: 12, px: 40 * 40, rank: 24 },
+  cemetery: { lo: 13, px: 60 * 60, rank: 30 },
+  school: { lo: 14, px: 40 * 40, rank: 34 },
+};
+
+/** Parks, cemeteries, campuses, airports, and the like, with park, airport, island, and landmark names. */
 export function addLandmarks(store, tigerDir, log) {
   const labels = [];
   let count = 0;
@@ -585,6 +595,9 @@ export function addLandmarks(store, tigerDir, log) {
       if (!name) continue;
       if (layer === 'park') labels.push({ layer: 'park', name, spec: { kind: 'park', lo: 10, px: 90 * 90 }, polygons, box, area });
       if (kind === 'airport') labels.push({ layer: 'landuse', name, spec: { kind: 'airport', lo: 9, px: 40 * 40, max: 14 }, polygons, box, area });
+      // Campuses, hospitals, cemeteries, and zoos are named once they're big enough on screen, like Google's.
+      const named = LANDMARK_NAMES[kind];
+      if (named) labels.push({ layer: 'landuse', name, spec: { kind, ...named }, polygons, box, area });
     }
   }
   const placed = addClusteredLabels(store, labels, 1);
@@ -816,7 +829,21 @@ export const TRANSIT_FEEDS = {
   metronorth: { url: 'https://rrgtfsfeeds.s3.amazonaws.com/gtfsmnr.zip', kind: 'rail' },
   nycferry: { url: 'https://nycferry.connexionz.net/rtt/public/resource/gtfs.zip', kind: 'ferry' },
   siferry: { url: 'https://www.nyc.gov/html/dot/downloads/misc/siferry-gtfs.zip', kind: 'ferry' },
+  bus_b: { url: 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_b.zip', kind: 'bus' },
+  bus_bx: { url: 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_bx.zip', kind: 'bus' },
+  bus_m: { url: 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_m.zip', kind: 'bus' },
+  bus_q: { url: 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_q.zip', kind: 'bus' },
+  bus_si: { url: 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_si.zip', kind: 'bus' },
+  bus_busco: { url: 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_busco.zip', kind: 'bus' },
+  nice: { url: 'https://www.nicebus.com/NICE/media/nicebus-gtfs/NICE_GTFS.zip', kind: 'bus' },
+  suffolk: { url: 'https://tracksctbus.org/gtfs', kind: 'bus' },
 };
+
+/** Stations show from this zoom (ferry landings one later); bus stops only at street level. */
+const STATION_MINZOOM = 12;
+const BUS_STOP_MINZOOM = 14;
+/** A street corner's stops (one per side, or one per agency) within this many km show as one. */
+const BUS_STOP_MERGE_KM = 0.06;
 
 /** A GTFS file's rows as objects. */
 function gtfsRows(files, name) {
@@ -830,9 +857,23 @@ function gtfsRows(files, name) {
   });
 }
 
-/** Station names (subway, LIRR, Metro-North, ferry landings) and ferry routes, from the agencies' GTFS feeds. */
+/** Station names (subway, LIRR, Metro-North, ferry landings), bus stops, and ferry routes, from the agencies' GTFS feeds. */
 export function addTransit(store, gtfsDir, log) {
   let stations = 0;
+  let busStops = 0;
+  // Bus stops by grid cell (about 100 m), to merge a corner's stops across sides and agencies.
+  const busCells = new Map();
+  const busCell = (x, y) => `${Math.floor(x * 1000)},${Math.floor(y * 1000)}`;
+  const nearBusStop = (name, x, y) => {
+    const cx = Math.floor(x * 1000);
+    const cy = Math.floor(y * 1000);
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (const p of busCells.get(`${cx + dx},${cy + dy}`) ?? []) if (p.name === name && distanceKm(p.x, p.y, x, y) < BUS_STOP_MERGE_KM) return true;
+      }
+    }
+    return false;
+  };
   let ferries = 0;
   const seenPaths = new Set();
   for (const [agency, { kind }] of Object.entries(TRANSIT_FEEDS)) {
@@ -851,9 +892,22 @@ export function addTransit(store, gtfsDir, log) {
       const x = Number(stop.stop_lon);
       const y = Number(stop.stop_lat);
       const name = stop.stop_name;
-      if (!name || !insideBox(DETAIL, x, y) || placed.some((p) => p.name === name && distanceKm(p.x, p.y, x, y) < 0.15)) continue;
+      if (!name || !insideBox(DETAIL, x, y)) continue;
+      if (kind === 'bus') {
+        // A terminal lists each ramp or platform once per pair of routes ("Ramp D S44 & S94"): one stop per ramp.
+        const shared = name.replace(/^(.*\b(?:RAMP|PLATFORM|BAY|GATE|BERTH)\s+[A-Z0-9]+)\s+[A-Z]{1,3}\d+[A-Z]?(?:\s*[&,/]\s*[A-Z]{1,3}\d+[A-Z]?)*\s*$/i, '$1');
+        const key = nameKey(shared);
+        if (nearBusStop(key, x, y)) continue;
+        const cell = busCell(x, y);
+        if (!busCells.has(cell)) busCells.set(cell, []);
+        busCells.get(cell).push({ name: key, x, y });
+        store.add('poi', POINT, BUS_STOP_MINZOOM, { kind, name: shared }, [[x, y]]);
+        busStops += 1;
+        continue;
+      }
+      if (placed.some((p) => p.name === name && distanceKm(p.x, p.y, x, y) < 0.15)) continue;
       placed.push({ name, x, y });
-      store.add('poi', POINT, kind === 'ferry' ? 13 : 12, { kind, name }, [[x, y]]);
+      store.add('poi', POINT, kind === 'ferry' ? STATION_MINZOOM + 1 : STATION_MINZOOM, { kind, name }, [[x, y]]);
       stations += 1;
     }
     if (kind !== 'ferry') continue;
@@ -873,7 +927,7 @@ export function addTransit(store, gtfsDir, log) {
       if (addLines(store, 'ferry', 10, {}, [line], DETAIL) >= 0) ferries += 1;
     }
   }
-  log(`  transit: ${stations} stations, ${ferries} ferry routes`);
+  log(`  transit: ${stations} stations, ${busStops} bus stops, ${ferries} ferry routes`);
 }
 
 // ── Around the detailed area (Natural Earth) ─────────────────────────────────

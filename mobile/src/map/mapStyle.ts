@@ -78,8 +78,6 @@ export type MapPalette = {
   waterLabel: string;
   parkLabel: string;
   stationLabel: string;
-  stationDot: string;
-  stationRing: string;
 };
 
 /** Light: the familiar map's colors, highways grayed (they competed with route lines). */
@@ -114,8 +112,6 @@ const LIGHT: MapPalette = {
   waterLabel: '#2F6AB0',
   parkLabel: '#2E7A40',
   stationLabel: '#3C4F66',
-  stationDot: '#FFFFFF',
-  stationRing: '#5F7189',
 };
 
 /** Dark: black and dark-gray surfaces, light-gray labels; water and parks just distinguishable. */
@@ -150,8 +146,6 @@ const DARK: MapPalette = {
   waterLabel: '#5279A6',
   parkLabel: '#629C6E',
   stationLabel: '#B3B9C1',
-  stationDot: '#16171A',
-  stationRing: '#8E949C',
 };
 
 /** Muted: grays with only a hint of green and blue, so route lines stand out the most. */
@@ -162,7 +156,7 @@ const MUTED_LIGHT: MapPalette = {
   casing: '#D0D0D0', arterialCasing: '#C4C4C4', highway: '#E0E0E0', highwayCasing: '#BDBDBD', motorway: '#DCDCDC', motorwayCasing: '#B8B8B8',
   path: '#B9CEC6', rail: '#BDBDBD', ferry: '#8FA6BA', boundary: '#B5B5B5',
   label: '#707070', placeLabel: '#4A4A4A', neighborhoodLabel: '#8A8A8A', roadLabel: '#707070', waterLabel: '#5F7A90', parkLabel: '#5E7A5E',
-  stationLabel: '#4A5560', stationRing: '#7A8590',
+  stationLabel: '#4A5560',
 };
 const MUTED_DARK: MapPalette = {
   ...DARK,
@@ -171,7 +165,7 @@ const MUTED_DARK: MapPalette = {
   casing: '#0F0F10', minor: '#2A2A2D', arterial: '#313134', arterialCasing: '#0F0F10', highway: '#38383C', highwayCasing: '#0F0F10', motorway: '#3E3E42', motorwayCasing: '#0F0F10',
   path: '#38433F', rail: '#2B2B2E', ferry: '#36506A', boundary: '#3A3A3D',
   label: '#87898D', labelHalo: '#18181A', placeLabel: '#ABADB1', neighborhoodLabel: '#7B7D81', roadLabel: '#929498', waterLabel: '#5D7288', parkLabel: '#6E8570',
-  stationLabel: '#ABADB1', stationDot: '#18181A', stationRing: '#87898D',
+  stationLabel: '#ABADB1',
 };
 
 /** Vibrant: deeper blues and greens, and highways in a soft yellow. */
@@ -186,7 +180,7 @@ const VIBRANT_DARK: MapPalette = {
   ...DARK,
   land: '#121418', park: '#143A22', grass: '#163220', hospital: '#2A1A1C', school: '#262218',
   water: '#0A2747', minor: '#2A2E35', arterial: '#343841', highway: '#4A4636', motorway: '#57503A',
-  path: '#2B5A4B', ferry: '#2E73C0', labelHalo: '#121418', stationDot: '#121418', waterLabel: '#5C93D6', parkLabel: '#5FB872',
+  path: '#2B5A4B', ferry: '#2E73C0', labelHalo: '#121418', waterLabel: '#5C93D6', parkLabel: '#5FB872',
 };
 
 /** Warm: paper-cream land and soft, earthy greens and blues. */
@@ -196,7 +190,7 @@ const WARM_LIGHT: MapPalette = {
   casing: '#D4C9B6', minor: '#FFFDF8', arterial: '#FFFBF2', arterialCasing: '#C9BBA4', highway: '#EBDDC4', highwayCasing: '#C4AE8A', motorway: '#E8D6B6', motorwayCasing: '#BFA37A',
   path: '#B3C69E', rail: '#B8AA94', ferry: '#5E8FB5', boundary: '#B8A991',
   label: '#6B5E4E', labelHalo: '#FFFBF2', placeLabel: '#4A3F33', neighborhoodLabel: '#8A7C6A', roadLabel: '#6B5E4E', waterLabel: '#3E6F8F', parkLabel: '#4E7A3A',
-  stationLabel: '#4D4438', stationDot: '#FFFDF8', stationRing: '#8A7A64',
+  stationLabel: '#4D4438',
 };
 const WARM_DARK: MapPalette = {
   land: '#1C1915', manMade: '#201C18', park: '#1F2619', grass: '#1E2318', hospital: '#241C1A', school: '#221E18',
@@ -204,7 +198,7 @@ const WARM_DARK: MapPalette = {
   casing: '#110F0D', minor: '#2F2A24', arterial: '#37312A', arterialCasing: '#110F0D', highway: '#423A30', highwayCasing: '#110F0D', motorway: '#4B4236', motorwayCasing: '#110F0D',
   path: '#3A4230', rail: '#2F2A24', ferry: '#3B6280', boundary: '#3E3830',
   label: '#9A8F80', labelHalo: '#1C1915', placeLabel: '#C2B6A5', neighborhoodLabel: '#8A7F70', roadLabel: '#A59A8B', waterLabel: '#5E86A3', parkLabel: '#7A9A62',
-  stationLabel: '#C2B6A5', stationDot: '#1C1915', stationRing: '#9A8F80',
+  stationLabel: '#C2B6A5',
 };
 
 const PALETTES: Record<MapTheme, { light: MapPalette; dark: MapPalette }> = {
@@ -331,6 +325,62 @@ function withLateLabels(layer: SymbolLayerSpecification & { filter: ExpressionSp
   return [
     { ...layer, filter: ['all', layer.filter, ['!', ['has', 'lz']]] },
     ...[15, 16].map((zoom): LayerSpecification => ({ ...layer, id: `${layer.id}-${zoom}`, minzoom: zoom, filter: ['all', layer.filter, ['==', ['get', 'lz'], zoom]] })),
+  ];
+}
+
+/**
+ * The map's transit icons (the app's own mode icons, in gray: scripts/build-map-icons.mjs), by the
+ * name each map kit registers them under (MapCanvas), one set per theme.
+ */
+/** The base map's layers of tappable transit icons (MapCanvas's onStopPress), bus stops first. */
+export const STOP_LAYER_IDS = ['station-bus-icon', 'station-icon'];
+
+export const TRANSIT_ICON_NAMES = ['transit-subway', 'transit-rail', 'transit-ferry', 'transit-bus'] as const;
+export const transitIconName = (name: (typeof TRANSIT_ICON_NAMES)[number], isDark: boolean) => (isDark ? `${name}-dark` : name);
+
+/**
+ * Stations (subway, rail, ferry) as their mode's icon from as far out as a town's streets show,
+ * named a zoom later; bus stops as a smaller bus icon at street level, with no name. Icons always
+ * show (they don't hide each other), and a station's name gives way to other labels.
+ */
+function transitLayers(palette: MapPalette, isDark: boolean, halo: Record<string, unknown>): LayerSpecification[] {
+  const icon = (name: (typeof TRANSIT_ICON_NAMES)[number]) => transitIconName(name, isDark);
+  const isBus: ExpressionSpecification = ['==', ['get', 'kind'], 'bus'];
+  const always = { 'icon-allow-overlap': true, 'icon-ignore-placement': true } as const;
+  return [
+    {
+      id: 'station-bus-icon',
+      type: 'symbol',
+      source: SOURCE,
+      'source-layer': 'poi',
+      minzoom: 14,
+      filter: isBus,
+      layout: { 'icon-image': icon('transit-bus'), 'icon-size': ['interpolate', ['linear'], ['zoom'], 14, 0.8, 16, 1, 18, 1.2], ...always },
+    },
+    {
+      id: 'station-icon',
+      type: 'symbol',
+      source: SOURCE,
+      'source-layer': 'poi',
+      minzoom: 12,
+      filter: ['!', isBus],
+      layout: {
+        'icon-image': ['match', ['get', 'kind'], 'rail', icon('transit-rail'), 'ferry', icon('transit-ferry'), icon('transit-subway')],
+        'icon-size': ['interpolate', ['linear'], ['zoom'], 12, 0.75, 14, 0.9, 17, 1.1],
+        ...always,
+        // Names from a zoom later, under the icon.
+        'text-field': ['step', ['zoom'], '', 13, NAME],
+        'text-font': BOLD,
+        'text-size': ['interpolate', ['linear'], ['zoom'], 13, 10.5, 17, 13],
+        'text-anchor': 'top',
+        'text-offset': [0, 0.9],
+        'text-max-width': 8,
+        'text-padding': 4,
+        'text-optional': true,
+        'symbol-sort-key': ['match', ['get', 'kind'], 'rail', 0, 'subway', 1, 2],
+      },
+      paint: { 'text-color': palette.stationLabel, ...halo },
+    },
   ];
 }
 
@@ -480,36 +530,36 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
       },
       paint: { 'text-color': palette.roadLabel, ...halo },
     })),
-    {
-      // Rail and subway stations and ferry landings keep their names (businesses' are hidden).
-      id: 'station-dot',
-      type: 'circle',
-      source: SOURCE,
-      'source-layer': 'poi',
-      minzoom: 14,
-      paint: {
-        'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 3, 17, 4.5],
-        'circle-color': palette.stationDot,
-        'circle-stroke-color': palette.stationRing,
-        'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 14, 1.3, 17, 2],
-      },
-    },
-    {
-      id: 'station-label',
+    ...transitLayers(palette, isDark, halo),
+    ...withLateLabels({
+      // Campuses, hospitals, zoos, and cemeteries, named in their own colors like Google's.
+      id: 'landmark-area-label',
       type: 'symbol',
       source: SOURCE,
-      'source-layer': 'poi',
-      minzoom: 14,
-      layout: {
-        'text-field': NAME,
-        'text-font': BOLD,
-        'text-size': ['interpolate', ['linear'], ['zoom'], 14, 10.5, 17, 12.5],
-        'text-anchor': 'top',
-        'text-offset': [0, 0.6],
-        'text-max-width': 8,
-        'text-padding': 4,
+      'source-layer': 'landuse',
+      minzoom: 12,
+      filter: ['all', POINTS, ['match', ['get', 'kind'], ['university', 'school', 'hospital', 'zoo', 'theme_park', 'cemetery'], true, false]],
+      layout: { 'text-field': NAME, 'text-font': SEMIBOLD, 'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10.5, 16, 12.5], 'text-max-width': 8, 'text-padding': 4, 'symbol-sort-key': ['get', 'rank'] },
+      paint: {
+        'text-color': ['match', ['get', 'kind'], 'hospital', isDark ? '#F28B82' : '#C5221F', ['zoo', 'theme_park', 'cemetery'], palette.parkLabel, palette.label],
+        ...halo,
       },
-      paint: { 'text-color': palette.stationLabel, ...halo },
+    }),
+    {
+      // Stadiums, malls, museums, and sights (OpenStreetMap's notable ones; businesses stay hidden).
+      id: 'landmark-label',
+      type: 'symbol',
+      source: SOURCE,
+      'source-layer': 'landmark',
+      minzoom: 13,
+      layout: { 'text-field': NAME, 'text-font': SEMIBOLD, 'text-size': ['interpolate', ['linear'], ['zoom'], 13, 10.5, 16, 12.5], 'text-max-width': 8, 'text-padding': 6, 'symbol-sort-key': ['get', 'rank'] },
+      paint: {
+        'text-color': ['match', ['get', 'kind'],
+          'mall', isDark ? '#8AB4F8' : '#3C6BC4',
+          ['stadium', 'zoo', 'aquarium', 'theme_park'], isDark ? '#81C995' : '#1E7E45',
+          isDark ? '#78D9EC' : '#0F7C8C'],
+        ...halo,
+      },
     },
     {
       id: 'airport-label',

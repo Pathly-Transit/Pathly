@@ -38,6 +38,23 @@ export interface MapCanvasRef {
   getCamera(): Promise<MapCamera | null>;
 }
 
+/** A station or bus stop on the base map (mapStyle.ts's transit icons), as tapped. */
+export type MapStop = {
+  name: string;
+  kind: 'bus' | 'subway' | 'rail' | 'ferry';
+  coordinate: MapPoint;
+};
+
+/** A tapped feature from the base map's transit icons, or null when it isn't one. */
+export function mapStopOf(feature: { properties?: Record<string, unknown> | null; geometry?: { type: string; coordinates?: unknown } | null } | undefined): MapStop | null {
+  const name = feature?.properties?.name;
+  const kind = feature?.properties?.kind;
+  const coordinates = feature?.geometry?.type === 'Point' ? feature.geometry.coordinates : null;
+  if (typeof name !== 'string' || !Array.isArray(coordinates)) return null;
+  if (kind !== 'bus' && kind !== 'subway' && kind !== 'rail' && kind !== 'ferry') return null;
+  return { name, kind, coordinate: { longitude: Number(coordinates[0]), latitude: Number(coordinates[1]) } };
+}
+
 export type MapCanvasProps = {
   /** Where the map opens. */
   initialCamera: { center: MapPoint; zoom: number; bearing?: number; pitch?: number };
@@ -56,6 +73,8 @@ export type MapCanvasProps = {
   maxBounds?: MapBounds;
   onPress?: (point: MapPoint) => void;
   onLongPress?: (point: MapPoint) => void;
+  /** A tap on a station's or bus stop's icon (instead of onPress). */
+  onStopPress?: (stop: MapStop) => void;
   /** The rider started moving the map (a pan, pinch, or turn). */
   onUserGesture?: () => void;
   /** The map came to rest, wherever it is. */

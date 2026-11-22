@@ -7,11 +7,12 @@ import { zoomForRegion } from '../data/stopDeclutter';
 import type { SavedLocation } from '../data/userData';
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { MapCanvas, MapMarker, MapPolyline } from '../map/MapCanvas';
-import type { MapCameraChange, MapCanvasRef } from '../map/mapTypes';
+import type { MapCameraChange, MapCanvasRef, MapStop } from '../map/mapTypes';
 import { useTheme } from '../theme/AppSettings';
 import { CurrentLocationMarker } from './CurrentLocationMarker';
 import { HeadingBeamMarker } from './HeadingBeamMarker';
 import { SavedPlaceMarkers } from './SavedPlaceMarkers';
+import { StopPill } from './StopPill';
 
 /** Where the map opens with no camera to restore: around the rider at street-and-neighborhood scale. */
 const HOME_ZOOM = 14;
@@ -58,6 +59,11 @@ type HomeMapProps = {
   lines?: readonly MapLine[];
   /** A marker tapped: its place, and every place stacked with it there (itself included). */
   onSavedLocationPress?: (location: SavedLocation, stack: readonly SavedLocation[]) => void;
+  /** A station's or bus stop's icon tapped on the map. */
+  onStopPress?: (stop: MapStop) => void;
+  /** The stop whose name pill shows over the map; tapping the pill calls onOpenStop. */
+  selectedStop?: MapStop | null;
+  onOpenStop?: (stop: MapStop) => void;
   /** `location` is a real fix (not the service-area fallback), so the rider's dot is drawn there. */
   locationKnown?: boolean;
   /** `location` is an admin's mock location (always drawn). */
@@ -81,12 +87,15 @@ export function HomeMap({
   onOrientationChange,
   onPress,
   onSavedLocationPress,
+  onOpenStop,
+  onStopPress,
   onUserMoveEnd,
   onUserPan,
   padding,
   recenterRequest = 0,
   reorientRequest = 0,
   savedLocations = [],
+  selectedStop = null,
   locationKnown = false,
   simulatedLocation = false,
   testID = 'home-map',
@@ -138,6 +147,7 @@ export function HomeMap({
       onCameraIdle={onCameraIdle}
       onLongPress={onLongPress}
       onPress={onPress}
+      onStopPress={onStopPress}
       onUserGesture={onUserPan}
       padding={padding}
       ref={mapRef}
@@ -157,6 +167,7 @@ export function HomeMap({
       ))}
       {showRider ? <HeadingBeamMarker coordinate={location} /> : null}
       <SavedPlaceMarkers locations={savedLocations} onPress={onSavedLocationPress} zIndex={1} zoom={zoom} />
+      {selectedStop ? <StopPill key={`${selectedStop.name}@${selectedStop.coordinate.latitude},${selectedStop.coordinate.longitude}`} onPress={() => onOpenStop?.(selectedStop)} stop={selectedStop} /> : null}
       {showRider ? (
         <MapMarker coordinate={location} testID={simulatedLocation ? 'mock-location-marker' : `${testID}-user-location`} zIndex={5}>
           <CurrentLocationMarker />

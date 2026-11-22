@@ -21,7 +21,7 @@
 // A label too small to show at the tiles' last zoom carries `lz`, the zoom it shows from.
 
 // (Stored by index: add new layers at the end, so features read earlier keep theirs.)
-export const LAYERS = ['land', 'water', 'landuse', 'park', 'building', 'road', 'rail', 'waterway', 'ferry', 'boundary', 'place', 'water_name', 'poi', 'sea'];
+export const LAYERS = ['land', 'water', 'landuse', 'park', 'building', 'road', 'rail', 'waterway', 'ferry', 'boundary', 'place', 'water_name', 'poi', 'landmark', 'sea'];
 
 // TIGER/Line abbreviates names to fit its fields; the labels spell them out where the familiar
 // maps do (street suffixes like St and Ave stay short, as they do there).

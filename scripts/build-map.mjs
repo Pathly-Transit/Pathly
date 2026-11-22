@@ -19,6 +19,7 @@ import { pipeline } from 'node:stream/promises';
 
 import { DETAIL, EXPLORATION, MAX_ZOOM, OVERVIEW, ROOT } from './map/bounds.mjs';
 import { boxesOverlap, ringBounds } from './map/geometry.mjs';
+import { addOsmLandmarks, downloadOsmLandmarks } from './map/landmarks.mjs';
 import { addOsmPaths, downloadOsmPaths } from './map/osm.mjs';
 import { LAYERS } from './map/schema.mjs';
 import { addMsBuildings, downloadMsBuildings } from './map/msbuildings.mjs';
@@ -80,6 +81,7 @@ async function download(dir) {
     for (const kind of ['roads', 'areawater', 'linearwater']) await fetchTo(`${TIGER}/${kind.toUpperCase()}/tl_2025_${geoid}_${kind}.zip`, join(dir, `county/tl_2025_${geoid}_${kind}.zip`));
   }
   await downloadOsmPaths(dir);
+  await downloadOsmLandmarks(dir);
   await downloadMsBuildings(dir);
   console.log(`Sources ready in ${dir}.`);
 }
@@ -104,6 +106,7 @@ async function build(dir, tilesOnly) {
     addGnisWaterNames(store, gnis, [...waterNames, ...landmarkNames], log);
     addRoads(store, join(dir, 'county'), log);
     addOsmPaths(store, join(dir, 'osm'), log);
+    addOsmLandmarks(store, join(dir, 'osm'), log);
     addRail(store, join(dir, 'tiger'), log);
     addTransit(store, join(dir, 'gtfs'), log);
     await addBuildings(store, join(dir, 'nyc/buildings.csv'), log);

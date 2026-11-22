@@ -7,7 +7,7 @@ import { applyRouteLive } from '../data/applyRouteLive';
 import { NEARBY_CACHE_KEY, RIDE_GUIDE_CACHE_KEY, readCache, writeCache } from '../data/deviceCache';
 import { guidanceForNavigation, type TripEndpointReference } from '../data/enrouteNavigation';
 import { isRideGuideTrip, type RideGuideRequest } from '../data/rideGuide';
-import { describeTransitLine, discoveredRouteToRouteDetail, fetchNearbyTransit, fetchRouteAtStop, filterOutPinnedDuplicates, type DiscoveredRoute } from '../data/nearbyTransit';
+import { describeTransitLine, discoveredRouteToRouteDetail, fetchNearbyTransit, fetchRouteAtStop, filterOutPinnedDuplicates, routeDetailAt, type DiscoveredRoute } from '../data/nearbyTransit';
 import type { IndexedLine } from '../data/lineIndex';
 import { distanceMeters } from '../data/routeDirection';
 import { SERVICE_AREA_FALLBACK } from '../data/serviceArea';
@@ -72,6 +72,8 @@ import { MapPickerView } from './MapPickerView';
 import { RouteAlertsPrompt, type RouteAlertsRequest } from './RouteAlertsPrompt';
 import { RouteDetailView, type TappedStop } from './RouteDetailView';
 import { SavedPlaceDetailsSheet } from './SavedPlaceDetailsSheet';
+import { StopRoutesSheet } from './StopRoutesSheet';
+import type { MapStop } from '../map/mapTypes';
 import { SavePlaceSheet, type SavePlaceRequest } from './SavePlaceSheet';
 import { SetPlacesPrompt } from './SetPlacesPrompt';
 import { ResumeTripCard } from './ResumeTripCard';
@@ -577,6 +579,17 @@ export function HomeScreen() {
       },
       () => undefined,
     );
+  }, []);
+
+  // A station or bus stop tapped on the home map: its name pill, then the lines there, then one
+  // line's route view at that stop (Back returns home).
+  const [mapStop, setMapStop] = useState<MapStop | null>(null);
+  const [stopRoutesFor, setStopRoutesFor] = useState<MapStop | null>(null);
+  const openRouteAtMapStop = useCallback((discovered: DiscoveredRoute, stop: MapStop) => {
+    const route = routeDetailAt(discovered, stop.coordinate);
+    setStopRoutesFor(null);
+    setMapStop(null);
+    setActiveView({ name: 'route', routeId: route.id, route });
   }, []);
 
   const thumb = useThumbSide();
@@ -1220,7 +1233,14 @@ export function HomeScreen() {
           location={location}
           onCameraChange={setHomeCamera}
           onLongPress={isAdmin ? setPendingMockPoint : undefined}
-          onPress={overlays.tapCoords ? setTappedPoint : undefined}
+          onPress={overlays.tapCoords || mapStop ? (point) => {
+            // A tap off the stop puts its pill away.
+            setMapStop(null);
+            if (overlays.tapCoords) setTappedPoint(point);
+          } : undefined}
+          onOpenStop={setStopRoutesFor}
+          onStopPress={setMapStop}
+          selectedStop={mapStop}
           onUserMoveEnd={setSearchCenter}
           onUserPan={() => {
             setIsLocationCentered(false);
@@ -1365,6 +1385,7 @@ export function HomeScreen() {
           <SetPlacesPrompt onDone={placesPrompt.dismiss} onSet={(label) => addSavedPlace('home', label)} places={savedLocations} />
         ) : null}
         <LineLayersSheet choice={lineChoice} lines={layerCandidates} onChange={changeLineChoice} onClose={() => setLayersOpen(false)} visible={layersOpen} />
+        <StopRoutesSheet onClose={() => setStopRoutesFor(null)} onOpenRoute={openRouteAtMapStop} stop={stopRoutesFor} />
         <SavedPlaceDetailsSheet
           onClose={() => setMapPlaces([])}
           onEdit={uid ? (place) => {
