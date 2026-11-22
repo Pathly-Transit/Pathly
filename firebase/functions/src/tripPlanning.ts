@@ -16,6 +16,7 @@ export type LatLng = { lat: number; lng: number };
 
 /** A place given by coordinates; an older app can send only a Google place id (resolved in index.ts). */
 export type TripEndpoint = { placeId?: string; lat?: number; lng?: number; label: string };
+export type TripRecoveryRequest = { excludedRuns: TripRunRef[]; preferredRoute?: { agencyId: TripRunRef['agencyId']; routeId: string } };
 export type PlanTripRequest = {
   origin: TripEndpoint;
   destination: TripEndpoint;
@@ -28,6 +29,8 @@ export type PlanTripRequest = {
   lessWalking?: boolean;
   /** Also offer walking the whole way when it takes at most this many minutes (walkOnlyItinerary). */
   walkOnlyMaxMinutes?: number;
+  /** Explicit triggered recovery; never supplied for routine ETA observations. */
+  recovery?: TripRecoveryRequest;
 };
 
 export type TripStop = { name: string; location: LatLng; time: string };

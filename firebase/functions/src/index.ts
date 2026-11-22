@@ -40,7 +40,8 @@ import { getRouteStatus } from './gtfsStatus';
 import { isInServiceArea } from './serviceArea';
 import { lookupStations, searchStops, type StationLookup } from './stopSearch';
 import { createFareEstimator } from './tripFares';
-import { planTransitTrip } from './tripPlanner';
+import { planTransitTrip, recoveryCoverageFor } from './tripPlanner';
+import type { RecoveryCoverage } from './tripRecoveryNetwork';
 import {
   MAX_WALK_ONLY_MINUTES,
   type Itinerary,
@@ -778,6 +779,20 @@ export function requiredPlanTripRequest(data: unknown, nowMs = Date.now()): Plan
   if (request.lessWalking !== undefined && typeof request.lessWalking !== 'boolean') throw badTripRequest('lessWalking is invalid');
   const walkOnly = request.walkOnlyMaxMinutes;
   if (walkOnly !== undefined && (typeof walkOnly !== 'number' || !Number.isInteger(walkOnly) || walkOnly < 1 || walkOnly > MAX_WALK_ONLY_MINUTES)) throw badTripRequest('walkOnlyMaxMinutes is invalid');
+  let recovery: PlanTripRequest['recovery'];
+  if (request.recovery !== undefined) {
+    if (!request.recovery || typeof request.recovery !== 'object' || Array.isArray(request.recovery) || tripTime.mode === 'arrive') throw badTripRequest('recovery requires a departure request');
+    const value = request.recovery as Record<string, unknown>;
+    if (!Array.isArray(value.excludedRuns) || value.excludedRuns.length > 12) throw badTripRequest('recovery.excludedRuns is invalid');
+    const excludedRuns = value.excludedRuns.length ? parseTripLiveRequest({ version: 1, legs: value.excludedRuns.map((runRef, index) => ({ legKey: String(index), runRef })) }).legs.map((leg) => leg.runRef) : [];
+    let preferredRoute: NonNullable<PlanTripRequest['recovery']>['preferredRoute'];
+    if (value.preferredRoute !== undefined) {
+      if (!value.preferredRoute || typeof value.preferredRoute !== 'object' || Array.isArray(value.preferredRoute)) throw badTripRequest('recovery.preferredRoute is invalid');
+      const route = value.preferredRoute as Record<string, unknown>;
+      preferredRoute = { agencyId: requiredAgencyId(route.agencyId), routeId: requiredString(route.routeId, 'routeId') };
+    }
+    recovery = { excludedRuns, ...(preferredRoute ? { preferredRoute } : {}) };
+  }
   return {
     origin,
     destination,
@@ -787,6 +802,7 @@ export function requiredPlanTripRequest(data: unknown, nowMs = Date.now()): Plan
     ...(request.ferry === false ? { ferry: false } : {}),
     ...(request.lessWalking === true ? { lessWalking: true } : {}),
     ...(walkOnly !== undefined ? { walkOnlyMaxMinutes: walkOnly } : {}),
+    ...(recovery ? { recovery } : {}),
   };
 }
 
@@ -824,7 +840,7 @@ export function setTransitPlannerForTests(planner: typeof planTransitTrip | unde
  * transit trip gets there.
  * Client call: httpsCallable(functions, 'planTrip')({ origin, destination, time, preference, modes, ferry?, lessWalking?, walkOnlyMaxMinutes? }).
  */
-export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary[] }>>(
+export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary[]; recoveryCoverage?: RecoveryCoverage }>>(
   // The bus feeds' keys for the live check (NYC, Suffolk, and NICE buses, tripLive.ts); the Maps key
   // only locates a place sent without coordinates. Every agency's timetable is held for planning.
   // A new instance first loads every timetable and builds the network, which took over a minute on
@@ -851,7 +867,8 @@ export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary
     const walkOnly = walkOnlyOption(trip, origin, destination, nowMs, itineraries);
     if (walkOnly) itineraries.push(walkOnly);
     // Each leg against the agencies' live feeds: cancelled trips, live times, missed connections.
-    return { itineraries: await addLiveStatus(itineraries, TRIP_LIVE_BUDGET_MS, nowMs, tripLiveLookup, undefined, tripAlertsLookup) };
+    const recoveryCoverage = recoveryCoverageFor(itineraries);
+    return { itineraries: await addLiveStatus(itineraries, TRIP_LIVE_BUDGET_MS, nowMs, tripLiveLookup, undefined, tripAlertsLookup), ...(recoveryCoverage ? { recoveryCoverage } : {}) };
   },
 );
 
