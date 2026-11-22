@@ -827,7 +827,10 @@ export function setTransitPlannerForTests(planner: typeof planTransitTrip | unde
 export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary[] }>>(
   // The bus feeds' keys for the live check (NYC, Suffolk, and NICE buses, tripLive.ts); the Maps key
   // only locates a place sent without coordinates. Every agency's timetable is held for planning.
-  { ...protectedCallableOptions, memory: '2GiB', secrets: [googleMapsApiKey, ...liveFeedSecrets], timeoutSeconds: 60 },
+  // A new instance first loads every timetable and builds the network, which took over a minute on
+  // one CPU: it was killed at the 60 s limit before finishing, so no instance ever stayed warm. Two
+  // CPUs (which need at least 4 GiB here) and room to finish that first load let it warm up.
+  { ...protectedCallableOptions, cpu: 2, memory: '4GiB', secrets: [googleMapsApiKey, ...liveFeedSecrets], timeoutSeconds: 300 },
   async (request) => {
     await enforceCallableSecurity(request, 'planTrip', RATE_LIMITS.planTrip);
     const nowMs = Date.now();

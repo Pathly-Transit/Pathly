@@ -80,6 +80,9 @@ const ioniconGlyphs = {
 const materialGlyphs = {
   bus: ['bus', 'bus'],
   calendar: ['calendar-month', 'calendar-month'],
+  // A station's way in and out (Trip Details' Best Entrance and Best Exit).
+  entrance: ['location-enter', 'location-enter'],
+  exit: ['location-exit', 'location-exit'],
   ferry: ['ferry', 'ferry'],
   rail: ['train', 'train'],
   snow: ['snowflake', 'snowflake'],

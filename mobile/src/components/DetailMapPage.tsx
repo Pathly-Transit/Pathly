@@ -7,6 +7,9 @@ import { useTouchScroll } from '../hooks/useTouchScroll';
 import { useViewportSize } from '../hooks/useViewportSize';
 import { useAppSettings, useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
+import { creditBesideButton, MapCredit } from '../map/MapCredit';
+import { MapSheetInsetContext, useScrollSheetInset } from '../map/mapSheetInset';
+import { MAP_CONTROL_SIZE } from './MapControlButton';
 import { mapPageMapHeight } from './mapSheetLayout';
 import { SHEET_AT_REST_TOLERANCE, SheetHandle } from './SheetHandle';
 
@@ -133,6 +136,9 @@ export function DetailMapPage({
     scrollRef.current?.scrollTo({ y: 0, animated: !reducedMotionActive });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the request only
   }, [revealMapRequest]);
+  // The map stays its full size; the sheet scrolled over it only pads it (mapSheetInset.ts).
+  const sheetInset = useScrollSheetInset(scrollY, mapHeight);
+  const sheetMap = <MapSheetInsetContext.Provider value={sheetInset}>{map}</MapSheetInsetContext.Provider>;
   const restingTop = mapHeight - ACTION_HEIGHT - ACTION_GAP - thumb.mapBottomClearance;
   // With the controls gone (scrolled away with the map), the action takes their row.
   const stickyTop = Math.min(restingTop, insets.top + 8 + (controlsScrollWithMap ? 0 : controlsHeight + 12));
@@ -160,7 +166,7 @@ export function DetailMapPage({
         >
           {stickyMap ? null : (
             <Animated.View pointerEvents={interactiveMap ? 'auto' : 'none'} style={[styles.map, { height: mapHeight }]} testID={mapTestID}>
-              {map}
+              {sheetMap}
             </Animated.View>
           )}
           <Animated.ScrollView
@@ -187,7 +193,7 @@ export function DetailMapPage({
             style={styles.scroll}
             testID={scrollTestID}
           >
-            {stickyMap ? <View style={[styles.stickyMap, { height: mapHeight }]} testID={mapTestID}>{map}</View> : null}
+            {stickyMap ? <View style={[styles.stickyMap, { height: mapHeight }]} testID={mapTestID}>{sheetMap}</View> : null}
             <View pointerEvents="box-none" style={[{ height: mapHeight }, stickyMap && { marginTop: -mapHeight, zIndex: 11 }]} testID={`${scrollTestID}-map-window`}>
               {controlsScrollWithMap ? (
                 <View pointerEvents="box-none" style={{ paddingTop: insets.top }}>
@@ -195,6 +201,9 @@ export function DetailMapPage({
                 </View>
               ) : null}
               {mapOverlay}
+              {/* The map's credit rides here with the map buttons (not inside the map), so it moves
+                  with the sheet exactly as they do: level with the location button, or the GO action. */}
+              <MapCredit bottomInset={action ? creditBesideButton(ACTION_GAP + thumb.mapBottomClearance, ACTION_HEIGHT) : creditBesideButton(14 + thumb.mapBottomClearance, MAP_CONTROL_SIZE)} />
               {action && !actionSticks ? <View pointerEvents="box-none" style={[styles.action, thumb.anchor(18), { top: restingTop }]}>{action}</View> : null}
               {mapButtons ? <View pointerEvents="box-none" style={[styles.mapButtons, mapButtonsTop != null ? { right: TOP_BUTTONS_INSET, top: insets.top + mapButtonsTop } : thumb.anchor(16), mapButtonsTop != null ? { flexDirection: thumb.row } : { flexDirection: thumb.row, bottom: (action ? ACTION_HEIGHT + ACTION_GAP + 10 : 14) + thumb.mapBottomClearance }]} testID={`${scrollTestID}-map-buttons`}>{mapButtons}</View> : null}
             </View>

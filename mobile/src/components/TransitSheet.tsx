@@ -8,6 +8,7 @@ import type { RouteDetail } from '../data/transit';
 import { sortSavedLocations, type SavedLocation } from '../data/userData';
 import { useNow } from '../hooks/useNow';
 import { useTouchScroll } from '../hooks/useTouchScroll';
+import { useThumbSide } from '../hooks/useThumbSide';
 import { useAppSettings, useThemedStyles } from '../theme/AppSettings';
 import { useLayoutEase, useNativeDriver } from '../theme/motion';
 import type { Palette } from '../theme/colors';
@@ -18,6 +19,9 @@ import { NearbySkeleton } from './Skeleton';
 import { TransitCard } from './TransitCard';
 import { PressableScale } from './PressableScale';
 import { SHEET_AT_REST_TOLERANCE, SheetHandle } from './SheetHandle';
+import { creditBesideButton, MapCredit } from '../map/MapCredit';
+import { MapSheetInsetContext, useScrollSheetInset } from '../map/mapSheetInset';
+import { MAP_CONTROL_SIZE } from './MapControlButton';
 import { SHEET_LOWER_DROP } from './mapSheetLayout';
 import { Icon } from './Icon';
 
@@ -144,6 +148,7 @@ export function TransitSheet({
   const bothFavoriteKinds = savedRouteIds.length > 0 && savedLocations.length > 0;
   const ease = useLayoutEase();
   const { reducedMotionActive } = useAppSettings();
+  const thumb = useThumbSide();
   const [tabsWidth, setTabsWidth] = useState(0);
   const [indicatorX] = useState(() => new Animated.Value(0));
   const tabWidth = Math.max(0, (tabsWidth - TAB_ROW_PADDING * 2 - TAB_GAP * (tabs.length - 1)) / tabs.length);
@@ -167,6 +172,8 @@ export function TransitSheet({
   const expandedOffset = restOffset + Math.max(0, mapHeight - EXPANDED_TOP);
   // Where a released sheet settles: lowered, at rest, or open. Past open the list scrolls freely.
   const snapOffsets = [0, restOffset, expandedOffset];
+  // The page scrolled `scroll` px has the sheet over that much of the map's bottom.
+  const sheetInset = useScrollSheetInset(scrollY, mapHeight + restOffset, restOffset);
   // The sheet is rebuilt at rest each time Home is shown (e.g. back from a route), but
   // HomeScreen keeps `scrollY`; without resetting it, a page scrolled before opening a route left
   // the location button faded out and shifted up on return.
@@ -375,21 +382,20 @@ export function TransitSheet({
     >
       {webMap ? (
         <>
+          {/* The map is always as tall as it shows with the sheet at its lowest, so it never resizes
+              (which made its bottom edge flicker); the sheet over it pads it instead, keeping what
+              it's centered on in the middle of what shows, and its credit just above the sheet. */}
           <View style={[styles.stickyMap, { height: mapHeight + restOffset }]} testID="transit-map-window">
-            {Platform.OS === 'web' ? (
-              // Google's logo and credits sit at the web map's bottom edge and must stay visible, so
-              // there the map ends at the sheet's top edge, growing as the sheet is dragged below rest.
-              <Animated.View style={[styles.webMapWindow, { height: scrollY.interpolate({ inputRange: [0, restOffset], outputRange: [mapHeight + restOffset, mapHeight], extrapolate: 'clamp' }) }]}>{webMap}</Animated.View>
-            ) : webMap}
+            <MapSheetInsetContext.Provider value={sheetInset}>{webMap}</MapSheetInsetContext.Provider>
           </View>
           {/* The map buttons sit just above the sheet, so their box ends where the sheet's top edge does. */}
           <View pointerEvents="box-none" style={[styles.mapButtonsOverSticky, { height: mapHeight + restOffset, marginTop: -(mapHeight + restOffset), paddingTop: restOffset }]}>
-            <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}</View>
+            <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}<MapCredit bottomInset={creditBesideButton(14 + thumb.mapBottomClearance, MAP_CONTROL_SIZE)} /></View>
           </View>
         </>
       ) : (
         <View pointerEvents="box-none" style={{ height: mapHeight + restOffset, paddingTop: restOffset }} testID="transit-map-window">
-          <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}</View>
+          <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}<MapCredit bottomInset={creditBesideButton(14 + thumb.mapBottomClearance, MAP_CONTROL_SIZE)} /></View>
         </View>
       )}
       <SafeAreaView
@@ -567,7 +573,6 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   // Above a native sticky header, which React Native draws at zIndex 10.
   mapButtonsOverSticky: { zIndex: 11 },
   mapButtonsBox: { flex: 1 },
-  webMapWindow: { position: 'absolute', top: 0, left: 0, right: 0 },
   sheetOverStickyMap: { zIndex: 12 },
   pageContent: {
     pointerEvents: 'box-none',

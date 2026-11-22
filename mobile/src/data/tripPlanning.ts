@@ -328,7 +328,9 @@ export function summarizeItineraries({ itineraries }: { itineraries: Itinerary[]
   };
 }
 
-const planTripCallable = callable<PlanTripRequest, { itineraries: Itinerary[] }>('planTrip', summarizeItineraries);
+/** As long as the function may run (index.ts): a server that has just started loads every timetable first. */
+const PLAN_TRIP_TIMEOUT_MS = 300_000;
+const planTripCallable = callable<PlanTripRequest, { itineraries: Itinerary[] }>('planTrip', summarizeItineraries, PLAN_TRIP_TIMEOUT_MS);
 
 const CACHE_MS = 2 * ONE_MINUTE_MS;
 const cache = new Map<string, { result: TripPlanResult; at: number }>();

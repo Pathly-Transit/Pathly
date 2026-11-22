@@ -35,10 +35,11 @@ export const functions = getFunctions(app);
 
 /**
  * A Cloud Functions callable, recorded in the admin's Recent requests list when an admin is
- * signed in. `summarize` keeps that list small (and keeps provider content out of it).
+ * signed in. `summarize` keeps that list small (and keeps provider content out of it). `timeoutMs`
+ * replaces the client's 70 s wait, for a function allowed to run longer.
  */
-export function callable<Request, Response>(name: string, summarize?: (response: Response) => unknown) {
-  const call = httpsCallable<Request, Response>(functions, name);
+export function callable<Request, Response>(name: string, summarize?: (response: Response) => unknown, timeoutMs?: number) {
+  const call = httpsCallable<Request, Response>(functions, name, timeoutMs ? { timeout: timeoutMs } : undefined);
   return async (data?: Request): Promise<HttpsCallableResult<Response>> => {
     if (!isRequestLogEnabled()) return call(data);
     const startedAt = Date.now();

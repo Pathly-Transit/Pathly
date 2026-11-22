@@ -26,6 +26,8 @@ const COMPLETED_OPACITY = 0.5;
 const APPROACH_ALPHA = 0.35;
 // Walks are plain round gray dots, wide enough to read from far out.
 const WALK_WIDTH = 6;
+/** A walk inside a station (to its platform from the entrance, or out to the exit): thin, it isn't on the street yet. */
+const INDOOR_WALK_WIDTH = 3;
 // The trip's start and destination: big light-gray dots with a darker gray ring, easy to spot zoomed out.
 const ENDPOINT_FILL = '#D5D9DE';
 const ENDPOINT_RING = '#80868B';
@@ -137,12 +139,18 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
 
   // Frames the whole trip (or both endpoints while it loads) whenever it changes, unless the
   // camera is held where the rider left it; releasing the hold frames the trip again.
-  const frameKey = `${itinerary?.id ?? ''}:${coordinatesKey}`;
+  // Keyed by the route's shape: a refreshed or retimed plan of the same route isn't a new one.
+  const frameKey = coordinatesKey;
+  const framedKey = useRef<string | null>(null);
   useEffect(() => {
     if (!mapReady || holding) return;
     // Follow mode cannot drive a camera until a trustworthy rider fix exists. Frame the planned
     // route in that interim instead of leaving the map where it opened.
     if (hasNavigationProgress && userLatitude !== undefined && userLongitude !== undefined) return;
+    // Once the rider has moved the map (or centered it on themselves), a GPS fix or a refresh
+    // mustn't snap it back out to the whole trip; only a different route frames it again.
+    if (userMovedCamera.current && framedKey.current === frameKey) return;
+    framedKey.current = frameKey;
     frame();
   }, [frame, frameKey, hasNavigationProgress, holding, mapReady, userLatitude, userLongitude]);
 
@@ -161,6 +169,8 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
   }
   useEffect(() => {
     if (!focusStop || !mapReady) return;
+    // Looked at on purpose: later updates leave the map there.
+    userMovedCamera.current = true;
     mapRef.current?.easeTo({ center: inView(toPoint(focusStop.point)), zoom: FOCUS_ZOOM, durationMs: FOCUS_DURATION_MS });
   }, [focusStop, inView, mapReady]);
 
@@ -255,7 +265,7 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
               key={`leg-${index}-${leg.walk ? 'walk' : 'ride'}`}
               opacity={completed ? COMPLETED_OPACITY : 1}
               testID={progressState ? `${testID}-progress-${progressState}-${index}` : leg.walk ? `trip-map-walk-${index}` : `trip-map-transit-${index}`}
-              width={completed ? COMPLETED_WIDTH : current ? CURRENT_WIDTH : leg.walk ? WALK_WIDTH : TRANSIT_WIDTH}
+              width={completed ? COMPLETED_WIDTH : current ? CURRENT_WIDTH : leg.walk ? ('indoor' in leg && leg.indoor ? INDOOR_WALK_WIDTH : WALK_WIDTH) : TRANSIT_WIDTH}
               zIndex={current ? 3 : leg.walk ? 1 : 2}
             />
           );
@@ -312,7 +322,7 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
 }
 
 const createStyles = (colors: Palette) => StyleSheet.create({
-  entranceDot: { width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#FFFFFF', borderRadius: 3 },
+  entranceDot: { width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#FFFFFF', borderRadius: 6 },
   label: { maxWidth: 240, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 12, backgroundColor: colors.surface, shadowColor: colors.shadow, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6, elevation: 4 },
   labelText: { color: colors.ink, fontFamily: fontFamilies.bold, fontSize: 13 },
   staleLocation: { opacity: 0.45 },

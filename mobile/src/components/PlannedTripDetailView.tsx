@@ -1,8 +1,9 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { distanceMeters } from '../data/enrouteNavigation';
 import { legNotes } from '../data/tripLive';
-import { entranceInstruction, legEntrances, type StationEntrance } from '../data/stationEntrances';
+import { entranceName, legEntrances, type StationEntrance } from '../data/stationEntrances';
 import { legDepartureOptions, quickDepartureOptions, retimeItinerary, type DepartureChoices, type LegDepartureOption } from '../data/tripDepartures';
 
 import {
@@ -132,8 +133,21 @@ function walkRow(step: WalkStep): TripDetailWalk {
   return { minutes: tripMinutes(step.durationSeconds), distance: formatWalkDistance(step.distanceMeters), toName: step.toName };
 }
 
-function entranceRow(entrance: StationEntrance, use: 'enter' | 'exit'): TripDetailEntrance {
-  return { text: entranceInstruction(entrance, use), point: { lat: entrance.lat, lng: entrance.lon } };
+/** The planner's walking pace and street detour (backend transitNetwork.ts), for the walk inside a station. */
+const STATION_WALK_METERS_PER_SECOND = 1.3;
+const STATION_WALK_DETOUR = 1.3;
+/** Stairs between the street and a subway platform (backend STATION_ACCESS_SECONDS). */
+const SUBWAY_ACCESS_SECONDS = 60;
+
+/**
+ * A way into or out of the ride's station, with about how long it takes between it and the
+ * platform: the walk from the entrance to the stop's point, and the subway's stairs.
+ */
+function entranceRow(entrance: StationEntrance, use: 'enter' | 'exit', step: TransitStep): TripDetailEntrance {
+  const point = { lat: entrance.lat, lng: entrance.lon };
+  const platform = use === 'enter' ? step.from.location : step.to.location;
+  const seconds = (distanceMeters(point, platform) * STATION_WALK_DETOUR) / STATION_WALK_METERS_PER_SECOND + (step.mode === 'subway' ? SUBWAY_ACCESS_SECONDS : 0);
+  return { text: entranceName(entrance), point, minutes: Math.max(1, Math.round(seconds / 60)) };
 }
 
 function departureRow(option: LegDepartureOption): TripDetailDeparture {
@@ -185,8 +199,8 @@ export function toTripDetailModel(itinerary: Itinerary, origin: string, destinat
       ...(notes.length > 0 ? { notes } : {}),
       ...(step.live?.status === 'tracked' ? { live: true } : {}),
       ...(step.alerts && step.alerts.length > 0 ? { alerts: step.alerts } : {}),
-      ...(enter ? { enter: entranceRow(enter, 'enter') } : {}),
-      ...(exit ? { exit: entranceRow(exit, 'exit') } : {}),
+      ...(enter ? { enter: entranceRow(enter, 'enter', step) } : {}),
+      ...(exit ? { exit: entranceRow(exit, 'exit', step) } : {}),
     });
     pendingWalk = null;
     previous = step;
