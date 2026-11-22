@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { advanceTripAlerts, BACKGROUND_TRIP_MAX_AGE_MS, parseTripAlertState, tripAlertState, type TripAlertState } from '../src/background/tripAlertState';
+import { advanceTripAlerts, BACKGROUND_TRIP_MAX_AGE_MS, parseBackgroundLiveStatus, parseTripAlertState, tripAlertState, type TripAlertState } from '../src/background/tripAlertState';
+import type { TripLiveResponse, TripRunRef } from '../src/data/tripLiveTypes';
 import { claimTripApproach, deliverTripApproach, queueTripAlertWork, readTripAlertState, TRIP_ALERT_STATE_KEY, writeTripAlertState } from '../src/background/tripAlertStorage';
 import { initialNavigationCursor, normalizeItinerary, type ActiveTripRuntime, type NavigationFix } from '../src/data/enrouteNavigation';
 import type { Itinerary, LatLng, TransitStep } from '../src/data/tripPlanning';
@@ -45,6 +46,10 @@ const pair = (point: LatLng, timestamp: number) => [fix(point, timestamp), fix(p
 const initial = (itinerary = multi) => tripAlertState(runtime(itinerary), null, NOW);
 const move = (state: TripAlertState, point: LatLng, timestamp: number) => advanceTripAlerts(state, pair(point, timestamp), timestamp + 1);
 const serialize = (state: TripAlertState) => JSON.stringify(state);
+const RUN_REF: TripRunRef = { version: 1, agencyId: 'lirr', routeId: '1', tripId: 'selected', serviceDate: '20261121', scheduleVersion: 'test',
+  startTime: '10:00:00', boardStopId: 'a', alightStopId: 'b', boardOccurrence: 0, alightOccurrence: 0, boardStopSequence: 1, alightStopSequence: 2 };
+const liveStatus = (): TripLiveResponse => ({ version: 1, fetchedAt: NOW, legs: [{ legKey: '1', runRef: RUN_REF, state: 'fresh', status: 'predicted',
+  observedAt: NOW, expiresAt: NOW + 90_000, departs: at(5), arrives: at(25) }] });
 
 beforeEach(async () => {
   jest.spyOn(Date, 'now').mockReturnValue(NOW);
@@ -63,6 +68,35 @@ it('persists only operational anchors and whitelisted metadata, never provider p
   expect(serialize(state)).not.toContain('providerResponse');
   expect(state).not.toHaveProperty('itinerary');
   expect(parseTripAlertState(serialize(state), NOW)).not.toBeNull();
+});
+
+it('retains only bounded live fields and ages cached observations without renewing source expiry', () => {
+  const response = liveStatus();
+  (response as unknown as { routeGeometry: string }).routeGeometry = 'discard-me';
+  (response.legs[0] as unknown as { providerResponse: string }).providerResponse = 'discard-me';
+  const parsed = parseBackgroundLiveStatus(response, NOW + 91_000)!;
+  expect(parsed.legs[0]).toMatchObject({ state: 'stale', observedAt: NOW, expiresAt: NOW + 90_000 });
+  expect(JSON.stringify(parsed)).not.toContain('discard-me');
+  expect(parseBackgroundLiveStatus({ ...response, fetchedAt: NOW + 30_001 }, NOW)).toBeNull();
+  const forged = liveStatus();
+  forged.legs[0]!.expiresAt = NOW + 90_001;
+  expect(parseBackgroundLiveStatus(forged, NOW)?.legs).toEqual([]);
+  const duplicated = liveStatus();
+  duplicated.legs.push({ ...duplicated.legs[0]! });
+  expect(parseBackgroundLiveStatus(duplicated, NOW)?.legs).toEqual([]);
+});
+
+it('preserves the same-session poll throttle on resync and clears it with a replacement owner', () => {
+  const live = runtime(single);
+  const previous = parseTripAlertState(serialize({ ...tripAlertState(live, null, NOW), liveStatus: liveStatus(), lastStatusAttemptAt: NOW, lastProgressContent: 'accepted' }), NOW)!;
+  const synced = tripAlertState(live, previous, NOW + 1000);
+  expect(synced.lastStatusAttemptAt).toBe(NOW);
+  expect(synced.liveStatus?.legs[0]?.expiresAt).toBe(NOW + 90_000);
+  expect(synced.lastProgressContent).toBe('accepted');
+  const replaced = tripAlertState({ ...live, sessionId: 'replacement' }, previous, NOW + 1000);
+  expect(replaced.lastStatusAttemptAt).toBeUndefined();
+  expect(replaced.liveStatus).toBeUndefined();
+  expect(replaced.lastProgressContent).toBeUndefined();
 });
 
 it('needs two fresh real fixes and retains the first confirmation across same-owner sync', () => {

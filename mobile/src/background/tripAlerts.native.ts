@@ -4,29 +4,45 @@ import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import { Alert, AppState, Platform } from 'react-native';
 
-import type { ActiveTripRuntime, NavigationFix } from '../data/enrouteNavigation';
+import { guidanceForNavigation, type ActiveTripRuntime, type NavigationFix } from '../data/enrouteNavigation';
 import { readNavigationDocument } from '../data/navigationStorage';
-import { auth } from '../lib/firebase';
-import { clearTripNotification, showTripNotificationAccepted } from '../lib/notifications';
-import { advanceTripAlerts, sameTripAlertOwner, tripAlertState, type TripAlertOwner } from './tripAlertState';
+import { tripNotificationContent } from '../data/tripAnnouncements';
+import { tripDisruptionFor } from '../data/tripDisruptions';
+import { presentTripDisruption } from '../data/tripDisruptionStorage';
+import type { TripLiveRequest, TripLiveResponse } from '../data/tripLiveTypes';
+import type { Itinerary } from '../data/tripPlanning';
+import { projectNavigationTiming, projectTripTiming, tripLiveRequests } from '../data/tripTiming';
+import { auth, callable } from '../lib/firebase';
+import { clearTripNotification, notifyTripDisruptionAccepted, showTripNotificationAccepted } from '../lib/notifications';
+import { advanceTripAlerts, parseBackgroundLiveStatus, sameTripAlertOwner, tripAlertState, type TripAlertOwner, type TripAlertState } from './tripAlertState';
 import { queueTripAlertWork, readTripAlertState, TRIP_ALERT_STATE_KEY, writeTripAlertState } from './tripAlertStorage';
 
 export const BACKGROUND_TRIP_TASK = 'pathly.trip-alerts.location.v1';
+export const BACKGROUND_TRIP_STATUS_INTERVAL_MS = 30_000;
+const BACKGROUND_STATUS_TIMEOUT_MS = 2_500;
+const loadTripStatus = callable<TripLiveRequest, TripLiveResponse>('getTripLiveStatus');
 export type BackgroundTripSyncStatus = 'active' | 'waiting-permission' | 'background-denied' | 'unavailable';
 let configuration = 0;
 let currentOwner: TripAlertOwner | null = null;
 let latestRuntime: ActiveTripRuntime | null = null;
+let liveRequest: { key: string; promise: Promise<TripLiveResponse | null> } | null = null;
 
 async function currentUid(): Promise<string | null> {
   await auth.authStateReady();
   return auth.currentUser?.uid ?? null;
 }
-async function preferencesEnabled(uid: string): Promise<boolean> {
+async function backgroundPreferences(uid: string): Promise<{ progress: boolean; disruptions: boolean }> {
   try {
     const raw = await AsyncStorage.getItem(`pathly.preferences.v1.${uid}`);
     const value = raw ? JSON.parse(raw) : null;
-    return value?.notifications?.enabled !== false && value?.notifications?.tripReminders !== false && value?.tripGuidance?.notification !== false;
-  } catch { return false; }
+    const enabled = value?.notifications?.enabled !== false;
+    return { progress: enabled && value?.notifications?.tripReminders !== false && value?.tripGuidance?.notification !== false,
+      disruptions: enabled && value?.notifications?.disruptions !== false };
+  } catch { return { progress: false, disruptions: false }; }
+}
+async function preferencesEnabled(uid: string): Promise<boolean> {
+  const preferences = await backgroundPreferences(uid);
+  return preferences.progress || preferences.disruptions;
 }
 async function runtimeCurrent(owner: TripAlertOwner): Promise<boolean> {
   if (await currentUid() !== owner.uid || !await preferencesEnabled(owner.uid)) return false;
@@ -48,6 +64,7 @@ export function stopBackgroundTripAlerts(owner?: TripAlertOwner): Promise<void> 
   configuration += 1; // Invalidate permission/channel work before any await.
   currentOwner = null;
   latestRuntime = null;
+  liveRequest = null;
   return queueTripAlertWork(async () => {
     const saved = await readTripAlertState();
     if (owner && saved && !sameTripAlertOwner(saved, owner)) return;
@@ -102,6 +119,7 @@ export async function syncBackgroundTripAlerts(runtime: ActiveTripRuntime, reque
       if (generation !== configuration || !await isCurrent(owner)) return 'unavailable';
       if (prepared.cursor.phase === 'arrived') { await stopNative(); return 'active'; }
       if (!await Location.hasStartedLocationUpdatesAsync(BACKGROUND_TRIP_TASK)) {
+        if (AppState.currentState !== 'active') return 'waiting-permission';
         await Location.startLocationUpdatesAsync(BACKGROUND_TRIP_TASK, {
           accuracy: Location.Accuracy.High, timeInterval: 5_000, distanceInterval: 15,
           deferredUpdatesInterval: 5_000, pausesUpdatesAutomatically: false,
@@ -125,6 +143,34 @@ export async function resumeBackgroundTripFixes(owner: TripAlertOwner): Promise<
   } catch { return []; }
 }
 
+async function selectedItinerary(state: TripAlertState): Promise<Itinerary | null> {
+  const active = (await readNavigationDocument(state.uid)).active;
+  return active?.sessionId === state.sessionId && active.selection?.fingerprint === state.plan.selection.fingerprint
+    && active.selection.itineraryId === state.plan.itineraryId ? active.nativeSnapshot?.itinerary ?? null : null;
+}
+
+async function refreshLiveStatus(state: TripAlertState, itinerary: Itinerary, now: number, valid: () => Promise<boolean>): Promise<TripAlertState> {
+  if (state.lastStatusAttemptAt !== undefined && now - state.lastStatusAttemptAt < BACKGROUND_TRIP_STATUS_INTERVAL_MS) return state;
+  const legs = tripLiveRequests(itinerary);
+  if (legs.length === 0) return state;
+  const attempted = { ...state, lastStatusAttemptAt: now };
+  // Persist before awaiting the network so a headless restart observes the same throttle.
+  await writeTripAlertState(attempted);
+  if (!await valid()) return attempted;
+  const request: TripLiveRequest = { version: 1, legs };
+  const key = JSON.stringify([state.uid, state.sessionId, state.plan.selection.fingerprint, request]);
+  if (liveRequest?.key !== key) {
+    const pending = { key, promise: loadTripStatus(request).then(({ data }) => parseBackgroundLiveStatus(data)).catch(() => null) };
+    liveRequest = pending;
+    void pending.promise.finally(() => { if (liveRequest === pending) liveRequest = null; }).catch(() => undefined);
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), BACKGROUND_STATUS_TIMEOUT_MS); });
+  const response = await Promise.race([liveRequest.promise, timeout]);
+  if (timer) clearTimeout(timer);
+  return { ...attempted, ...(response ? { liveStatus: response } : {}) };
+}
+
 if (!TaskManager.isTaskDefined(BACKGROUND_TRIP_TASK)) {
   TaskManager.defineTask<{ locations?: Location.LocationObject[] }>(BACKGROUND_TRIP_TASK, async ({ data, error }) => {
     const scheduledOwner = currentOwner;
@@ -146,18 +192,53 @@ if (!TaskManager.isTaskDefined(BACKGROUND_TRIP_TASK)) {
           capturedAt: position.timestamp, accuracyMeters: position.coords.accuracy, source: position.mocked ? 'mock' : 'real' }));
         const update = advanceTripAlerts(state, fixes);
         if (version !== configuration || !await isCurrent(state)) return;
-        await writeTripAlertState(update.state);
+        const acceptedFix = (update.state.latestFixes.at(-1)?.capturedAt ?? -1) > (state.latestFixes.at(-1)?.capturedAt ?? -1);
+        const itinerary = acceptedFix && !update.finished ? await selectedItinerary(update.state) : null;
+        let nextState = itinerary ? await refreshLiveStatus(update.state, itinerary, Date.now(), async () => version === configuration
+          && AppState.currentState !== 'active' && await isCurrent(state) && Boolean(await selectedItinerary(update.state))) : update.state;
+        if (version !== configuration || !await isCurrent(state) || AppState.currentState === 'active'
+          || (itinerary && !await selectedItinerary(nextState))) return;
+        await writeTripAlertState(nextState);
         if (update.finished) await stopNative();
-        if (!update.notification || version !== configuration || !await isCurrent(state) || AppState.currentState === 'active') return;
+        if (!acceptedFix) return;
+        const projectionNow = () => itinerary ? projectTripTiming(itinerary, nextState.liveStatus ?? null, Date.now(), { cursor: nextState.cursor }) : null;
+        const progressContent = () => {
+          const projection = projectionNow();
+          const plan = projection ? projectNavigationTiming(nextState.plan, projection) : nextState.plan;
+          return tripNotificationContent(guidanceForNavigation(plan, nextState.cursor));
+        };
+        const current = async () => version === configuration && AppState.currentState !== 'active' && await isCurrent(state)
+          && version === configuration && (!itinerary || Boolean(await selectedItinerary(nextState)))
+          && version === configuration && AppState.currentState !== 'active' && auth.currentUser?.uid === state.uid;
+        const preferences = await backgroundPreferences(state.uid);
+        const projection = projectionNow();
+        const matched = projection && nextState.liveStatus ? { ...nextState.liveStatus,
+          legs: projection.legs.flatMap((leg) => leg.observation ? [leg.observation] : []) } : null;
+        const disruption = itinerary && projection ? tripDisruptionFor(itinerary, matched, nextState.cursor, Date.now(), projection.arrivalTime) : null;
+        if (preferences.disruptions && disruption && await current()) {
+          await presentTripDisruption(state, disruption.key, () => notifyTripDisruptionAccepted(disruption.key, disruption.title, disruption.body, async () => {
+            if (!await current() || !(await backgroundPreferences(state.uid)).disruptions) return false;
+            const fresh = projectionNow();
+            const response = fresh && nextState.liveStatus ? { ...nextState.liveStatus,
+              legs: fresh.legs.flatMap((leg) => leg.observation ? [leg.observation] : []) } : null;
+            return Boolean(itinerary && tripDisruptionFor(itinerary, response, nextState.cursor, Date.now(), fresh?.arrivalTime)?.key === disruption.key);
+          }));
+        }
+        if (!preferences.progress || !await current()) return;
+        const content = progressContent();
+        const contentKey = JSON.stringify(content);
+        if (!update.notification && nextState.lastProgressContent === contentKey) return;
         try {
-          const scheduled = await showTripNotificationAccepted(update.notification.title, update.notification.body, update.notification.alert, {
+          const scheduled = await showTripNotificationAccepted(content.title, content.body, update.approachStep !== null, {
             owner: state, requestPermission: false,
-            isCurrent: async () => version === configuration && await isCurrent(state) && version === configuration && AppState.currentState !== 'active',
+            isCurrent: async () => await current() && (await backgroundPreferences(state.uid)).progress && JSON.stringify(progressContent()) === contentKey,
           });
           // Persist successfully scheduled warnings; OS presentation still needs device checks.
           // Foreground claims wait for this same operation.
-          if (scheduled && update.approachStep != null && version === configuration && await isCurrent(state)) {
-            await writeTripAlertState({ ...update.state, alertedSteps: [...new Set([...update.state.alertedSteps, update.approachStep])] });
+          if (scheduled && version === configuration && await isCurrent(state)) {
+            nextState = { ...nextState, lastProgressContent: contentKey,
+              ...(update.approachStep !== null ? { alertedSteps: [...new Set([...nextState.alertedSteps, update.approachStep])] } : {}) };
+            await writeTripAlertState(nextState);
           }
         } catch { /* Keep monitoring; an unclaimed approach can retry on the next fresh fix. */ }
       } catch {

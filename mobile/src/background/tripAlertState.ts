@@ -3,6 +3,8 @@ import {
   type NavigationCursor, type NavigationEvidence, type NavigationFix, type NavigationRouteSegment, type NormalizedNavigationPlan,
 } from '../data/enrouteNavigation';
 import { tripNotificationContent } from '../data/tripAnnouncements';
+import type { TripLegObservation, TripLiveResponse } from '../data/tripLiveTypes';
+import { parseTripRunRef } from '../data/tripRunRef';
 
 export const BACKGROUND_TRIP_MAX_AGE_MS = 24 * 60 * 60_000;
 const MAX_CHECKPOINTS = 2000;
@@ -18,6 +20,10 @@ export type TripAlertState = TripAlertOwner & {
   evidence: NavigationEvidence | null;
   alertedSteps: number[];
   latestFixes: NavigationFix[];
+  /** Active-session-only cache. Source expiry is never extended by reading or syncing it. */
+  liveStatus?: TripLiveResponse;
+  lastStatusAttemptAt?: number;
+  lastProgressContent?: string;
 };
 export const sameTripAlertOwner = (a: TripAlertOwner | null, b: TripAlertOwner) => a?.uid === b.uid && a?.sessionId === b.sessionId;
 
@@ -148,9 +154,48 @@ export function tripAlertState(runtime: ActiveTripRuntime, previous: TripAlertSt
     version: 1, uid: runtime.uid, sessionId: runtime.sessionId,
     expiresAt: owned ? Math.min(previous.expiresAt, runtime.startedAt + BACKGROUND_TRIP_MAX_AGE_MS) : runtime.startedAt + BACKGROUND_TRIP_MAX_AGE_MS,
     plan, cursor, evidence, alertedSteps: owned ? [...previous.alertedSteps] : [], latestFixes,
+    ...(owned && previous.lastStatusAttemptAt !== undefined ? { lastStatusAttemptAt: previous.lastStatusAttemptAt } : {}),
+    ...(owned && previous.liveStatus ? { liveStatus: previous.liveStatus } : {}),
+    ...(owned && previous.lastProgressContent ? { lastProgressContent: previous.lastProgressContent } : {}),
   };
   result.evidence = usableEvidence(result, now);
   return result;
+}
+
+/** Persist only the bounded live wire fields, never attached responses or route geometry. */
+export function parseBackgroundLiveStatus(value: unknown, now = Date.now()): TripLiveResponse | null {
+  if (!value || typeof value !== 'object') return null;
+  const response = value as TripLiveResponse;
+  if (response.version !== 1 || !Number.isFinite(response.fetchedAt) || response.fetchedAt < 0
+    || response.fetchedAt > now + 30_000 || now - response.fetchedAt > BACKGROUND_TRIP_MAX_AGE_MS
+    || !Array.isArray(response.legs) || response.legs.length > 12) return null;
+  const legs: TripLegObservation[] = [];
+  const keys = new Set<string>();
+  for (const leg of response.legs) {
+    const ref = parseTripRunRef(leg?.runRef);
+    if (!leg || !ref || !text(leg.legKey, 128) || !/^\d{1,2}$/.test(leg.legKey) || keys.has(leg.legKey)
+      || response.legs.filter((candidate) => candidate?.legKey === leg.legKey).length !== 1
+      || !['fresh', 'stale', 'unknown'].includes(leg.state)
+      || !['predicted', 'cancelled', 'skips-stop', 'no-data', 'unavailable'].includes(leg.status)
+      || (leg.observedAt !== null && (!Number.isFinite(leg.observedAt) || leg.observedAt < 0 || leg.observedAt > now + 30_000))
+      || (leg.expiresAt !== null && (!Number.isFinite(leg.expiresAt) || leg.observedAt === null || leg.expiresAt < leg.observedAt || leg.expiresAt - leg.observedAt > 90_000))
+      || (leg.departs !== undefined && !time(leg.departs)) || (leg.arrives !== undefined && !time(leg.arrives))
+      || (leg.departs && leg.arrives && Date.parse(leg.arrives) < Date.parse(leg.departs))
+      || [leg.departureNoData, leg.arrivalNoData, leg.boardSkipped, leg.alightSkipped].some((flag) => flag !== undefined && typeof flag !== 'boolean')) continue;
+    keys.add(leg.legKey);
+    const state = leg.state === 'fresh' && leg.observedAt !== null && leg.expiresAt !== null && leg.expiresAt > now
+      && now - leg.observedAt <= 90_000 ? 'fresh' : leg.observedAt !== null ? 'stale' : 'unknown';
+    legs.push({ legKey: leg.legKey, runRef: ref, state, status: leg.status, observedAt: leg.observedAt, expiresAt: leg.expiresAt,
+      ...(leg.departs ? { departs: leg.departs } : {}), ...(leg.arrives ? { arrives: leg.arrives } : {}),
+      ...(typeof leg.departureDelaySeconds === 'number' && Number.isFinite(leg.departureDelaySeconds) ? { departureDelaySeconds: leg.departureDelaySeconds } : {}),
+      ...(typeof leg.arrivalDelaySeconds === 'number' && Number.isFinite(leg.arrivalDelaySeconds) ? { arrivalDelaySeconds: leg.arrivalDelaySeconds } : {}),
+      ...(leg.departureNoData !== undefined ? { departureNoData: leg.departureNoData } : {}),
+      ...(leg.arrivalNoData !== undefined ? { arrivalNoData: leg.arrivalNoData } : {}),
+      ...(leg.boardSkipped !== undefined ? { boardSkipped: leg.boardSkipped } : {}),
+      ...(leg.alightSkipped !== undefined ? { alightSkipped: leg.alightSkipped } : {}),
+    });
+  }
+  return { version: 1, fetchedAt: response.fetchedAt, legs };
 }
 
 const phases = new Set(['walking', 'waiting-to-board', 'riding', 'transferring', 'arrived']);
@@ -221,6 +266,8 @@ export function parseTripAlertState(raw: string | null, now = Date.now()): TripA
       || !Array.isArray(value.alertedSteps) || value.alertedSteps.length > MAX_SEGMENTS || new Set(value.alertedSteps).size !== value.alertedSteps.length
       || value.alertedSteps.some((step) => !integer(step, MAX_SEGMENTS - 1) || !value.plan.segments.some((segment) => segment.kind === 'transit' && segment.stepIndex === step))
       || !Array.isArray(value.latestFixes) || value.latestFixes.length > 2
+      || (value.lastStatusAttemptAt !== undefined && (!Number.isFinite(value.lastStatusAttemptAt) || value.lastStatusAttemptAt < 0 || value.lastStatusAttemptAt > now + FUTURE_FIX_ALLOWANCE_MS))
+      || (value.lastProgressContent !== undefined && !text(value.lastProgressContent, 4000))
       || value.latestFixes.some((fix, index) => !realFixValid(fix) || fix.capturedAt > now + FUTURE_FIX_ALLOWANCE_MS
         || fix.capturedAt < value.expiresAt - BACKGROUND_TRIP_MAX_AGE_MS
         || (index > 0 && fix.capturedAt <= value.latestFixes[index - 1]!.capturedAt))) return null;
@@ -235,7 +282,11 @@ export function parseTripAlertState(raw: string | null, now = Date.now()): TripA
       version: 1, uid: value.uid, sessionId: value.sessionId, expiresAt: value.expiresAt, plan: copyPlan(value.plan),
       cursor: cursorAt(value.plan, value.cursor, value.cursor.checkpointOrdinal), evidence: value.evidence,
       alertedSteps: [...value.alertedSteps], latestFixes: value.latestFixes.filter((fix) => fresh(fix.capturedAt, now)).map(copyFix),
+      ...(value.lastStatusAttemptAt !== undefined ? { lastStatusAttemptAt: value.lastStatusAttemptAt } : {}),
+      ...(value.lastProgressContent ? { lastProgressContent: value.lastProgressContent } : {}),
     };
+    const liveStatus = parseBackgroundLiveStatus(value.liveStatus, now);
+    if (liveStatus) result.liveStatus = liveStatus;
     result.evidence = usableEvidence(result, now);
     return result;
   } catch { return null; }
