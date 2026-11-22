@@ -16,6 +16,48 @@ function sameRunId(ref: TripRunRef, liveId: string): boolean {
   return index >= 0 && /^\d+R$/.test(ref.tripId.slice(index + 1 + liveId.length));
 }
 
+function descriptorMatches(ref: TripRunRef, descriptor: transit_realtime.TripDescriptor): boolean {
+  return sameRunId(ref, descriptor.tripId ?? '') && (!descriptor.routeId || descriptor.routeId === ref.routeId)
+    && (ref.directionId === undefined || !ownsNumber(descriptor, 'directionId') || descriptor.directionId === ref.directionId)
+    && (!descriptor.startTime || descriptor.startTime === ref.startTime);
+}
+
+/** A vehicle past the exact boarding visit is evidence about the vehicle, never the rider. */
+function passedBoarding(feeds: readonly RealtimeFeed[], run: ResolvedTripRun, nowMs: number) {
+  const board = run.stops.findIndex((stop) => stop.stopId === run.runRef.boardStopId && stop.occurrence === run.runRef.boardOccurrence);
+  if (board < 0 || run.stops[board]!.stopSequence === undefined) return null;
+  const candidates: { vehicle: transit_realtime.VehiclePosition; feed: RealtimeFeed; capturedAt: number }[] = [];
+  for (const feed of feeds) {
+    if (feed.differential || feed.observedAt === null) continue;
+    for (const entity of feed.entities) {
+      const vehicle = entity.vehicle;
+      const capturedAt = timestampMilliseconds(vehicle?.timestamp);
+      if (entity.isDeleted || !vehicle?.trip || !vehicle.position || capturedAt === null
+        || !descriptorMatches(run.runRef, vehicle.trip) || vehicle.trip.startDate !== run.runRef.serviceDate
+        || (vehicle.trip.scheduleRelationship ?? 0) !== 0
+        || sourceFreshness(feed.observedAt, capturedAt, nowMs).state !== 'fresh') continue;
+      const { latitude, longitude } = vehicle.position;
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) continue;
+      candidates.push({ vehicle, feed, capturedAt });
+    }
+  }
+  candidates.sort((a, b) => b.capturedAt - a.capturedAt);
+  const chosen = candidates[0];
+  if (!chosen || candidates.some((candidate) => candidate.capturedAt === chosen.capturedAt
+    && JSON.stringify(candidate.vehicle) !== JSON.stringify(chosen.vehicle))) return null;
+  const { vehicle, feed, capturedAt } = chosen;
+  if (!ownsNumber(vehicle, 'currentStopSequence') || !Object.hasOwn(vehicle, 'currentStatus') || vehicle.currentStatus == null) return null;
+  const rawStatus = vehicle.currentStatus;
+  const status = typeof rawStatus === 'string' && ['INCOMING_AT', 'STOPPED_AT', 'IN_TRANSIT_TO'].includes(rawStatus)
+    ? ['INCOMING_AT', 'STOPPED_AT', 'IN_TRANSIT_TO'].indexOf(rawStatus) : Number(rawStatus);
+  if (![0, 1, 2].includes(status)) return null;
+  const current = run.stops.findIndex((stop) => stop.stopSequence === vehicle.currentStopSequence);
+  if (current <= board || (vehicle.stopId && vehicle.stopId !== run.stops[current]?.stopId)) return null;
+  const freshness = sourceFreshness(feed.observedAt, capturedAt, nowMs);
+  return { boardPassed: true as const, vehicleLocation: { lat: vehicle.position!.latitude, lng: vehicle.position!.longitude, capturedAt },
+    observedAt: freshness.observedAt, expiresAt: freshness.expiresAt };
+}
+
 export function unknownTripObservation(legKey: string, runRef: TripRunRef, reason: TripLiveReason): TripLegObservation {
   return { legKey, runRef, state: 'unknown', status: 'unavailable', observedAt: null, expiresAt: null, reason };
 }
@@ -62,6 +104,9 @@ function prediction(event: transit_realtime.StopTimeEvent | null | undefined, sc
 export function observeSelectedRun(feeds: readonly RealtimeFeed[], run: ResolvedTripRun, legKey: string, nowMs = Date.now()): TripLegObservation {
   const ref = run.runRef;
   const unknown = (reason: TripLiveReason) => unknownTripObservation(legKey, ref, reason);
+  const passed = passedBoarding(feeds, run, nowMs);
+  const vehicleOnly = () => passed ? { legKey, runRef: ref, state: 'fresh' as const, status: 'unavailable' as const,
+    reason: 'no-prediction' as const, ...passed } : null;
   const candidates: { update: Update; feed: RealtimeFeed; measured: number }[] = [];
   let missingDate = false;
   let unsupported = false;
@@ -70,17 +115,14 @@ export function observeSelectedRun(feeds: readonly RealtimeFeed[], run: Resolved
       if (entity.isDeleted || !entity.tripUpdate) continue;
       const update = entity.tripUpdate;
       const descriptor = update.trip;
-      if (!sameRunId(ref, descriptor.tripId ?? '')) continue;
-      if (descriptor.routeId && descriptor.routeId !== ref.routeId) continue;
-      if (ref.directionId !== undefined && ownsNumber(descriptor, 'directionId') && descriptor.directionId !== ref.directionId) continue;
-      if (descriptor.startTime && descriptor.startTime !== ref.startTime) continue;
+      if (!descriptorMatches(ref, descriptor)) continue;
       if (!descriptor.startDate) { missingDate = true; continue; }
       if (descriptor.startDate !== ref.serviceDate) continue;
       if (feed.differential || ![0, 3, 7].includes(descriptor.scheduleRelationship ?? 0)) { unsupported = true; continue; }
       candidates.push({ update, feed, measured: timestampMilliseconds(update.timestamp) ?? feed.observedAt ?? 0 });
     }
   }
-  if (candidates.length === 0) return unknown(missingDate ? 'ambiguous-run' : unsupported ? 'unsupported-feed' : 'not-found');
+  if (candidates.length === 0) return (!unsupported && vehicleOnly()) || unknown(missingDate ? 'ambiguous-run' : unsupported ? 'unsupported-feed' : 'not-found');
   if (unsupported) return unknown('unsupported-feed');
   candidates.sort((a, b) => b.measured - a.measured);
   const chosen = candidates[0]!;
@@ -88,8 +130,10 @@ export function observeSelectedRun(feeds: readonly RealtimeFeed[], run: Resolved
   if (tied.some((candidate) => JSON.stringify(candidate.update) !== JSON.stringify(chosen.update))) return unknown('ambiguous-run');
   const { update, feed } = chosen;
   const freshness = sourceFreshness(feed.observedAt, timestampMilliseconds(update.timestamp), nowMs);
-  if (freshness.state === 'unknown') return unknown(feed.observedAt === null && timestampMilliseconds(update.timestamp) === null ? 'missing-timestamp' : 'future-timestamp');
-  const base = { legKey, runRef: ref, ...freshness, ...(freshness.state === 'stale' ? { reason: 'stale' as const } : {}) };
+  if (freshness.state === 'unknown') return vehicleOnly() ?? unknown(feed.observedAt === null && timestampMilliseconds(update.timestamp) === null ? 'missing-timestamp' : 'future-timestamp');
+  if (freshness.state === 'stale' && passed) return vehicleOnly()!;
+  const base = { legKey, runRef: ref, ...freshness, ...(freshness.state === 'stale' ? { reason: 'stale' as const } : {}),
+    ...(passed && freshness.state === 'fresh' ? { boardPassed: true, vehicleLocation: passed.vehicleLocation } : {}) };
   if (update.trip.scheduleRelationship === 3 || update.trip.scheduleRelationship === 7) return { ...base, status: 'cancelled' };
   const board = endpointUpdate(update, run, 'board');
   const alight = endpointUpdate(update, run, 'alight');

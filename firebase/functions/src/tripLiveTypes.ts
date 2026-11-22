@@ -54,6 +54,9 @@ export type TripLegObservation = {
   arrivalNoData?: boolean;
   boardSkipped?: boolean;
   alightSkipped?: boolean;
+  /** Exact fresh vehicle evidence only; the rider's own boarding status is still independent. */
+  boardPassed?: boolean;
+  vehicleLocation?: { lat: number; lng: number; capturedAt: number };
   reason?: TripLiveReason;
 };
 

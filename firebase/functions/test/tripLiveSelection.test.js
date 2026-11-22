@@ -161,3 +161,68 @@ test('protobuf inherited zero defaults and invalid absolute values do not become
   item.stopTimeUpdate[0].departure = { time: Number.MAX_SAFE_INTEGER };
   assert.equal(observe([item]).departs, undefined);
 });
+
+const vehicle = (extra = {}) => ({ trip: update().trip, timestamp: NOW / 1000, currentStopSequence: 20,
+  currentStatus: 1, stopId: 'B', position: { latitude: 40.9, longitude: -73.8 }, ...extra });
+const withVehicle = (position, updates) => {
+  const data = feed(updates);
+  data.entities.push({ id: 'vehicle', vehicle: position });
+  return observeSelectedRun([data], RUN, '1', NOW);
+};
+
+test('only an exact fresh vehicle past the raw boarding sequence can prove the vehicle has passed', () => {
+  const result = withVehicle(vehicle());
+  assert.equal(result.boardPassed, true);
+  assert.deepEqual(result.vehicleLocation, { lat: 40.9, lng: -73.8, capturedAt: NOW });
+  for (const currentStatus of [0, 1, 2, 'INCOMING_AT', 'STOPPED_AT', 'IN_TRANSIT_TO']) {
+    assert.equal(withVehicle(vehicle({ currentStatus })).boardPassed, true);
+  }
+  const atBoard = withVehicle(vehicle({ currentStopSequence: 10, stopId: 'A' }));
+  assert.equal(atBoard.boardPassed, undefined);
+  assert.equal(withVehicle(vehicle({ currentStopSequence: 99 })).boardPassed, undefined);
+  assert.equal(withVehicle(vehicle({ stopId: 'DIFFERENT-PLATFORM' })).boardPassed, undefined);
+});
+
+test('fresh vehicle-only evidence does not fabricate ETA or a cancellation', () => {
+  const result = withVehicle(vehicle(), []);
+  assert.equal(result.state, 'fresh');
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.reason, 'no-prediction');
+  assert.equal(result.boardPassed, true);
+  assert.equal(result.departs, undefined);
+  assert.equal(result.arrives, undefined);
+  const stale = update({ timestamp: (NOW - 100_000) / 1000 });
+  stale.trip.scheduleRelationship = 3;
+  assert.equal(withVehicle(vehicle(), [stale]).status, 'unavailable');
+});
+
+test('a predicted departure in the past alone never proves the vehicle left', () => {
+  const item = update();
+  item.stopTimeUpdate[0].departure = event(-5);
+  assert.equal(observe([item]).boardPassed, undefined);
+  assert.equal(withVehicle(vehicle({ currentStopSequence: 10, stopId: 'A' }), [item]).boardPassed, undefined);
+});
+
+test('missing or stale vehicle time/date/status and another run never prove boarding passed', () => {
+  for (const extra of [{ timestamp: undefined }, { timestamp: (NOW - 91_000) / 1000 }, { timestamp: (NOW + 31_000) / 1000 },
+    { currentStatus: undefined }, { currentStatus: 999 }, { currentStopSequence: undefined },
+    { position: undefined }, { position: { latitude: 91, longitude: 0 } },
+    { trip: { ...update().trip, tripId: 'next-bus' } }, { trip: { ...update().trip, startDate: '20261121' } },
+    { trip: { ...update().trip, startDate: undefined } }, { trip: { ...update().trip, startTime: '09:15:00' } },
+    { trip: { ...update().trip, scheduleRelationship: 3 } }]) {
+    assert.equal(withVehicle(vehicle(extra)).boardPassed, undefined, JSON.stringify(extra));
+  }
+  const missingSequence = { ...RUN, stops: RUN.stops.map(({ stopSequence, ...stop }) => stop) };
+  const data = feed();
+  data.entities.push({ id: 'vehicle', vehicle: vehicle() });
+  assert.equal(observeSelectedRun([data], missingSequence, '1', NOW).boardPassed, undefined);
+});
+
+test('old feed headers and conflicting equally timed vehicle positions suppress departure proof', () => {
+  const data = feed(undefined, { observedAt: NOW - 91_000 });
+  data.entities.push({ id: 'vehicle', vehicle: vehicle() });
+  assert.equal(observeSelectedRun([data], RUN, '1', NOW).boardPassed, undefined);
+  data.observedAt = NOW;
+  data.entities.push({ id: 'other-vehicle', vehicle: vehicle({ currentStopSequence: 10, stopId: 'A' }) });
+  assert.equal(observeSelectedRun([data], RUN, '1', NOW).boardPassed, undefined);
+});
