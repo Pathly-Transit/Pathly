@@ -31,6 +31,8 @@ import {
 } from './tripPlanning';
 import { legEntrances } from './stationEntrances';
 import { liveTripRefs, type LiveTripRef } from './tripLive';
+import type { TripRunRef } from './tripLiveTypes';
+import { gtfsClock, rememberRunSchedule, scheduleVersionForTimetable } from './tripRunSchedule';
 import { hasWalkingData, walkingMeters, walkingPath } from './walkingGraph';
 
 /**
@@ -109,7 +111,11 @@ async function buildNetwork(): Promise<LoadedNetwork | null> {
     if (lastGood?.version === version) return { agencyId, version, timetable: lastGood.timetable };
     try {
       const file = await readRoutingTimetableFile(agencyId);
-      if (file) return { agencyId, version, timetable: decodeRoutingTimetable(file) };
+      if (file) {
+        const timetable = decodeRoutingTimetable(file);
+        rememberRunSchedule(agencyId, timetable, version === 'bundled' ? null : version);
+        return { agencyId, version, timetable };
+      }
     } catch (error) {
       logger.warn('Could not read an agency routing timetable', {
         agencyId,
@@ -439,6 +445,33 @@ function patternsOfRoute(network: TransitNetwork, route: number): number[] {
   return index[route]!;
 }
 
+function runReference(context: PlanContext, trip: number, pattern: number, day: number, board: number, alight: number): TripRunRef {
+  const { network } = context;
+  const base = network.patternStopStart[pattern]!;
+  const boardStop = network.patternStops[base + board]!;
+  const alightStop = network.patternStops[base + alight]!;
+  const part = network.parts[network.stopPart[boardStop]!]!;
+  const occurrence = (stop: number, position: number) => {
+    let count = 0;
+    for (let index = 0; index < position; index += 1) if (network.patternStops[base + index] === stop) count += 1;
+    return count;
+  };
+  const direction = network.patternDirection[pattern]!;
+  const localTrip = trip - part.tripOffset;
+  const sequenceStart = part.timetable.tripSequenceStart?.[localTrip];
+  const boardSequence = sequenceStart === undefined ? undefined : part.timetable.tripStopSequence?.[sequenceStart + board];
+  const alightSequence = sequenceStart === undefined ? undefined : part.timetable.tripStopSequence?.[sequenceStart + alight];
+  return {
+    version: 1, agencyId: part.agencyId, routeId: network.routes[network.patternRoute[pattern]!]!.routeId,
+    tripId: network.tripId(trip), serviceDate: String(context.days[day]!.date), scheduleVersion: scheduleVersionForTimetable(part.timetable),
+    startTime: gtfsClock(network.departure(trip, 0)), boardStopId: network.stopId(boardStop), alightStopId: network.stopId(alightStop),
+    boardOccurrence: occurrence(boardStop, board), alightOccurrence: occurrence(alightStop, alight),
+    ...(boardSequence !== undefined && boardSequence >= 0 ? { boardStopSequence: boardSequence } : {}),
+    ...(alightSequence !== undefined && alightSequence >= 0 ? { alightStopSequence: alightSequence } : {}),
+    ...(direction >= 0 ? { directionId: direction } : {}),
+  };
+}
+
 /** The same line's departures, in the same direction, from this ride's stop to its alighting stop, around this one. */
 function rideDepartures(context: PlanContext, ride: RideLeg, iso: (seconds: number) => string): TripDeparture[] {
   const { network, days, active } = context;
@@ -478,6 +511,7 @@ function rideDepartures(context: PlanContext, ride: RideLeg, iso: (seconds: numb
           at: departs,
           departs: iso(departs),
           arrives: iso(network.arrival(trip, alight) + offset),
+          runRef: runReference(context, trip, pattern, day, board, alight),
           ...(sameStops ? { stopTimes } : {}),
         });
       }
@@ -520,6 +554,7 @@ function transitStep(context: PlanContext, ride: RideLeg, iso: (seconds: number)
     path: simplifiedPath(network.pathBetween(ride.pattern, ride.boardPosition, ride.alightPosition)),
     ...(intermediate.length > 0 ? { stops: intermediate } : {}),
     tripId: network.tripId(ride.trip),
+    runRef: runReference(context, ride.trip, ride.pattern, ride.day, ride.boardPosition, ride.alightPosition),
     liveRoute: {
       agencyId,
       routeId: route.routeId,
@@ -548,14 +583,27 @@ function transitStep(context: PlanContext, ride: RideLeg, iso: (seconds: number)
 function itineraryFor(context: PlanContext, journey: Journey, destinationLabel: string, estimateFare?: FareEstimator): Itinerary {
   const iso = (seconds: number) => new Date(context.baseStartMs + seconds * 1000).toISOString();
   const steps: TripStep[] = [];
+  let previousRide: RideLeg | undefined;
+  let transferWalk = false;
+  let omittedWalkSeconds = 0;
   journey.legs.forEach((leg, index) => {
     if (leg.kind === 'ride') {
-      steps.push(transitStep(context, leg, iso));
+      const step = transitStep(context, leg, iso);
+      const held = previousRide && context.network.timedTransfers.get(previousRide.trip)?.some(([trip, stop]) => trip === leg.trip && stop === leg.boardStop);
+      step.minimumTransferSeconds = !previousRide ? 0 : transferWalk ? omittedWalkSeconds : held ? 0 : Math.max(0, context.network.stopChangeSeconds[leg.boardStop]!);
+      steps.push(step);
+      previousRide = leg;
+      transferWalk = false;
+      omittedWalkSeconds = 0;
       return;
     }
     const next = journey.legs[index + 1];
     const toName = next?.kind === 'ride' ? context.network.stopName(next.boardStop) : destinationLabel;
     const step = walkStep(context, leg, toName);
+    if (previousRide) {
+      transferWalk = true;
+      if (!step) omittedWalkSeconds += leg.seconds;
+    }
     if (step) steps.push(step);
   });
   const transits = steps.filter((step): step is TransitStep => step.kind === 'transit');

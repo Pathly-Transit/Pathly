@@ -96,6 +96,9 @@ export type RoutingTimetable = RoutingHeader & {
   /** Per profile (each pattern's in order), one offset per pattern stop from the trip's start. */
   profileArr: Int32Array;
   profileDep: Int32Array;
+  /** Optional compatible enrichment: original GTFS sequences per trip, never pattern positions. */
+  tripSequenceStart?: Uint32Array;
+  tripStopSequence?: Int32Array;
 };
 
 const ARRAY_NAMES = [
@@ -112,7 +115,10 @@ const CONSTRUCTORS = { i32: Int32Array, u32: Uint32Array, u8: Uint8Array } as co
 const padTo8 = (length: number) => (8 - (length % 8)) % 8;
 
 export function encodeRoutingTimetable(timetable: RoutingTimetable): Buffer {
-  const arrays: ArraySpec[] = ARRAY_NAMES.map(([name, type]) => ({ name, type, length: (timetable[name] as TypedArray).length }));
+  const names: (readonly [keyof RoutingTimetable, ArrayType])[] = [...ARRAY_NAMES];
+  if (Boolean(timetable.tripSequenceStart) !== Boolean(timetable.tripStopSequence)) throw new Error('routing timetable has incomplete stop sequences');
+  if (timetable.tripSequenceStart && timetable.tripStopSequence) names.push(['tripSequenceStart', 'u32'], ['tripStopSequence', 'i32']);
+  const arrays: ArraySpec[] = names.map(([name, type]) => ({ name, type, length: (timetable[name] as TypedArray).length }));
   const header: RoutingHeader = {
     format: ROUTING_FORMAT_VERSION,
     agencyId: timetable.agencyId,
@@ -131,7 +137,7 @@ export function encodeRoutingTimetable(timetable: RoutingTimetable): Buffer {
   const json = Buffer.from(JSON.stringify(header), 'utf-8');
   const parts: Buffer[] = [Buffer.from(MAGIC, 'ascii'), Buffer.alloc(4), json, Buffer.alloc(padTo8(8 + json.length))];
   parts[1]!.writeUInt32LE(json.length, 0);
-  for (const [name] of ARRAY_NAMES) {
+  for (const [name] of names) {
     const array = timetable[name] as TypedArray;
     const bytes = Buffer.from(array.buffer, array.byteOffset, array.byteLength);
     parts.push(bytes, Buffer.alloc(padTo8(bytes.length)));
@@ -157,6 +163,18 @@ export function decodeRoutingTimetable(gzipped: Buffer): RoutingTimetable {
   }
   for (const [name] of ARRAY_NAMES) {
     if (!decoded[name]) throw new Error(`routing timetable has no ${name}`);
+  }
+  const starts = decoded.tripSequenceStart;
+  const sequences = decoded.tripStopSequence;
+  if (Boolean(starts) !== Boolean(sequences) || (starts && sequences && (starts.length !== header.tripIds.length + 1
+    || starts[0] !== 0 || starts[starts.length - 1] !== sequences.length
+    || starts.some((value, index) => index > 0 && value < starts[index - 1]!)))) throw new Error('routing timetable has invalid stop sequences');
+  if (starts && sequences) {
+    let trip = 0;
+    for (const pattern of header.patterns) for (let index = 0; index < pattern.tripCount; index += 1, trip += 1) {
+      if (starts[trip + 1]! - starts[trip]! !== pattern.stopCount) throw new Error('routing timetable stop sequences do not match its trips');
+    }
+    if (sequences.some((value) => value < -1)) throw new Error('routing timetable has invalid GTFS stop sequence');
   }
   return { ...header, ...(decoded as unknown as Omit<RoutingTimetable, keyof RoutingHeader>) };
 }
