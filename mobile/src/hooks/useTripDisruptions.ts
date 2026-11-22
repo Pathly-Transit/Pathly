@@ -21,6 +21,8 @@ export function useTripDisruptions(active: ActiveTripRuntime | null, statuses: T
   const enabled = preferences.notifications.enabled && preferences.notifications.disruptions;
   const ownerKey = active ? JSON.stringify([active.uid, active.sessionId]) : null;
   const latest = useRef({ active, enabled, ownerKey });
+  const dismissed = useRef(new Set<string>());
+  useLayoutEffect(() => { dismissed.current.clear(); }, [ownerKey]);
   useLayoutEffect(() => { latest.current = { active, enabled, ownerKey }; }, [active, enabled, ownerKey]);
   const [shown, setShown] = useState<{ ownerKey: string; notice: TripDisruption } | null>(null);
   const candidate = useMemo(() => active ? tripDisruptionFor(active.itinerary, statuses, active.cursor, now, timing?.arrivalTime ?? null) : null,
@@ -32,7 +34,7 @@ export function useTripDisruptions(active: ActiveTripRuntime | null, statuses: T
     const owner = { uid: active.uid, sessionId: active.sessionId };
     const isCurrent = () => !cancelled && latest.current.ownerKey === ownerKey && auth.currentUser?.uid === owner.uid;
     void (async () => {
-      if (await tripDisruptionDismissed(owner, candidate.key) || !isCurrent()) return;
+      if (dismissed.current.has(candidate.key) || await tripDisruptionDismissed(owner, candidate.key) || !isCurrent() || dismissed.current.has(candidate.key)) return;
       setShown({ ownerKey, notice: candidate });
       await presentTripDisruption(owner, candidate.key, async () => {
         if (!isCurrent()) return false;
@@ -46,10 +48,11 @@ export function useTripDisruptions(active: ActiveTripRuntime | null, statuses: T
       });
     })().catch(() => undefined);
     return () => { cancelled = true; };
-  }, [active?.uid, active?.sessionId, ownerKey, candidate, appActive]);
+  }, [active, ownerKey, candidate, appActive]);
 
   const dismiss = useCallback(() => {
     if (!active || shown?.ownerKey !== ownerKey) return;
+    dismissed.current.add(shown.notice.key);
     void dismissTripDisruption(active, shown.notice.key).catch(() => undefined);
     setShown(null);
   }, [active, ownerKey, shown]);

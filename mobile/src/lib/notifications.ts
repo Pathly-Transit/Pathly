@@ -200,6 +200,10 @@ export async function notifyTripDisruptionAccepted(key: string, title: string, b
         content: { title, body, sound: 'default', interruptionLevel: 'active', data: { kind: 'active-trip-change' } },
         trigger: Platform.OS === 'android' ? { channelId: 'default' } : null,
       });
+      if (!await isCurrent()) {
+        await Notifications.dismissNotificationAsync(identifier);
+        return;
+      }
       accepted = true;
     });
     return accepted;

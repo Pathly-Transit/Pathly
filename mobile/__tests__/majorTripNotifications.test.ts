@@ -27,3 +27,10 @@ it('honors denied permission and a trip that ends while permission is checked', 
   expect(await notifyTripDisruptionAccepted('incident', 'Train interrupted', 'Updated route', () => current)).toBe(false);
   expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
 });
+
+it('dismisses an in-flight native disruption post if its trip ends before acceptance', async () => {
+  let current = true;
+  (Notifications.scheduleNotificationAsync as jest.Mock).mockImplementationOnce(async () => { current = false; return 'posted'; });
+  expect(await notifyTripDisruptionAccepted('incident', 'Train interrupted', 'Updated route', () => current)).toBe(false);
+  expect(Notifications.dismissNotificationAsync).toHaveBeenCalledWith(expect.stringContaining(TRIP_DISRUPTION_ID_PREFIX));
+});
