@@ -13,8 +13,10 @@ import {
   type TripEndpointReference,
   type TripSelectionIdentity,
 } from './enrouteNavigation';
-import { retimeItinerary } from './tripDepartures';
+import { departureChoiceKey, retimeItinerary } from './tripDepartures';
+import { parseTripRunRef } from './tripRunRef';
 import { recordRequest } from '../debug/requestLog';
+import type { TripRunRef } from './tripLiveTypes';
 
 /** Mirrors firebase/functions/src/tripPlanning.ts — the itinerary shape planTrip returns. */
 export type LatLng = { lat: number; lng: number };
@@ -37,6 +39,10 @@ export type TransitStep = {
   stops?: TripStop[];
   /** The scheduled trip's GTFS trip_id (admin ID overlay). */
   tripId?: string;
+  /** Selected native timetable run, including its service day and exact stop visits. */
+  runRef?: TripRunRef;
+  /** Required change margin after any emitted transfer walking steps (native planner). */
+  minimumTransferSeconds?: number;
   /** The same line's scheduled departures between the same two stops, this one included (tripDepartures.ts). */
   departures?: TripDeparture[];
   /** The leg's GTFS line, direction and boarding stop (backend tripPlanner.ts), for its live vehicles. */
@@ -52,11 +58,12 @@ export type TransitStep = {
   alerts?: readonly ServiceAlert[];
 };
 /** 'tracked': live times, `delaySeconds` against the plan (late when positive). */
-export type LegLive = { status: 'tracked' | 'cancelled' | 'skips-stop'; departs?: string; arrives?: string; delaySeconds?: number };
+export type LegLive = { status: 'tracked' | 'cancelled' | 'skips-stop'; departs?: string; arrives?: string; delaySeconds?: number;
+  departureDelaySeconds?: number; arrivalDelaySeconds?: number; delayAt?: 'departure' | 'arrival' };
 /** `spareSeconds`: time left after the walk between the legs; negative when already missed. */
 export type LegConnection = { status: 'tight' | 'missed'; spareSeconds: number };
 /** `stopTimes` follow the leg's `stops` when that trip calls at the same stops in between. */
-export type TripDeparture = { departs: string; arrives: string; stopTimes?: string[] };
+export type TripDeparture = { departs: string; arrives: string; stopTimes?: string[]; runRef?: TripRunRef };
 export type TripStep = WalkStep | TransitStep;
 /**
  * `reduced`: the 65+/disability/Medicare fare, when the published rules price every step.
@@ -456,7 +463,16 @@ function exactResumeCandidate(itineraries: readonly Itinerary[], selection: Trip
   for (const itinerary of itineraries) {
     // Retiming never changes an itinerary id. Searching an unrelated route's departure product
     // cannot match, and used to exhaust the shared budget before reaching the selected route.
-    if (itinerary.id !== selection.itineraryId) continue;
+    if (itinerary.id !== selection.itineraryId && !selection.native) continue;
+    if (selection.native) {
+      const refs = itinerary.steps.filter((step): step is TransitStep => step.kind === 'transit').map((step) => parseTripRunRef(step.runRef));
+      if (refs.length !== selection.native.runRefs.length || refs.some((ref, index) => {
+        const selected = selection.native!.runRefs[index]!;
+        return !ref || ref.agencyId !== selected.agencyId || ref.routeId !== selected.routeId
+          || ref.boardStopId !== selected.boardStopId || ref.alightStopId !== selected.alightStopId
+          || ref.boardOccurrence !== selected.boardOccurrence || ref.alightOccurrence !== selected.alightOccurrence;
+      })) continue;
+    }
     matchingIds += 1;
     if (sameTripSelection(createTripSelectionIdentity(itinerary), selection)) return answer(itinerary);
 
@@ -471,7 +487,8 @@ function exactResumeCandidate(itineraries: readonly Itinerary[], selection: Trip
         return sameTripSelection(createTripSelectionIdentity(variant), selection) ? variant : null;
       }
       const leg = legs[legIndex]!;
-      const departures = [...new Set([leg.from.time, ...(leg.departures ?? []).map((departure) => departure.departs)])];
+      const departures = [...new Set([leg.runRef ? departureChoiceKey({ departs: leg.from.time, arrives: leg.to.time, runRef: leg.runRef }) : leg.from.time,
+        ...(leg.departures ?? []).map(departureChoiceKey)])];
       for (const departs of departures) {
         const found = visit(legIndex + 1, new Map(choices).set(legIndex, departs));
         if (found) return found;

@@ -5,6 +5,7 @@ import {
   type TripSelectionIdentity,
 } from './enrouteNavigation';
 import { parseEntrances } from './stationEntrances';
+import { parseTripRunRef } from './tripRunRef';
 import type { Itinerary, LatLng, ResumePlanRequest, TransitStep, TripStop, WalkStep } from './tripPlanning';
 
 /** Active-only geometry for the one-line ride assembled by Pathly's Ride Guide. */
@@ -33,7 +34,7 @@ function point(value: unknown): value is LatLng {
 const samePoint = (left: LatLng, right: LatLng) => left.lat === right.lat && left.lng === right.lng;
 
 function path(value: unknown): LatLng[] | null {
-  return Array.isArray(value) && value.length >= 2 && value.every(point)
+  return Array.isArray(value) && value.length >= 2 && value.length <= 20_000 && value.every(point)
     ? value.map(({ lat, lng }) => ({ lat, lng }))
     : null;
 }
@@ -59,7 +60,8 @@ function transit(value: unknown): TransitStep | null {
     || !optionalText(value.line.shortName) || !optionalText(value.line.color)
     || !optionalText(value.line.textColor) || !optionalText(value.line.vehicleName)
     || !optionalText(value.headsign) || !optionalText(value.tripId)
-    || !Number.isSafeInteger(value.stopCount) || (value.stopCount as number) < 1
+    || (value.minimumTransferSeconds !== undefined && (!nonnegative(value.minimumTransferSeconds) || value.minimumTransferSeconds > 21_600))
+    || !Number.isSafeInteger(value.stopCount) || (value.stopCount as number) < 1 || (value.stopCount as number) > 2000
     || !nonnegative(value.durationSeconds)) return null;
   const geometry = path(value.path);
   const from = stop(value.from);
@@ -69,7 +71,7 @@ function transit(value: unknown): TransitStep | null {
 
   let stops: TripStop[] | undefined;
   if (value.stops !== undefined) {
-    if (!Array.isArray(value.stops)) return null;
+    if (!Array.isArray(value.stops) || value.stops.length > 2000) return null;
     const parsed = value.stops.map(stop);
     if (parsed.some((item) => item === null)) return null;
     stops = parsed as TripStop[];
@@ -96,6 +98,10 @@ function transit(value: unknown): TransitStep | null {
 
   const boardEntrances = parseEntrances(value.boardEntrances);
   const alightEntrances = parseEntrances(value.alightEntrances);
+  const runRef = value.runRef === undefined ? undefined : parseTripRunRef(value.runRef);
+  if (runRef === null || (runRef && (value.tripId !== runRef.tripId || !liveRoute
+    || liveRoute.agencyId !== runRef.agencyId || liveRoute.routeId !== runRef.routeId
+    || liveRoute.boardStopId !== runRef.boardStopId || liveRoute.alightStopId !== runRef.alightStopId))) return null;
   // Persist selected navigation evidence, not alternate departures or stale live/alert/fare state.
   return {
     kind: 'transit', mode: value.mode as TransitStep['mode'], agency: { name: value.agency.name },
@@ -108,12 +114,19 @@ function transit(value: unknown): TransitStep | null {
     },
     ...(value.headsign !== undefined ? { headsign: value.headsign } : {}),
     ...(value.tripId !== undefined ? { tripId: value.tripId } : {}),
+    ...(runRef ? { runRef } : {}),
+    ...(nonnegative(value.minimumTransferSeconds) ? { minimumTransferSeconds: value.minimumTransferSeconds } : {}),
     from, to, stopCount: value.stopCount as number, durationSeconds: value.durationSeconds, path: geometry,
     ...(stops === undefined ? {} : { stops }),
     ...(liveRoute ? { liveRoute } : {}),
     ...(boardEntrances ? { boardEntrances } : {}),
     ...(alightEntrances ? { alightEntrances } : {}),
   };
+}
+
+/** Bounded immutable steps shared by the two account-owned active snapshot formats. */
+export function parseNavigationSnapshotStep(value: unknown): TransitStep | WalkStep | null {
+  return record(value) && value.kind === 'walk' ? walk(value) : transit(value);
 }
 
 /** Validates a selected local ride against its owner record and removes mutable provider fields. */
