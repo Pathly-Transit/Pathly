@@ -146,7 +146,7 @@ export async function resumeBackgroundTripFixes(owner: TripAlertOwner): Promise<
 async function selectedItinerary(state: TripAlertState): Promise<Itinerary | null> {
   const active = (await readNavigationDocument(state.uid)).active;
   return active?.sessionId === state.sessionId && active.selection?.fingerprint === state.plan.selection.fingerprint
-    && active.selection.itineraryId === state.plan.itineraryId ? active.nativeSnapshot?.itinerary ?? null : null;
+    && active.selection.itineraryId === state.plan.itineraryId ? active.nativeSnapshot?.itinerary ?? active.rideSnapshot?.itinerary ?? null : null;
 }
 
 async function refreshLiveStatus(state: TripAlertState, itinerary: Itinerary, now: number, valid: () => Promise<boolean>): Promise<TripAlertState> {

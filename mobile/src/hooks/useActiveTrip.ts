@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import {
   advanceNavigation,
@@ -38,6 +38,8 @@ import {
 import { parseRideSnapshot } from '../data/rideSnapshot';
 import { parseNativeSnapshot } from '../data/nativeSnapshot';
 import type { TripRecoveryPlan } from '../data/tripRecovery';
+import { enrichRideGuideItinerary } from '../data/rideGuide';
+import { parseRideRunSeed, rideRunSeedKey } from '../data/tripRunRef';
 
 export type StartActiveTripInput = StartTripInput & {
   resumeRequest: ResumePlanRequest;
@@ -335,14 +337,34 @@ function sameEndpoint(left: TripEndpointReference, right: TripEndpointReference)
 
 function isSameActiveTrip(active: ActiveTripRuntime, input: StartActiveTripInput): boolean {
   const selection = createTripSelectionIdentity(input.itinerary);
-  return sameTripSelection(active.selection, selection)
+  const previousRide = active.itinerary.steps.find((step): step is TransitStep => step.kind === 'transit');
+  const nextRide = input.itinerary.steps.find((step): step is TransitStep => step.kind === 'transit');
+  const previousSeed = parseRideRunSeed(previousRide?.runSeed);
+  const nextSeed = parseRideRunSeed(nextRide?.runSeed);
+  const sameChosenRide = input.resumeSource === 'ride-guide' && active.itinerary.id === input.itinerary.id
+    && Boolean(previousRide?.runRef || nextRide?.runRef)
+    && previousSeed && nextSeed && rideRunSeedKey(previousSeed) === rideRunSeedKey(nextSeed);
+  return (sameTripSelection(active.selection, selection) || Boolean(sameChosenRide))
     && sameEndpoint(active.origin, input.origin)
     && sameEndpoint(active.destination, input.destination);
+}
+
+async function prepareStart(input: StartActiveTripInput, isCurrent: () => boolean): Promise<StartActiveTripInput | null> {
+  if (input.resumeSource !== 'ride-guide') return isCurrent() ? input : null;
+  const itinerary = await enrichRideGuideItinerary(input.itinerary, { isCurrent });
+  return itinerary && isCurrent() ? { ...input, itinerary,
+    resumeRequest: { ...input.resumeRequest, time: { mode: 'depart', at: itinerary.departureTime } } } : null;
 }
 
 /** Per-UID active-trip lifecycle; Home owns one instance and passes its state to child views. */
 export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
   const normalizedUid = uid ?? null;
+  const ownerScope = useMemo(() => ({ uid: normalizedUid }), [normalizedUid]);
+  const ownerRef = useRef<typeof ownerScope | null>(ownerScope);
+  useLayoutEffect(() => {
+    ownerRef.current = ownerScope;
+    return () => { if (ownerRef.current === ownerScope) ownerRef.current = null; };
+  }, [ownerScope]);
   const [state, setState] = useState<ActiveTripState>(() => initialState(normalizedUid));
   const stateRef = useRef(state);
   const generationRef = useRef(0);
@@ -355,11 +377,13 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
     setState(resolved);
   }, []);
 
-  const enqueue = useCallback(<Result,>(action: () => Promise<Result>): Promise<Result> => {
-    const next = actionQueueRef.current.catch(() => undefined).then(action);
+  const enqueue = useCallback(<Result,>(action: () => Promise<Result>, stale: Result): Promise<Result> => {
+    if (ownerRef.current !== ownerScope) return Promise.resolve(stale);
+    const generation = generationRef.current;
+    const next = actionQueueRef.current.catch(() => undefined).then(() => ownerRef.current === ownerScope && generationRef.current === generation ? action() : stale);
     actionQueueRef.current = next;
     return next;
-  }, []);
+  }, [ownerScope]);
 
   const recover = useCallback(async (resume: ActiveTripResumeV1, recents: RecentTripV1[]): Promise<boolean> => {
     const generation = generationRef.current;
@@ -454,6 +478,8 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
   useEffect(() => {
     const generation = generationRef.current + 1;
     generationRef.current = generation;
+    actionQueueRef.current = Promise.resolve();
+    replacementConfirmationRef.current = null;
     commit(initialState(normalizedUid));
     if (!normalizedUid) return undefined;
     let cancelled = false;
@@ -474,11 +500,14 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
   }, [commit, normalizedUid, recover]);
 
   const install = useCallback(async (accountUid: string, input: StartActiveTripInput, now = Date.now()): Promise<boolean> => {
+    const generation = generationRef.current;
+    const owner = ownerRef.current;
+    const isCurrent = () => ownerRef.current === owner && generationRef.current === generation && stateRef.current.uid === accountUid;
     try {
       const runtime = createActiveTripRuntime(input, accountUid, now);
       const persisted = resumeRecord(runtime, input.resumeRequest, input.resumeSource === 'ride-guide');
-      const document = await updateNavigationDocument(accountUid, (current) => ({ ...current, active: persisted }), now);
-      if (document.active?.sessionId !== runtime.sessionId || stateRef.current.uid !== accountUid) return false;
+      const document = await updateNavigationDocument(accountUid, (current) => isCurrent() ? { ...current, active: persisted } : current, now);
+      if (document.active?.sessionId !== runtime.sessionId || !isCurrent()) return false;
       commit({
         uid: accountUid,
         status: 'active',
@@ -497,23 +526,27 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
   }, [commit]);
 
   const start = useCallback((input: StartActiveTripInput) => enqueue(async () => {
+    const generation = generationRef.current;
+    const owner = ownerRef.current;
     const current = stateRef.current;
     if (!current.uid || current.status === 'hydrating') return 'not-ready' as const;
+    const prepared = await prepareStart(input, () => ownerRef.current === owner && generationRef.current === generation && stateRef.current.uid === current.uid);
+    if (!prepared || ownerRef.current !== owner || generationRef.current !== generation || stateRef.current.uid !== current.uid) return 'not-ready' as const;
     // A double tap can enqueue the same GO action twice before the first storage write finishes.
     // Once that first action succeeds, treat the matching second action as the same start rather
     // than asking the rider to replace the trip that action just created.
-    if (current.active && isSameActiveTrip(current.active, input)) return 'started' as const;
+    if (current.active && isSameActiveTrip(current.active, prepared)) return 'started' as const;
     if (current.active || current.recovery) {
-      commit({ ...current, pendingReplacement: input });
+      commit({ ...current, pendingReplacement: prepared });
       return 'replacement-required' as const;
     }
-    return await install(current.uid, input) ? 'started' as const : 'failed' as const;
-  }), [commit, enqueue, install]);
+    return await install(current.uid, prepared) ? 'started' as const : 'failed' as const;
+  }, 'not-ready' as const), [commit, enqueue, install]);
 
   const cancelReplacement = useCallback(() => {
     const current = stateRef.current;
-    if (current.uid === normalizedUid && current.pendingReplacement) commit({ ...current, pendingReplacement: null });
-  }, [commit, normalizedUid]);
+    if (ownerRef.current === ownerScope && current.uid === normalizedUid && current.pendingReplacement) commit({ ...current, pendingReplacement: null });
+  }, [commit, normalizedUid, ownerScope]);
 
   const confirmReplacement = useCallback(() => {
     if (replacementConfirmationRef.current) return replacementConfirmationRef.current;
@@ -524,11 +557,14 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
       if (!current.uid || !pending || !id) return false;
       const at = Date.now();
       try {
-        const runtime = createActiveTripRuntime(pending, current.uid, at);
-        const replacement = resumeRecord(runtime, pending.resumeRequest, pending.resumeSource === 'ride-guide');
+        const generation = generationRef.current;
+        const prepared = await prepareStart(pending, () => generationRef.current === generation && stateRef.current.uid === current.uid);
+        if (!prepared) return false;
+        const runtime = createActiveTripRuntime(prepared, current.uid, at);
+        const replacement = resumeRecord(runtime, prepared.resumeRequest, prepared.resumeSource === 'ride-guide');
         let replaced = false;
         const document = await updateNavigationDocument(current.uid, (stored) => {
-          const previous = stored.active?.sessionId === id ? stored.active : null;
+          const previous = generationRef.current === generation && stateRef.current.uid === current.uid && stored.active?.sessionId === id ? stored.active : null;
           if (!previous) return stored;
           replaced = true;
           const recents = stored.recents.some((recent) => recent.sessionId === id)
@@ -536,7 +572,7 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
             : [recentFromActive(previous, 'ended-early', at), ...stored.recents];
           return { ...stored, active: replacement, recents };
         }, at);
-        if (!replaced || document.active?.sessionId !== runtime.sessionId || stateRef.current.uid !== current.uid) return false;
+        if (!replaced || document.active?.sessionId !== runtime.sessionId || stateRef.current.uid !== current.uid || generationRef.current !== generation) return false;
         commit({
           uid: current.uid,
           status: 'active',
@@ -552,7 +588,7 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
       } catch {
         return false;
       }
-    });
+    }, false);
     const tracked = confirmation.finally(() => {
       if (replacementConfirmationRef.current === tracked) replacementConfirmationRef.current = null;
     });
@@ -565,14 +601,16 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
     if (!current.recovery) return false;
     commit({ ...current, retrying: true });
     return recover(current.recovery, current.recents);
-  }), [commit, enqueue, recover]);
+  }, false), [commit, enqueue, recover]);
 
   const finish = useCallback(async (current: ActiveTripState, outcome: 'arrived' | 'ended-early', endedAt = Date.now()): Promise<boolean> => {
+    const owner = ownerRef.current;
+    const generation = generationRef.current;
     const id = activeSessionId(current);
     if (!current.uid || !id) return false;
     try {
       const completed = await completeNavigationSession(current.uid, id, outcome, endedAt);
-      if (stateRef.current.uid !== current.uid) return false;
+      if (ownerRef.current !== owner || generationRef.current !== generation || stateRef.current.uid !== current.uid) return false;
       commit({
         uid: current.uid,
         status: 'idle',
@@ -590,7 +628,7 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
     }
   }, [commit]);
 
-  const end = useCallback(() => enqueue(async () => finish(stateRef.current, 'ended-early')), [enqueue, finish]);
+  const end = useCallback(() => enqueue(async () => finish(stateRef.current, 'ended-early'), false), [enqueue, finish]);
 
   const advance = useCallback((fix: NavigationFix) => enqueue(async () => {
     const current = stateRef.current;
@@ -630,7 +668,7 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
     }
     commit({ ...current, active: runtime, locationState: result.locationState });
     return result;
-  }), [commit, enqueue, finish]);
+  }, null), [commit, enqueue, finish]);
 
   const resetForAdmin = useCallback(() => enqueue(async () => {
     const current = stateRef.current;
@@ -658,7 +696,7 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
     } catch {
       return false;
     }
-  }), [commit, enqueue]);
+  }, false), [commit, enqueue]);
 
   const applyRecovery = useCallback((input: { sessionId: string; selectionFingerprint: string; stepIndex: number;
     phase: NavigationCursor['phase']; plan: TripRecoveryPlan; isCurrent?: () => boolean; beforePublish?: () => void }) => {
@@ -711,7 +749,7 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
         commit({ ...current, active: runtime, recents: document.recents, locationState: null });
         return true;
       } catch { return false; }
-    });
+    }, false);
   }, [commit, enqueue]);
 
   // Never expose one account's previous render while the auth UID is switching.

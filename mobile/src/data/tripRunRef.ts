@@ -1,4 +1,4 @@
-import type { TripRunRef } from './tripLiveTypes';
+import type { ResolveRideGuideRunRequest, TripRunRef } from './tripLiveTypes';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 1024;
@@ -40,4 +40,30 @@ export function tripRunRefKey(ref: TripRunRef): string {
 
 export function sameTripRunRef(a: TripRunRef | null | undefined, b: TripRunRef | null | undefined): boolean {
   return Boolean(a && b && tripRunRefKey(a) === tripRunRefKey(b));
+}
+
+export function parseRideRunSeed(value: unknown): ResolveRideGuideRunRequest | null {
+  if (!record(value) || value.version !== 1 || !text(value.agencyId) || !text(value.routeId) || !text(value.tripId)
+    || !text(value.boardStopId) || !text(value.alightStopId) || typeof value.serviceDate !== 'string' || !/^\d{8}$/.test(value.serviceDate)
+    || (value.startTime !== undefined && (typeof value.startTime !== 'string' || !/^\d{2,3}:[0-5]\d:[0-5]\d$/.test(value.startTime)))
+    || (value.directionId !== undefined && value.directionId !== 0 && value.directionId !== 1)
+    || ['boardOccurrence', 'alightOccurrence', 'boardStopSequence', 'alightStopSequence'].some((field) => value[field] !== undefined && !ordinal(value[field]))) return null;
+  const date = `${value.serviceDate.slice(0, 4)}-${value.serviceDate.slice(4, 6)}-${value.serviceDate.slice(6, 8)}`;
+  const instant = Date.parse(`${date}T00:00:00Z`);
+  if (!Number.isFinite(instant) || new Date(instant).toISOString().slice(0, 10) !== date) return null;
+  return {
+    version: 1, agencyId: value.agencyId, routeId: value.routeId, tripId: value.tripId, serviceDate: value.serviceDate,
+    boardStopId: value.boardStopId, alightStopId: value.alightStopId,
+    ...(value.startTime === undefined ? {} : { startTime: value.startTime as string }),
+    ...(value.directionId === undefined ? {} : { directionId: value.directionId as number }),
+    ...(value.boardOccurrence === undefined ? {} : { boardOccurrence: value.boardOccurrence as number }),
+    ...(value.alightOccurrence === undefined ? {} : { alightOccurrence: value.alightOccurrence as number }),
+    ...(value.boardStopSequence === undefined ? {} : { boardStopSequence: value.boardStopSequence as number }),
+    ...(value.alightStopSequence === undefined ? {} : { alightStopSequence: value.alightStopSequence as number }),
+  };
+}
+
+export function rideRunSeedKey(seed: ResolveRideGuideRunRequest): string {
+  return JSON.stringify([seed.agencyId, seed.routeId, seed.tripId, seed.serviceDate, seed.startTime ?? null, seed.directionId ?? null,
+    seed.boardStopId, seed.boardOccurrence ?? null, seed.boardStopSequence ?? null, seed.alightStopId, seed.alightOccurrence ?? null, seed.alightStopSequence ?? null]);
 }

@@ -1,6 +1,8 @@
 import { httpsCallable } from 'firebase/functions';
 
-import type { LiveSource } from '../src/data/transit';
+import { routeById, type LiveSource } from '../src/data/transit';
+import { applyRouteLive } from '../src/data/applyRouteLive';
+import { rideGuideItinerary } from '../src/data/rideGuide';
 import { clearRouteLiveReads, fetchRouteLiveData, fetchRoutesLiveData } from '../src/data/transitLive';
 import { auth } from '../src/lib/firebase';
 
@@ -33,6 +35,23 @@ describe('fetchRouteLiveData', () => {
     const live = await fetchRouteLiveData(source, { latitude: 40.7549, longitude: -73.984 });
     expect(live.nearestStop?.direction1).toEqual({ stopId: '127', name: 'Times Sq-42 St', lat: 40.7553, lon: -73.9868 });
     expect(live.nearestStop?.direction0).toEqual({ stopId: '127', name: 'Times Sq-42 St', lat: 40.7553, lon: -73.9868 });
+  });
+
+  it('retains exact run/date/stop evidence through live normalization and countdown aging into GO', async () => {
+    const fetchedAt = Date.parse('2026-11-22T15:00:00Z');
+    const prediction = { minutes: 6, live: true, peakOffpeak: null, tripId: 'run-exact', serviceDate: '20261122', startTime: '09:00:00',
+      stopId: 'a', stopSequence: 12, directionId: 1, departureTime: '2026-11-22T15:06:25.000Z' };
+    getRouteLiveStatus.mockResolvedValue({ data: { routeId: '1', routeName: '1', vehicles: [], stopPredictions: { towardDirection1: [prediction], towardDirection0: [] } } });
+    const data = { ...await fetchRouteLiveData(source), fetchedAt };
+    const route = applyRouteLive({ ...routeById.e, liveSource: source }, { status: 'loaded', nearestStop: null, data }, fetchedAt + 60_000);
+    expect(route.predictions[0]).toEqual({ ...prediction, minutes: 5 });
+    const itinerary = rideGuideItinerary({ routeId: 'subway:1', directionIndex: 0, agency: 'Subway', agencyId: 'subway', routeIdAtAgency: '1',
+      mode: 'subway', routeName: '1', shortName: '1', color: '#ee0000', headsign: 'Uptown',
+      stops: [{ name: 'Board', stopId: 'a', lat: 40.7, lon: -73.9, offsetMinutes: 0 }, { name: 'Alight', stopId: 'b', lat: 40.71, lon: -73.9, offsetMinutes: 5 }],
+      departures: route.predictions, selectedDeparture: 0, notices: [], capturedAt: fetchedAt + 60_000 }, 1)!;
+    const leg = itinerary.steps.find((step) => step.kind === 'transit')!;
+    expect(leg.kind === 'transit' && leg.runSeed).toMatchObject({ tripId: 'run-exact', serviceDate: '20261122', boardStopSequence: 12, boardStopId: 'a', alightStopId: 'b' });
+    expect(itinerary.departureTime).toBe(prediction.departureTime);
   });
 
   it('shares identical pending reads and a short fresh result, but refreshes at the next poll', async () => {

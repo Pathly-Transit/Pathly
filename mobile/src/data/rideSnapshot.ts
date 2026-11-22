@@ -5,7 +5,7 @@ import {
   type TripSelectionIdentity,
 } from './enrouteNavigation';
 import { parseEntrances } from './stationEntrances';
-import { parseTripRunRef } from './tripRunRef';
+import { parseRideRunSeed, parseTripRunRef } from './tripRunRef';
 import type { Itinerary, LatLng, ResumePlanRequest, TransitStep, TripStop, WalkStep } from './tripPlanning';
 
 /** Active-only geometry for the one-line ride assembled by Pathly's Ride Guide. */
@@ -99,6 +99,8 @@ function transit(value: unknown): TransitStep | null {
   const boardEntrances = parseEntrances(value.boardEntrances);
   const alightEntrances = parseEntrances(value.alightEntrances);
   const runRef = value.runRef === undefined ? undefined : parseTripRunRef(value.runRef);
+  const runSeed = value.runSeed === undefined ? undefined : parseRideRunSeed(value.runSeed);
+  if (runSeed === null) return null;
   if (runRef === null || (runRef && (value.tripId !== runRef.tripId || !liveRoute
     || liveRoute.agencyId !== runRef.agencyId || liveRoute.routeId !== runRef.routeId
     || liveRoute.boardStopId !== runRef.boardStopId || liveRoute.alightStopId !== runRef.alightStopId))) return null;
@@ -115,6 +117,7 @@ function transit(value: unknown): TransitStep | null {
     ...(value.headsign !== undefined ? { headsign: value.headsign } : {}),
     ...(value.tripId !== undefined ? { tripId: value.tripId } : {}),
     ...(runRef ? { runRef } : {}),
+    ...(runSeed ? { runSeed } : {}),
     ...(nonnegative(value.minimumTransferSeconds) ? { minimumTransferSeconds: value.minimumTransferSeconds } : {}),
     from, to, stopCount: value.stopCount as number, durationSeconds: value.durationSeconds, path: geometry,
     ...(stops === undefined ? {} : { stops }),

@@ -16,7 +16,7 @@ import {
 import { departureChoiceKey, retimeItinerary } from './tripDepartures';
 import { parseTripRunRef } from './tripRunRef';
 import { recordRequest } from '../debug/requestLog';
-import type { TripRunRef } from './tripLiveTypes';
+import type { ResolveRideGuideRunRequest, TripRunRef } from './tripLiveTypes';
 
 /** Mirrors firebase/functions/src/tripPlanning.ts — the itinerary shape planTrip returns. */
 export type LatLng = { lat: number; lng: number };
@@ -41,6 +41,8 @@ export type TransitStep = {
   tripId?: string;
   /** Selected native timetable run, including its service day and exact stop visits. */
   runRef?: TripRunRef;
+  /** Exact unverified Route View choice, resolved before starting this one-line ride. */
+  runSeed?: ResolveRideGuideRunRequest;
   /** Required change margin after any emitted transfer walking steps (native planner). */
   minimumTransferSeconds?: number;
   /** The same line's scheduled departures between the same two stops, this one included (tripDepartures.ts). */
@@ -63,7 +65,7 @@ export type LegLive = { status: 'tracked' | 'cancelled' | 'skips-stop'; departs?
 /** `spareSeconds`: time left after the walk between the legs; negative when already missed. */
 export type LegConnection = { status: 'tight' | 'missed'; spareSeconds: number };
 /** `stopTimes` follow the leg's `stops` when that trip calls at the same stops in between. */
-export type TripDeparture = { departs: string; arrives: string; stopTimes?: string[]; runRef?: TripRunRef };
+export type TripDeparture = { departs: string; arrives: string; stopTimes?: string[]; runRef?: TripRunRef; runSeed?: ResolveRideGuideRunRequest };
 export type TripStep = WalkStep | TransitStep;
 /**
  * `reduced`: the 65+/disability/Medicare fare, when the published rules price every step.
