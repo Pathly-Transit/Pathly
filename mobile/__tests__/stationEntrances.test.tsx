@@ -114,8 +114,8 @@ describe('a trip leg\'s way in and out', () => {
   it('shows in Trip Details under the boarding and alighting stops', () => {
     const itinerary: Itinerary = { id: 'e-train', departureTime: time(0), arrivalTime: time(30), durationSeconds: 1800, transfers: 0, steps };
     const model = toTripDetailModel(itinerary, 'Home', 'Office', false, '#2457C5');
-    expect(model.legs[0]?.enter).toEqual({ text: 'Enter by the elevator at the NE corner', point: { lat: elevator.lat, lng: elevator.lon } });
-    expect(model.legs[0]?.exit?.text).toBe('Exit by the stair on the north side');
+    expect(model.legs[0]?.enter).toEqual({ text: 'Elevator, NE corner', point: { lat: elevator.lat, lng: elevator.lon }, minutes: expect.any(Number) });
+    expect(model.legs[0]?.exit?.text).toBe('Stair, north side');
 
     const onFocusStop = jest.fn();
     const screen = render(
@@ -123,7 +123,7 @@ describe('a trip leg\'s way in and out', () => {
         <SharedTripDetailView actionLabel="Start" backLabel="Back" isFavorite={false} map={<></>} model={model} onAction={jest.fn()} onBack={jest.fn()} onFocusStop={onFocusStop} onToggleFavorite={jest.fn()} rootTestID="search-trip" testPrefix="search-trip" />
       </AppSettingsProvider>,
     );
-    expect(within(screen.getByTestId('search-trip-enter-0')).getByText('Enter by the elevator at the NE corner')).toBeTruthy();
+    expect(within(screen.getByTestId('search-trip-enter-0')).getByText('Elevator, NE corner')).toBeTruthy();
     fireEvent.press(screen.getByTestId('search-trip-exit-0'));
     expect(onFocusStop).toHaveBeenCalledWith(expect.objectContaining({ point: { lat: alightNorth.lat, lng: alightNorth.lon } }));
   });
@@ -136,7 +136,7 @@ describe('a trip leg\'s way in and out', () => {
 });
 
 describe('Route View stop list', () => {
-  it('lists a station\'s entrances under its name and offers them on the map; bus-like stops show none', async () => {
+  it('shows no entrances or exits, even for a station that has them', async () => {
     mockGeometry.mockReturnValue({
       headsign: 'Jamaica Center',
       stops: [
@@ -150,15 +150,8 @@ describe('Route View stop list', () => {
       </AppSettingsProvider>,
     );
     await act(async () => {});
-    const toggle = await screen.findByTestId('stop-entrances-toggle-0');
-    expect(within(toggle).getByText('2 entrances')).toBeTruthy();
-    expect(screen.queryByTestId('stop-entrances-toggle-1')).toBeNull();
-    fireEvent.press(toggle);
-    const list = screen.getByTestId('stop-entrances-0');
-    expect(within(list).getByText('Stair, north side')).toBeTruthy();
-    expect(within(list).getByText('Stair, south side (exit only)')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('stop-entrances-map-0'));
-    fireEvent.press(toggle);
-    expect(screen.queryByTestId('stop-entrances-0')).toBeNull();
+    await screen.findByTestId('stop-row-0');
+    expect(screen.queryByTestId('stop-entrances-toggle-0')).toBeNull();
+    expect(screen.queryByText('2 entrances')).toBeNull();
   });
 });

@@ -475,7 +475,7 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, entrance
 }
 
 const styles = StyleSheet.create({
-  entranceDot: { width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#FFFFFF', borderRadius: 3 },
+  entranceDot: { width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#FFFFFF', borderRadius: 6 },
   // The home map's purple explore dot, as it looks there.
   exploreDot: { width: 17, height: 17, borderWidth: 3, borderRadius: 8.5, borderColor: '#FFFFFF', shadowOpacity: 0.32, shadowRadius: 5, shadowOffset: { width: 0, height: 0 }, elevation: 3 },
   stopCallout: {

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -135,6 +135,8 @@ const BELOW_TRIP_CARD = 120;
 const SHOWN_WALK_SECONDS = 3 * 60;
 /** Live signals stay on for this long after the last successful update. */
 const LIVE_FRESH_MS = 2 * 60_000;
+/** Leaving now, the results plan again this often so their live times (and signals) stay current. */
+const AUTO_REFRESH_MS = 60_000;
 
 /** A searched place's coordinates (saved places without any are stored as [0, 0]). */
 const placePoint = (place: SearchPlace | undefined): LatLng | null => (
@@ -245,7 +247,15 @@ export function RouteResultsView({
   const modesFiltered = enabledModes.length < ALL_MODES.length;
   const tripDay = tripTime.mode === 'now' ? '' : tripDayLabel(tripTime, new Date(now));
   // Live signals only while the last update is fresh: offline, refreshes fail and it ages out.
-  const liveFresh = plan.status === 'loaded' && !plan.refreshing && now - plan.fetchedAt < LIVE_FRESH_MS;
+  // A refresh under way keeps them; the times shown are still the last live ones.
+  const liveFresh = plan.status === 'loaded' && now - plan.fetchedAt < LIVE_FRESH_MS;
+  // Leaving now, plan again every minute (Trip Details included) so live times don't age out.
+  const autoRefresh = tripTime.mode === 'now' && plan.status === 'loaded';
+  useEffect(() => {
+    if (!autoRefresh) return undefined;
+    const timer = setInterval(refresh, AUTO_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [autoRefresh, refresh]);
   const updatedLabel = plan.status !== 'loaded'
     ? ''
     : plan.refreshing

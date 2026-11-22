@@ -8,6 +8,7 @@ import { useTheme, useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { MAP_ATTRIBUTION } from './mapStyle';
+import { useSheetInset } from './mapSheetInset';
 
 const SIZE = 24;
 /** Tucked into the corner, closer in than the full-size buttons. */
@@ -75,3 +76,18 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   open: { paddingLeft: 5, paddingRight: 10 },
   text: { color: colors.mutedInk, ...typography.bodyStrong, fontSize: 11, lineHeight: 14 },
 });
+
+/**
+ * The credit on a map: in its corner above the map's own bottom padding, except under a sheet.
+ * There the page draws it (MapCredit with `creditBesideButton`) in the same layer as its map
+ * buttons, so it rides the sheet exactly as the location button does.
+ */
+export function SheetMapCredit({ bottomInset = 0 }: { bottomInset?: number }) {
+  const sheet = useSheetInset();
+  return sheet ? null : <MapCredit bottomInset={bottomInset} />;
+}
+
+/** The credit's `bottomInset` to sit level with a map button `buttonSize` across, `buttonBottom` up. */
+export function creditBesideButton(buttonBottom: number, buttonSize: number): number {
+  return buttonBottom + (buttonSize - SIZE) / 2 - EDGE;
+}
