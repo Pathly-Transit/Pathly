@@ -4,6 +4,7 @@ import { SvgXml } from 'react-native-svg';
 import { useAuth } from '../auth/AuthContext';
 import { destinationPinFace, destinationPinFaceSvg, destinationPinHex, type DestinationPinStyle } from '../data/destinationPin';
 import { useAppSettings } from '../theme/AppSettings';
+import { DECORATIVE_SVG } from './decorativeSvg';
 
 /** Phosphor's map pin (`map-pin-fill`, phosphorGlyphs.ts) without its hole, so the head holds a face. */
 const PIN_PATH = 'M128,16a88.1,88.1,0,0,0-88,88c0,75.3,80,132.17,83.41,134.55a8,8,0,0,0,9.18,0C136,236.17,216,179.3,216,104A88.1,88.1,0,0,0,128,16Z';
@@ -38,7 +39,7 @@ export function DestinationPinMarker({ pinStyle, scale = 1, testID }: { pinStyle
     + `<g transform="${HAIR_TRANSFORM}">${parts.hair}</g><g transform="${FACE_TRANSFORM}">${parts.face}</g></svg>`;
   return (
     <View accessibilityElementsHidden={true} importantForAccessibility="no-hide-descendants" pointerEvents="none" style={{ width, height }} testID={testID}>
-      <SvgXml accessible={false} height={height} width={width} xml={xml} />
+      <SvgXml {...DECORATIVE_SVG} height={height} width={width} xml={xml} />
     </View>
   );
 }
