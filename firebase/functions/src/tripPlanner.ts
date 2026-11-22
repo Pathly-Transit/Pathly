@@ -82,7 +82,8 @@ const MIN_WALK_STEP_METERS = 30;
 // ---------------------------------------------------------------------------------------------
 // The network, built once per instance and again when any agency's timetable changes.
 
-type LoadedNetwork = { key: string; network: TransitNetwork; router: TransitRouter; walks: Map<string, { meters: number; path: LatLng[] } | null> };
+type LoadedNetwork = { key: string; retryAt?: number; network: TransitNetwork; router: TransitRouter; walks: Map<string, { meters: number; path: LatLng[] } | null> };
+const NETWORK_RETRY_MS = 5_000;
 let loaded: LoadedNetwork | null = null;
 let loading: Promise<LoadedNetwork | null> | null = null;
 
@@ -98,20 +99,28 @@ async function buildNetwork(): Promise<LoadedNetwork | null> {
   await Promise.all(agencyIds.map((agencyId) => prepareAgencyStaticData(agencyId).catch(() => undefined)));
   const available = agencyIds.filter(isAgencyAvailable);
   const key = available.map((agencyId) => `${agencyId}@${agencySnapshotVersion(agencyId) ?? 'bundled'}`).join(',');
-  if (loaded?.key === key) return loaded;
+  if (loaded?.key === key && (loaded.retryAt === undefined || Date.now() < loaded.retryAt)) return loaded;
   const started = Date.now();
+  const previous = new Map(loaded?.network.parts.map((part) => [part.agencyId, part]) ?? []);
+  const failed: AgencyId[] = [];
   const timetables = await Promise.all(available.map(async (agencyId) => {
+    const version = agencySnapshotVersion(agencyId) ?? 'bundled';
+    const lastGood = previous.get(agencyId);
+    if (lastGood?.version === version) return { agencyId, version, timetable: lastGood.timetable };
     try {
       const file = await readRoutingTimetableFile(agencyId);
-      return file ? { agencyId, version: agencySnapshotVersion(agencyId) ?? 'bundled', timetable: decodeRoutingTimetable(file) } : null;
+      if (file) return { agencyId, version, timetable: decodeRoutingTimetable(file) };
     } catch (error) {
       logger.warn('Could not read an agency routing timetable', {
         agencyId,
         event: 'trip_planner_timetable_failed',
         reason: error instanceof Error ? error.message : String(error),
       });
-      return null;
     }
+    failed.push(agencyId);
+    // A transient failure preparing a newer timetable must not erase a working agency. Its
+    // retained version remains attached to the network; the requested version is retried soon.
+    return lastGood ? { agencyId, version: lastGood.version, timetable: lastGood.timetable } : null;
   }));
   const usable = timetables.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
   if (usable.length === 0) return null;
@@ -122,9 +131,11 @@ async function buildNetwork(): Promise<LoadedNetwork | null> {
     stops: network.stopCount,
     patterns: network.patternCount,
     trips: network.tripCount,
+    complete: failed.length === 0,
+    missingAgencies: failed,
     ms: Date.now() - started,
   });
-  return { key, network, router: new TransitRouter(network, MAX_ROUNDS), walks: new Map() };
+  return { key, ...(failed.length > 0 ? { retryAt: Date.now() + NETWORK_RETRY_MS } : {}), network, router: new TransitRouter(network, MAX_ROUNDS), walks: new Map() };
 }
 
 async function currentNetwork(): Promise<LoadedNetwork | null> {
