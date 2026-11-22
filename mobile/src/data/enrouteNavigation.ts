@@ -71,6 +71,8 @@ export type NavigationRouteSegment = {
   startCheckpointOrdinal: number;
   endCheckpointOrdinal: number;
   transitLegIndex?: number;
+  /** Exact service date/run/stop visits, independent of the itinerary's remaining tail. */
+  runKey?: string;
   line?: NavigationLine;
   headsign?: string;
   departureTime?: string;
@@ -563,6 +565,7 @@ export function normalizeItinerary(itinerary: Itinerary, options: NormalizeItine
     segments.push({
       stepIndex,
       kind: 'transit',
+      ...(parseTripRunRef(step.runRef) ? { runKey: tripRunRefKey(step.runRef!) } : {}),
       path,
       color: step.line.color,
       startCheckpointOrdinal: board.ordinal,

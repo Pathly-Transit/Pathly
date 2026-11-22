@@ -4,7 +4,7 @@ import {
 } from '../data/enrouteNavigation';
 import { tripNotificationContent } from '../data/tripAnnouncements';
 import type { TripLegObservation, TripLiveResponse } from '../data/tripLiveTypes';
-import { parseTripRunRef } from '../data/tripRunRef';
+import { parseTripRunRef, tripRunRefKey } from '../data/tripRunRef';
 
 export const BACKGROUND_TRIP_MAX_AGE_MS = 24 * 60 * 60_000;
 const MAX_CHECKPOINTS = 2000;
@@ -45,6 +45,20 @@ const copyFix = (fix: NavigationFix): NavigationFix => ({
   point: copyPoint(fix.point), capturedAt: fix.capturedAt, accuracyMeters: fix.accuracyMeters, source: 'real',
 });
 
+/** Run keys are compact operational identity, with the same strict fields as a selected native run. */
+function canonicalRunKey(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 8192) return null;
+  try {
+    const fields: unknown = JSON.parse(value);
+    if (!Array.isArray(fields) || fields.length !== 14) return null;
+    const ref = parseTripRunRef({ version: fields[0], agencyId: fields[1], scheduleVersion: fields[2], serviceDate: fields[3],
+      tripId: fields[4], startTime: fields[5], routeId: fields[6], ...(fields[7] === null ? {} : { directionId: fields[7] }),
+      boardStopId: fields[8], boardOccurrence: fields[9], ...(fields[10] === null ? {} : { boardStopSequence: fields[10] }),
+      alightStopId: fields[11], alightOccurrence: fields[12], ...(fields[13] === null ? {} : { alightStopSequence: fields[13] }) });
+    return ref && tripRunRefKey(ref) === value ? value : null;
+  } catch { return null; }
+}
+
 function copyCheckpoint(point: NavigationCheckpoint): NavigationCheckpoint {
   return {
     ordinal: point.ordinal, key: point.key, kind: point.kind, point: copyPoint(point.point), label: point.label,
@@ -55,11 +69,13 @@ function copyCheckpoint(point: NavigationCheckpoint): NavigationCheckpoint {
   };
 }
 function copySegment(segment: NavigationRouteSegment): NavigationRouteSegment {
+  const runKey = segment.kind === 'transit' ? canonicalRunKey(segment.runKey) : null;
   return {
     stepIndex: segment.stepIndex, kind: segment.kind, path: segment.path.map(copyPoint),
     startCheckpointOrdinal: segment.startCheckpointOrdinal, endCheckpointOrdinal: segment.endCheckpointOrdinal,
     toName: segment.toName, durationSeconds: segment.durationSeconds,
     ...(segment.transitLegIndex === undefined ? {} : { transitLegIndex: segment.transitLegIndex }),
+    ...(runKey ? { runKey } : {}),
     ...(segment.line ? { line: { name: segment.line.name, ...(segment.line.shortName === undefined ? {} : { shortName: segment.line.shortName }) } } : {}),
     ...(segment.headsign === undefined ? {} : { headsign: segment.headsign }),
     ...(segment.departureTime === undefined ? {} : { departureTime: segment.departureTime }),
@@ -124,8 +140,12 @@ export function tripAlertState(runtime: ActiveTripRuntime, previous: TripAlertSt
   let plan = copyPlan({ ...original, checkpoints, segments });
   const ordinal = Math.max(0, retained.findLastIndex((point) => point.ordinal <= runtime.cursor.checkpointOrdinal));
   let cursor = cursorAt(plan, runtime.cursor, ordinal);
-  const owned = previous && previous.expiresAt > now && sameTripAlertOwner(previous, runtime)
-    && previous.plan.selection.fingerprint === runtime.selection.fingerprint;
+  const sameSession = previous && previous.expiresAt > now && sameTripAlertOwner(previous, runtime);
+  const owned = sameSession && previous.plan.selection.fingerprint === runtime.selection.fingerprint;
+  const claimedRuns = new Set(sameSession ? previous.plan.segments.filter((segment) => segment.kind === 'transit'
+    && previous.alertedSteps.includes(segment.stepIndex)).map((segment) => canonicalRunKey(segment.runKey)).filter((key) => key !== null) : []);
+  const alertedSteps = owned ? [...previous.alertedSteps] : sameSession ? plan.segments.filter((segment) => segment.kind === 'transit'
+    && segment.runKey !== undefined && claimedRuns.has(segment.runKey)).map((segment) => segment.stepIndex) : [];
   let evidence: NavigationEvidence | null = null;
   const latestFixes = owned ? previous.latestFixes.filter((fix) => realFixValid(fix) && fresh(fix.capturedAt, now)).map(copyFix) : [];
   if (owned) {
@@ -153,7 +173,7 @@ export function tripAlertState(runtime: ActiveTripRuntime, previous: TripAlertSt
   const result: TripAlertState = {
     version: 1, uid: runtime.uid, sessionId: runtime.sessionId,
     expiresAt: owned ? Math.min(previous.expiresAt, runtime.startedAt + BACKGROUND_TRIP_MAX_AGE_MS) : runtime.startedAt + BACKGROUND_TRIP_MAX_AGE_MS,
-    plan, cursor, evidence, alertedSteps: owned ? [...previous.alertedSteps] : [], latestFixes,
+    plan, cursor, evidence, alertedSteps, latestFixes,
     ...(owned && previous.lastStatusAttemptAt !== undefined ? { lastStatusAttemptAt: previous.lastStatusAttemptAt } : {}),
     ...(owned && previous.liveStatus ? { liveStatus: previous.liveStatus } : {}),
     ...(owned && previous.lastProgressContent ? { lastProgressContent: previous.lastProgressContent } : {}),
@@ -239,6 +259,7 @@ function planValid(plan: NormalizedNavigationPlan): boolean {
       || !text(segment.toName) || !Number.isFinite(segment.durationSeconds) || segment.durationSeconds < 0 || segment.durationSeconds > 7 * 24 * 3600
       || (segment.distanceMeters !== undefined && (!Number.isFinite(segment.distanceMeters) || segment.distanceMeters < 0 || segment.distanceMeters > 2_000_000))
       || (segment.transitLegIndex !== undefined && !integer(segment.transitLegIndex, MAX_SEGMENTS - 1))
+      || (segment.runKey !== undefined && (segment.kind !== 'transit' || !canonicalRunKey(segment.runKey)))
       || (segment.departureTime !== undefined && !time(segment.departureTime))
       || (segment.arrivalTime !== undefined && !time(segment.arrivalTime))
       || (segment.headsign !== undefined && !text(segment.headsign))
