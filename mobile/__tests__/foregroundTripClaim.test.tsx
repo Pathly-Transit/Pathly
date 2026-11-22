@@ -83,6 +83,34 @@ it('still delivers a warning when an in-flight claim sees an equivalent fresh gu
   hook.unmount();
 });
 
+it('keeps a deferred approach warning through ETA changes and posts the latest arrival once', async () => {
+  const pending = deferred<boolean>();
+  claim.mockImplementationOnce(async (_owner, _step, deliver) => {
+    const firstWarning = await pending.promise;
+    return { firstWarning, accepted: await deliver(firstWarning) };
+  });
+  const hook = render();
+  await waitFor(() => expect(Notifications.scheduleNotificationAsync).toHaveBeenCalled());
+  (Notifications.scheduleNotificationAsync as jest.Mock).mockClear();
+  hook.rerender({ uid: 'alice', sessionId: 'trip-a', stepIndex: 1, guidance: approach });
+  await waitFor(() => expect(claim).toHaveBeenCalledTimes(1));
+  const delayed = { ...approach, arrivalTime: '2026-11-21T18:10:00-05:00' };
+  hook.rerender({ uid: 'alice', sessionId: 'trip-a', stepIndex: 1, guidance: delayed });
+  await act(async () => { pending.resolve(true); });
+  await waitFor(() => expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith(expect.objectContaining({
+    content: expect.objectContaining({ body: expect.stringContaining('6:10 PM'), sound: 'default' }),
+  })));
+  expect(Speech.speak).toHaveBeenCalledTimes(1);
+  expect(Haptics.notificationAsync).toHaveBeenCalledTimes(1);
+  hook.rerender({ uid: 'alice', sessionId: 'trip-a', stepIndex: 1, guidance: { ...delayed, arrivalTime: '2026-11-21T18:11:00-05:00' } });
+  await waitFor(() => expect(Notifications.scheduleNotificationAsync).toHaveBeenLastCalledWith(expect.objectContaining({
+    content: expect.objectContaining({ body: expect.stringContaining('6:11 PM'), interruptionLevel: 'passive' }),
+  })));
+  expect(Speech.speak).toHaveBeenCalledTimes(1);
+  expect(Haptics.notificationAsync).toHaveBeenCalledTimes(1);
+  hook.unmount();
+});
+
 it('does not speak or repost a deferred claim after the trip owner unmounts', async () => {
   const pending = deferred<boolean>();
   claim.mockImplementationOnce(async (_owner, _step, deliver) => { const firstWarning = await pending.promise; return { firstWarning, accepted: await deliver(firstWarning) }; });

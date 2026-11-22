@@ -69,7 +69,10 @@ type Options = {
 export function useTripGuidanceAlerts({ uid, stepIndex, sessionId, guidance, arrivedDestination, settings, notificationsEnabled }: Options) {
   const { haptics, notification, voice } = settings;
   const showsNotification = notification && notificationsEnabled;
-  const guidanceKey = guidance ? `${stepIndex ?? ''}:${guidance.phase}:${JSON.stringify(tripNotificationContent(guidance))}` : null;
+  // Warning ownership follows the navigation step. A changing ETA only revises its content;
+  // it must not cancel a warning waiting for permission or the shared delivery ledger.
+  const guidanceKey = guidance ? JSON.stringify([stepIndex, guidance.phase, guidance.currentAction,
+    guidance.nextAction, guidance.nextStopName, guidance.remainingStops]) : null;
   // What the rider was last told, per trip, so a reopened app or a re-render doesn't repeat it.
   const last = useRef<{ sessionId: string; guidance: NavigationGuidance } | null>(null);
   // The notification last posted: the trip updates on many location fixes that change nothing shown.
@@ -78,8 +81,8 @@ export function useTripGuidanceAlerts({ uid, stepIndex, sessionId, guidance, arr
   const pendingApproach = useRef<{ key: string; announcement: TripAnnouncement } | null>(null);
   const acceptedApproach = useRef<string | null>(null);
   const approachPermissionAttempted = useRef(false);
-  const current = useRef({ uid, sessionId, settings, showsNotification, guidanceKey });
-  useLayoutEffect(() => { current.current = { uid, sessionId, settings, showsNotification, guidanceKey }; }, [uid, sessionId, settings, showsNotification, guidanceKey]);
+  const current = useRef({ uid, sessionId, settings, showsNotification, guidanceKey, guidance });
+  useLayoutEffect(() => { current.current = { uid, sessionId, settings, showsNotification, guidanceKey, guidance }; }, [uid, sessionId, settings, showsNotification, guidanceKey, guidance]);
 
   // The old owner stops before a replacement/arrival starts speaking. Account changes and
   // unmounts also clean up, even when this hook never renders an explicit sessionId=null.
@@ -119,7 +122,7 @@ export function useTripGuidanceAlerts({ uid, stepIndex, sessionId, guidance, arr
       }
       if (accepted && announcement?.strength === 'alert') acceptedApproach.current = approachKey;
       if (current.current.showsNotification) {
-        const { title, body } = tripNotificationContent(guidance);
+        const { title, body } = tripNotificationContent(current.current.guidance ?? guidance);
         const alert = announcement?.strength === 'alert' && first;
         const key = `${title}\n${body}`;
         if (alert || notified.current !== key) {
