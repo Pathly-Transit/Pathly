@@ -152,6 +152,18 @@ describe('active TripMap', () => {
     );
   });
 
+  it('draws a piece fresh when it turns from walk to ride, so the walk dots leave the ride', () => {
+    const props = { destination: DESTINATION, interactive: true, origin: ORIGIN, testID: 'moved-map' };
+    const screen = render(<TripMap {...props} navigationProgress={progress} />);
+    expect(screen.getByTestId('moved-map-progress-current-1', hidden).props.dotted).toBe(true);
+    // A moved trip re-split: the second piece is now the ride, not the walk.
+    const moved: TripMapProgress = { ...progress, segments: [progress.segments[0]!, { ...progress.segments[2]!, state: 'current' }] };
+    screen.rerender(<TripMap {...props} navigationProgress={moved} />);
+    const ride = screen.getByTestId('moved-map-progress-current-1', hidden);
+    expect(ride.props.dotted).toBe(false);
+    expect(ride.props.id).toBe('trip-leg-1-ride');
+  });
+
   it('labels a tapped stop and clears the label on a tap elsewhere', () => {
     const screen = render(<TripMap destination={DESTINATION} interactive={true} navigationProgress={progress} origin={ORIGIN} testID="label-map" />);
     expect(screen.queryByTestId('trip-map-stop-label', hidden)).toBeNull();

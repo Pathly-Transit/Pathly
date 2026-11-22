@@ -15,7 +15,7 @@ function adminEmails(): Set<string> {
 /** True when the caller's verified sign-in email is a configured admin email. */
 export function isAdmin(auth: CallableRequest['auth']): boolean {
   const email = auth?.token?.email;
-  return typeof email === 'string' && adminEmails().has(email.toLowerCase());
+  return auth?.token?.email_verified === true && typeof email === 'string' && adminEmails().has(email.toLowerCase());
 }
 
 /** Rejects anyone but an admin; call after enforceCallableSecurity so the caller is signed in. */

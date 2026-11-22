@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 
+import { useAuth } from '../auth/AuthContext';
 import { visibleTrains } from '../data/liveTrains';
 import { distanceMeters, onPath, splitPathAtStop, type LatLon } from '../data/routeDirection';
 import { fetchRouteGeometry, type RouteGeometry } from '../data/routeGeometry';
@@ -18,6 +19,8 @@ type LegLine = { key: string; source: LiveSource; boardStopId: string; alight: L
 
 /** Where a ride's vehicles still matter: the line up to the rider's stop (drawn faint), and on to where they get off. */
 type LineReach = { approach: LatLon[]; upToAlighting: LatLon[] };
+const NO_LIVE_LINES: ReadonlyMap<string, readonly RouteLiveVehicle[]> = new Map();
+const NO_REACHES: ReadonlyMap<string, LineReach> = new Map();
 
 /** A ride's line as the live feeds ask for it. */
 export function legSource({ agencyId, routeId, boardStopId }: { agencyId: string; routeId: string; boardStopId: string }): LiveSource {
@@ -72,9 +75,13 @@ function lineReach(geometry: RouteGeometry, line: LegLine): LineReach | null {
  */
 export function useTripVehicles(itinerary: Itinerary | null | undefined, fallbackColor: string): { vehicles: readonly TripVehicle[]; approachLines: readonly TripApproachLine[] } {
   const lines = useMemo(() => legLines(itinerary, fallbackColor), [itinerary, fallbackColor]);
-  const linesKey = lines.map((line) => `${line.key}@${line.boardStopId}`).join('|');
-  const [byLine, setByLine] = useState<ReadonlyMap<string, readonly RouteLiveVehicle[]>>(new Map());
-  const [reaches, setReaches] = useState<ReadonlyMap<string, LineReach>>(new Map());
+  const linesKey = lines.map((line) => `${line.key}@${line.boardStopId}>${line.alight.lat},${line.alight.lng}`).join('|');
+  const { user } = useAuth();
+  const ownerKey = `${user?.uid ?? ''}|${linesKey}`;
+  const [loaded, setLoaded] = useState<{ key: string; byLine: ReadonlyMap<string, readonly RouteLiveVehicle[]> } | null>(null);
+  const [geometry, setGeometry] = useState<{ key: string; reaches: ReadonlyMap<string, LineReach> } | null>(null);
+  const byLine = loaded?.key === ownerKey ? loaded.byLine : NO_LIVE_LINES;
+  const reaches = geometry?.key === linesKey ? geometry.reaches : NO_REACHES;
   const now = useNow(POLL_MS);
   const appActive = useAppActive();
 
@@ -85,10 +92,10 @@ export function useTripVehicles(itinerary: Itinerary | null | undefined, fallbac
     const load = () => {
       void Promise.all(lines.map((line) => fetchRouteLiveData(line.source).then((data) => [line.key, data.vehicles] as const, () => null))).then((results) => {
         if (cancelled) return;
-        setByLine((current) => {
-          const next = new Map(current);
+        setLoaded((current) => {
+          const next = new Map(current?.key === ownerKey ? current.byLine : []);
           for (const result of results) if (result) next.set(result[0], result[1]);
-          return next;
+          return { key: ownerKey, byLine: next };
         });
       });
     };
@@ -101,14 +108,14 @@ export function useTripVehicles(itinerary: Itinerary | null | undefined, fallbac
         return reach ? ([line.key, reach] as const) : null;
       })
       : Promise.resolve(null)))).then((results) => {
-      if (!cancelled) setReaches(new Map(results.filter((result) => result !== null)));
+      if (!cancelled) setGeometry({ key: linesKey, reaches: new Map(results.filter((result) => result !== null)) });
     });
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the lines themselves, not the itinerary object
-  }, [linesKey, appActive]);
+  }, [linesKey, ownerKey, appActive]);
 
   const vehicles = useMemo(
     () => lines.flatMap((line) => {

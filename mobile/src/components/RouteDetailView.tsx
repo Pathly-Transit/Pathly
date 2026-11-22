@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDebug } from '../debug/DebugContext';
 import { useTransitLive } from '../data/TransitLiveContext';
 import { fetchRouteGeometry, fetchRouteTransfers, type LineTransfer, type RouteGeometry } from '../data/routeGeometry';
+import { entranceCount, entranceRows, type StationEntrance } from '../data/stationEntrances';
 import { STATION_TRANSFERS, type StationTransfer, type TransferMode } from '../data/stationTransfers';
 import { departureDisplay, differentEndStop, directionDestination, preferredDirectionIndex, formatClockTime, scheduleStopsFromNow, stopsForDirection, type RouteDetail, type RoutePrediction } from '../data/transit';
 import { formatPostedAt, groupNotices, routeNotices, type RouteNotice } from '../data/routeNotices';
@@ -16,6 +17,7 @@ import { focusStopIndex, withAlpha } from '../data/routeDirection';
 import { useWalkingPath, walkingMinutes } from '../data/walkingPath';
 import { useAccessibleStops } from '../data/accessibleStops';
 import { useUserPreferences } from '../data/userPreferences';
+import { onePathLinePerColor } from '../data/pathLines';
 import { transferColor, useRouteColor } from '../data/routeColors';
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useViewportSize } from '../hooks/useViewportSize';
@@ -33,11 +35,12 @@ import { MapBackdrop } from './MapBackdrop';
 import { MapLabelGlow } from './MapLabelGlow';
 import { Mascot } from './Mascot';
 import { VehicleSheet } from './VehicleSheet';
+import type { VehicleScreenPoint } from './SelectedVehicleOverlay';
 import { useOnBoardVehicle } from '../hooks/useTripRide';
 import { RouteMap } from './RouteMap';
 import { pointAlong, routeFocus, RouteLines, VehicleMarker, type MapLeg } from './RouteMapOverlay';
 import { AgencyLogo } from './AgencyLogo';
-import { badgeLabel, RouteBadge, transitModeForAgency } from './RouteBadge';
+import { badgeLabel, isPath, PathMark, RouteBadge, transitModeForAgency } from './RouteBadge';
 import { MAP_CONTROL_SIZE, MapControlButton } from './MapControlButton';
 import { mapPageMapHeight } from './mapSheetLayout';
 import { PressableScale } from './PressableScale';
@@ -208,6 +211,7 @@ const OWN_TRANSFER_KIND: Record<NonNullable<RouteDetail['liveSource']>['agencyId
   busco: { agency: 'MTA Bus', mode: 'bus' },
   nycferry: { agency: 'NYC Ferry', mode: 'ferry' },
   siferry: { agency: 'Staten Island Ferry', mode: 'ferry' },
+  path: { agency: 'PATH', mode: 'subway' },
 };
 
 const isLineTransfer = (transfer: StationTransfer | LineTransfer): transfer is LineTransfer => 'routeId' in transfer;
@@ -221,10 +225,12 @@ function TransferChip({ onOpen, stopName, testID, transfer }: { onOpen?: (transf
   const color = transferHue ? tint(transferHue) : null;
   // Recolored buses are white-on-color, like every bus badge; rail keeps its own text color.
   const textColor = color && color !== transfer.color ? colors.white : transfer.textColor ?? colors.white;
-  const chipStyle = [styles.transferChip, transfer.mode === 'subway' && styles.subwayChip, { backgroundColor: color ?? colors.surfaceMuted }];
+  const pathLine = isPath(transfer.agency);
+  // PATH's lines are its P in the line's color, on no chip of their own.
+  const chipStyle = pathLine ? styles.pathChip : [styles.transferChip, transfer.mode === 'subway' && styles.subwayChip, { backgroundColor: color ?? colors.surfaceMuted }];
   const labelColor = color ? textColor : colors.ink;
   // MTA-style signs: subway bullets and bus badges are text only; rail and ferries carry their mode's glyph.
-  const label = (
+  const label = pathLine ? <PathMark color={color ?? colors.ink} height={22} /> : (
     <>
       {transfer.mode === 'rail' || transfer.mode === 'ferry' ? <Icon color={labelColor} name={transfer.mode} size={13} /> : null}
       <Text numberOfLines={1} style={[styles.transferText, transfer.mode === 'subway' && styles.subwayText, { color: labelColor }]}>{transfer.name}</Text>
@@ -244,13 +250,19 @@ function TransferChip({ onOpen, stopName, testID, transfer }: { onOpen?: (transf
       </PressableScale>
     );
   }
-  return <View style={chipStyle} testID={testID}>{label}</View>;
+  return <View accessibilityLabel={pathLine ? `PATH ${transfer.name}` : undefined} accessible={pathLine || undefined} style={chipStyle} testID={testID}>{label}</View>;
+}
+
+/** A station's transfers with one PATH P per color (see onePathLinePerColor). */
+export function withoutRepeatedPathColors<T extends StationTransfer | LineTransfer>(transfers: readonly T[]): T[] {
+  return onePathLinePerColor(transfers, (transfer) => ({ agency: transfer.agency, code: transfer.name, color: transfer.color }));
 }
 
 // Chip widths, from transferChip/subwayChip/transferText below, to fit one row without measuring each.
 const CHIP_GAP = 5;
 const MORE_CHIP_WIDTH = 36;
 function transferChipWidth(transfer: StationTransfer | LineTransfer): number {
+  if (isPath(transfer.agency)) return 32;
   if (transfer.mode === 'subway') return 24;
   const icon = transfer.mode === 'rail' || transfer.mode === 'ferry' ? 17 : 0;
   return Math.max(24, 16 + icon + transfer.name.length * 7.5);
@@ -272,8 +284,46 @@ export function transferChipsThatFit(transfers: readonly (StationTransfer | Line
  * rest. The "+N" isn't a button of its own: the stop row around it already opens the full list (and
  * a button inside that row's button is invalid HTML on the web).
  */
-function TransferChips({ onOpen, stopName, transfers }: { onOpen?: (transfer: LineTransfer) => void; stopName: string; transfers: readonly (StationTransfer | LineTransfer)[] }) {
+/**
+ * A station's ways in and out, under its name in the stop list: a count that opens the list
+ * ("Stair, NE corner"), and a button that marks them on the map.
+ */
+function StopEntrances({ color, entrances, expanded, index, onShowOnMap, onToggle, stopName }: { color: string; entrances: readonly StationEntrance[]; expanded: boolean; index: number; onShowOnMap: () => void; onToggle: () => void; stopName: string }) {
   const styles = useThemedStyles(createStyles);
+  const { colors } = useTheme();
+  return (
+    <View style={styles.entrances}>
+      <PressableScale
+        accessibilityHint={expanded ? 'Hides the ways in and out' : 'Lists the ways in and out of this station'}
+        accessibilityLabel={`${entranceCount(entrances)} at ${stopName}`}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        hitSlop={6}
+        onPress={onToggle}
+        pressedScale={0.98}
+        style={styles.entrancesToggle}
+        testID={`stop-entrances-toggle-${index}`}
+      >
+        <View style={[styles.entranceMark, { backgroundColor: color }]}><Icon color="#FFFFFF" name="arrowRight" size={9} /></View>
+        <Text style={styles.entrancesCount}>{entranceCount(entrances)}</Text>
+        <Icon color={colors.mutedInk} name={expanded ? 'collapse' : 'expand'} size={14} />
+      </PressableScale>
+      {expanded ? (
+        <View testID={`stop-entrances-${index}`}>
+          {entranceRows(entrances).map((row) => <Text key={row} style={styles.entranceItem}>{row}</Text>)}
+          <PressableScale accessibilityHint="Marks this station's ways in and out on the map" accessibilityRole="button" hitSlop={6} onPress={onShowOnMap} pressedScale={0.98} style={styles.entrancesMapButton} testID={`stop-entrances-map-${index}`}>
+            <Icon color={color} name="map" size={14} />
+            <Text style={[styles.entrancesMapText, { color }]}>Show on map</Text>
+          </PressableScale>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function TransferChips({ onOpen, stopName, transfers: allTransfers }: { onOpen?: (transfer: LineTransfer) => void; stopName: string; transfers: readonly (StationTransfer | LineTransfer)[] }) {
+  const styles = useThemedStyles(createStyles);
+  const transfers = withoutRepeatedPathColors(allTransfers);
   const [width, setWidth] = useState<number | null>(null);
   const fits = width == null ? MAX_TRANSFER_CHIPS : transferChipsThatFit(transfers, width);
   const shown = transfers.slice(0, Math.max(1, Math.min(fits, MAX_TRANSFER_CHIPS)));
@@ -357,7 +407,7 @@ function TransfersSheet({ onClose, onOpen, sheet }: {
           </View>
           <ScrollView contentContainerStyle={styles.transfersSheetContent}>
             {TRANSFER_MODE_HEADINGS.map(({ mode, title }) => {
-              const ofMode = sheet.transfers.filter((transfer) => transfer.mode === mode);
+              const ofMode = withoutRepeatedPathColors(sheet.transfers).filter((transfer) => transfer.mode === mode);
               if (ofMode.length === 0) return null;
               return (
                 <View key={mode} testID={`transfers-sheet-${mode}`}>
@@ -386,6 +436,8 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
   // large, bold labels); only a line too dark for the dark sheet is lightened.
   const routeText = isDark ? readableColor(routeColor, colors.surface, 3) : routeColor;
   // Saved, the star is a white star on the route's color (dark on pale lines like the N/Q/R/W).
+  // One text color on the line's color everywhere in this view (the switch, the chosen departure,
+  // the save button, "I'm on this train"): dark on light colors like PATH's orange, white on the rest.
   const favoriteTint = { color: routeColor, onColor: contrastRatio(colors.white, routeColor) >= 2.2 ? colors.white : '#1A1A1A' };
   // Departure tiles: filled with the route color, lightly (solid for the one picked), no outline.
   const tileFill = withAlpha(routeColor, isDark ? 0.28 : 0.16);
@@ -394,6 +446,11 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
   // Which pill's sheet is open: each pill opens only its own notice.
   const [openSheet, setOpenSheet] = useState<{ kind: 'alerts' | 'outlook'; index: number } | null>(null);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
+  const [vehicleScreenPoint, setVehicleScreenPoint] = useState<VehicleScreenPoint | null>(null);
+  // The stop whose entrances are listed, and the one whose entrances the map shows (`key` repeats a request).
+  const [openEntrances, setOpenEntrances] = useState<string | null>(null);
+  const [entranceFocus, setEntranceFocus] = useState<{ stopId: string; key: number } | null>(null);
+  const [revealMapRequest, setRevealMapRequest] = useState(0);
   const [transfersSheet, setTransfersSheet] = useState<{ stop: LiveStop; transfers: readonly (StationTransfer | LineTransfer)[] } | null>(null);
   const liveStatus = useTransitLive(route.id);
   const debug = useDebug();
@@ -568,6 +625,14 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
     : undefined);
 
   const vehicleIcon = transitModeForAgency(route.agency);
+  // Where a tapped vehicle is headed ("Port Jefferson Station"), not just "Northbound": the live
+  // times' headsign, else the line's, else its last stop in this direction.
+  const geometryStops = geometryStatus.status === 'loaded' ? geometryStatus.geometry.stops : [];
+  const vehicleHeadsign = [
+    activePredictions.find((prediction) => prediction.headsign)?.headsign,
+    geometryStatus.status === 'loaded' ? geometryStatus.geometry.headsign : null,
+    wholeRoute ? null : geometryStops.at(-1)?.name,
+  ].find((name): name is string => !!name && !/bound$/i.test(name.trim())) ?? activeDestination;
   // Delays on the shown direction's tracked departures, then MTA alerts, under the time cards.
   // The whole line shows no departures, so only its alerts, not one stop's delays.
   const notices = routeNotices(route, wholeRoute ? [] : activePredictions, vehicleIcon);
@@ -647,7 +712,9 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
   const labelBottom = insets.top + MAP_BADGE_TOP + MAP_BUS_LABEL_HEIGHT + MAP_AGENCY_LOGO_ROOM;
   const glowHeight = Math.min(labelBottom + 140, Math.max(labelBottom + 70, mapHeight * 0.55));
   const glowWidth = Math.min(300, width * 0.62);
-  const mapGlow = vehicleIcon !== 'subway' ? <MapLabelGlow color={colors.surface} height={glowHeight} width={glowWidth} /> : null;
+  // PATH's P and the Port Authority's logo sit on the map like a bus name, so they get the glow too.
+  const pathRoute = isPath(route.agency);
+  const mapGlow = vehicleIcon !== 'subway' || pathRoute ? <MapLabelGlow color={colors.surface} height={glowHeight} width={glowWidth} /> : null;
   const mapBadge = vehicleIcon !== 'subway' ? (
     <>
       <View
@@ -667,7 +734,7 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
         color={routeColor}
         shortName={badgeLabel(route)}
         size="xlarge"
-        style={[styles.mapRouteBadge, { top: insets.top + MAP_BADGE_TOP }]}
+        style={[styles.mapRouteBadge, pathRoute && styles.mapPathMark, { top: insets.top + MAP_BADGE_TOP }]}
         testID="route-detail-badge"
       />
       <AgencyLogo agencyId={route.liveSource?.agencyId} style={[styles.mapAgencyLogo, { top: insets.top + MAP_BADGE_TOP + MAP_ROUTE_BADGE_HEIGHT + 8 }]} testID="route-detail-agency-logo" />
@@ -707,6 +774,7 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
         centerOnUserRequest={centerOnUserRequest}
         color={routeColor}
         directionId={geometryDirectionId}
+        entranceFocus={entranceFocus ?? undefined}
         exploreFrom={wholeRoute ? undefined : exploreFrom}
         // Clear of the back button, line title and top-right buttons, and the GO button at the bottom.
         fitPadding={{ top: insets.top + 8 + MAP_CONTROL_SIZE * 2 + 50, right: MAP_CONTROL_SIZE + 28, bottom: goAction ? 60 + 16 + 34 : 48, left: 48 }}
@@ -719,6 +787,8 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
         } : undefined}
         onUserPan={() => setIsLocationCentered(false)}
         onVehiclePress={setSelectedVehicleId}
+        onSelectedVehiclePosition={setVehicleScreenPoint}
+        selectedVehicleId={selectedVehicle?.tripId ?? null}
         // The agency's real track/street shape for this direction, served with the stop list.
         path={geometryStatus.geometry.path}
         stops={geometryStatus.geometry.stops}
@@ -756,6 +826,8 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
       action={goAction}
       actionSticks={false}
       controlsScrollWithMap={true}
+      // A direction with a few stops opens only as far as its stops go, not into empty sheet.
+      fitContent={true}
       interactiveMap={liveMap}
       contentStyle={styles.content}
       contentTestID="route-detail-content"
@@ -763,6 +835,7 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
       handle={{ accessibilityHint: 'Expands or collapses the route details.', accessibilityLabel: 'Route details handle', testID: 'route-sheet-handle' }}
       map={map}
       mapButtons={liveMap ? locateButton : undefined}
+      revealMapRequest={revealMapRequest}
       // With GO riding the sheet's edge, Locate moves up under the save and alerts buttons, clear of it.
       mapButtonsTop={goAction ? 8 + MAP_CONTROL_SIZE + 10 + (alerts ? MAP_CONTROL_SIZE + 10 : 0) + 2 : undefined}
       // Ignores touches, so the badge never blocks panning the live map under it.
@@ -783,6 +856,7 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
             color={routeColor}
             labels={[directionDestination(route.directions[0]!.direction), directionDestination(route.directions[1]!.direction)]}
             onChange={setActiveDirectionIndex}
+            textColor={favoriteTint.onColor}
           />
         ) : (
           <FitText accessibilityRole="header" style={styles.title} testID="route-detail-destination">{activeDestination}</FitText>
@@ -927,18 +1001,27 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
       />
       <VehicleSheet
         color={routeColor}
-        destination={activeDestination}
+        onColor={favoriteTint.onColor}
+        destination={vehicleHeadsign}
+        focusStopId={wholeRoute ? undefined : activeDirection.stopId}
+        focusStopName={wholeRoute ? undefined : activeDirection.stopName}
         lineName={badgeLabel(route)}
         liveSource={route.liveSource}
         mode={vehicleIcon}
         onClaim={ride.claim}
-        onClose={() => setSelectedVehicleId(null)}
+        onClose={() => {
+          setSelectedVehicleId(null);
+          setVehicleScreenPoint(null);
+        }}
         onBoardTripId={onBoardTripId}
         onDismiss={ride.dismiss}
+        path={geometryStatus.status === 'loaded' ? geometryStatus.geometry.path : undefined}
+        predictions={wholeRoute ? [] : activePredictions}
         reportFix={locationFix}
         reportSource={route.liveSource}
         riderAt={locationFix && (!tripRide || onTripLine) ? { lat: locationFix.lat, lon: locationFix.lon } : null}
         ridingTripId={ride.ridingTripId}
+        selectedVehiclePoint={vehicleScreenPoint}
         sharingEnabled={ride.sharingEnabled}
         stops={geometryStatus.status === 'loaded' ? geometryStatus.geometry.stops : []}
         vehicle={selectedVehicle}
@@ -975,12 +1058,18 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
                 <Text style={styles.walkText}>{`${walkMinutes} min`}</Text>
               </View>
             ) : null;
+            const entrancesByStop = new Map((geometryStatus.status === 'loaded' ? geometryStatus.geometry.stops : [])
+              .filter((stop) => (stop.entrances?.length ?? 0) > 0)
+              .map((stop) => [stop.stopId, stop.entrances!]));
             return liveStops.map((stop, index) => {
               const isFirst = index === 0;
               const isLast = index === liveStops.length - 1;
               const isNearestMatch = index === nearestMatchIndex;
               const isHighlighted = !wholeRoute && (nearestMatchIndex >= 0 ? isNearestMatch : isFirst);
               const transfers = transfersFor(route, stop, lineTransfers);
+              // A subway or PATH station's ways in and out, served with the line's stops.
+              const stopId = stop.stopId;
+              const entrances = stopId ? entrancesByStop.get(stopId) : undefined;
               // On the whole line a stop opens the line there; otherwise one with transfers lists them.
               const at = wholeRoute && onOpenStop ? tappedStop(stop) : null;
               const canOpen = at != null || transfers.length > 0;
@@ -1004,7 +1093,20 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
                   <View style={styles.timelineRail}>{!isFirst ? <View style={[styles.rail, styles.railTop, { backgroundColor: routeColor }]} /> : null}<View style={[styles.stopDot, { borderColor: routeColor }, isHighlighted && styles.stopDotHighlighted]} testID={isHighlighted ? `stop-dot-highlighted-${index}` : undefined} />{!isLast ? <View style={[styles.rail, styles.railBottom, { backgroundColor: routeColor }]} /> : null}</View>
                   {/* One divider spans the name and the time, not just the name. */}
                   <View style={styles.stopBody} testID={`stop-row-body-${stop.name}`}>
-                    <View style={styles.stopCopy}>{isFirst ? walkNote : null}<View style={styles.stopNameRow}><Text style={styles.stopName}>{stop.name}</Text>{isAccessibleStop?.(stop.stopId) ? <View accessibilityLabel="Wheelchair accessible" accessible={true} style={styles.wheelchair} testID={`stop-accessible-${index}`}><Icon color={colors.white} name="wheelchair" size={12} /></View> : null}</View>{debug.overlays.ids && stop.stopId ? <Text selectable={true} style={styles.debugNote} testID={`stop-debug-id-${stop.stopId}`}>{`stop ${stop.stopId}`}</Text> : null}{transfers.length > 0 ? <TransferChips stopName={stop.name} transfers={transfers} /> : null}</View>
+                    <View style={styles.stopCopy}>{isFirst ? walkNote : null}<View style={styles.stopNameRow}><Text style={styles.stopName}>{stop.name}</Text>{isAccessibleStop?.(stop.stopId) ? <View accessibilityLabel="Wheelchair accessible" accessible={true} style={styles.wheelchair} testID={`stop-accessible-${index}`}><Icon color={colors.white} name="wheelchair" size={12} /></View> : null}</View>{debug.overlays.ids && stop.stopId ? <Text selectable={true} style={styles.debugNote} testID={`stop-debug-id-${stop.stopId}`}>{`stop ${stop.stopId}`}</Text> : null}{transfers.length > 0 ? <TransferChips stopName={stop.name} transfers={transfers} /> : null}{entrances && stopId ? (
+                      <StopEntrances
+                        color={routeColor}
+                        entrances={entrances}
+                        expanded={openEntrances === stopId}
+                        index={index}
+                        onShowOnMap={() => {
+                          setEntranceFocus((current) => ({ stopId, key: (current?.key ?? 0) + 1 }));
+                          setRevealMapRequest((count) => count + 1);
+                        }}
+                        onToggle={() => setOpenEntrances((current) => (current === stopId ? null : stopId))}
+                        stopName={stop.name}
+                      />
+                    ) : null}</View>
                     {wholeRoute ? null : <Text style={styles.stopTime}>{stop.time}</Text>}
                   </View>
                 </PressableScale>
@@ -1036,6 +1138,8 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   // Bus routes name themselves in the route's color straight on the map, haloed so it reads over streets.
   // The agency's logo, smaller, under the route's name or sign.
   mapAgencyLogo: { position: 'absolute', left: 16 },
+  // The P is drawn on no sign, so a sign's shadow would show as a box around it.
+  mapPathMark: { shadowOpacity: 0, elevation: 0 },
   mapBusLabel: {
     position: 'absolute',
     left: 16,
@@ -1371,6 +1475,13 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     flex: 1,
     paddingVertical: 10,
   },
+  entrances: { marginTop: 6 },
+  entrancesToggle: { alignSelf: 'flex-start', minHeight: 24, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  entranceMark: { width: 14, height: 14, alignItems: 'center', justifyContent: 'center', borderRadius: 3 },
+  entrancesCount: { color: colors.mutedInk, fontFamily: fontFamilies.bold, fontSize: 12 },
+  entranceItem: { marginTop: 4, marginLeft: 20, color: colors.mutedInk, ...typography.metadata, fontSize: 12 },
+  entrancesMapButton: { alignSelf: 'flex-start', minHeight: 28, flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4, marginLeft: 20 },
+  entrancesMapText: { fontFamily: fontFamilies.extraBold, fontSize: 12 },
   transfers: {
     flexDirection: 'row',
     overflow: 'hidden',
@@ -1389,6 +1500,8 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     paddingHorizontal: 8,
     borderRadius: 10,
   },
+  // PATH's P, sized like the other signs.
+  pathChip: { height: 24, justifyContent: 'center' },
   // Subway bullets are round, as on MTA signage.
   subwayChip: {
     width: 24,

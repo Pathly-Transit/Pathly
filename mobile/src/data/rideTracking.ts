@@ -2,7 +2,8 @@ import { useAuth } from '../auth/AuthContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { BeanAvatarConfig } from '../avatars/beanAvatar';
-import { callable } from '../lib/firebase';
+import { auth, callable } from '../lib/firebase';
+import { useAppActive } from '../hooks/useAppActive';
 import type { NavigationFix } from './enrouteNavigation';
 import { IDLE_RIDE, nextRideState, type FeedVehicle, type RideFix, type RideState } from './rideDetection';
 import type { LiveSource } from './transit';
@@ -24,6 +25,8 @@ export function endRideSession(): Promise<void> {
 
 // Outlives one Route View, so reopening the line doesn't pick the dismissed vehicle again.
 const dismissedUntil = new Map<string, number>();
+// stopRide is UID-wide. A late reply must not clean up a newer ride reported by this account.
+const latestRideReports = new Map<string, symbol>();
 export const dismissedNow = (now: number) => new Set([...dismissedUntil].filter(([, until]) => until > now).map(([tripId]) => tripId));
 
 /**
@@ -75,37 +78,67 @@ export type RideTracking = {
 export function useRideTracking(source: LiveSource | undefined, vehicles: readonly RouteLiveVehicle[], fix: RideFix | null): RideTracking {
   const { preferences } = useUserPreferences();
   const { user } = useAuth();
-  const sharingEnabled = preferences.shareRides && !user?.isAnonymous && source != null;
+  const appActive = useAppActive();
+  const owner = user?.uid ?? null;
+  // The SDK may change owner before React processes its auth-context update.
+  const ownsSession = useCallback((expected: string | null) => expected !== null && auth?.currentUser?.uid === expected, []);
+  const sharingEnabled = appActive && preferences.shareRides && Boolean(owner) && !user?.isAnonymous && source != null;
   const [state, setState] = useState<RideState>(IDLE_RIDE);
   const [ridingTripId, setRidingTripId] = useState<string | null>(null);
   const lastReport = useRef<{ tripId: string; at: number } | null>(null);
   const lastFixAt = useRef<number | null>(null);
   const sessionOpen = useRef(false);
+  const reportToken = useRef<symbol | null>(null);
   const vehiclesRef = useRef(vehicles);
   useEffect(() => {
     vehiclesRef.current = vehicles;
   }, [vehicles]);
 
   const rideGeneration = useRef(0);
+  const [detectionOwner, setDetectionOwner] = useState(owner);
+  if (detectionOwner !== owner) {
+    setDetectionOwner(owner);
+    if (state !== IDLE_RIDE) setState(IDLE_RIDE);
+    if (ridingTripId !== null) setRidingTripId(null);
+  }
+  useEffect(() => {
+    rideGeneration.current += 1;
+    lastReport.current = null;
+    lastFixAt.current = null;
+    sessionOpen.current = false;
+    reportToken.current = null;
+  }, [owner]);
+
+  const closeReportedSession = useCallback(() => {
+    const latest = owner ? latestRideReports.get(owner) : undefined;
+    if (sessionOpen.current && ownsSession(owner) && (latest === undefined || latest === reportToken.current)) void endRideSession();
+    if (owner && latest === reportToken.current) latestRideReports.delete(owner);
+    reportToken.current = null;
+    sessionOpen.current = false;
+  }, [owner, ownsSession]);
 
   const end = useCallback(() => {
     rideGeneration.current += 1;
     setState(IDLE_RIDE);
     setRidingTripId(null);
     lastReport.current = null;
-    if (sessionOpen.current) void endRideSession();
-    sessionOpen.current = false;
-  }, []);
+    // Firebase callables use the current account. A late cleanup for A must never stop B's ride.
+    closeReportedSession();
+  }, [closeReportedSession]);
 
   const report = useCallback((tripId: string, at: RideFix) => {
-    if (!source) return;
+    if (!source || !owner || !ownsSession(owner)) return;
     lastReport.current = { tripId, at: at.at };
     const generation = rideGeneration.current;
+    const token = Symbol('ride-report');
+    reportToken.current = token;
+    latestRideReports.set(owner, token);
     void reportRide({ agencyId: source.agencyId, routeId: source.routeId, tripId, lat: at.lat, lon: at.lon, accuracyMeters: at.accuracyMeters ?? 0 }).then(
       ({ data }) => {
         // The ride ended while this was on its way: its session mustn't outlive that.
-        if (generation !== rideGeneration.current) {
-          if (data.accepted) void endRideSession();
+        if (generation !== rideGeneration.current || !ownsSession(owner) || latestRideReports.get(owner) !== token) {
+          const latest = latestRideReports.get(owner);
+          if (data.accepted && ownsSession(owner) && (latest === undefined || latest === token)) void endRideSession();
           return;
         }
         if (data.accepted) {
@@ -122,7 +155,7 @@ export function useRideTracking(source: LiveSource | undefined, vehicles: readon
       () => undefined, // Offline: the next fix tries again, and the session expires if it can't.
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the stable ids
-  }, [source?.agencyId, source?.routeId]);
+  }, [owner, ownsSession, source?.agencyId, source?.routeId]);
 
   useEffect(() => {
     if (!sharingEnabled || !fix || fix.at === lastFixAt.current) return;
@@ -144,9 +177,8 @@ export function useRideTracking(source: LiveSource | undefined, vehicles: readon
     if (sharingEnabled) return;
     rideGeneration.current += 1;
     lastReport.current = null;
-    if (sessionOpen.current) void endRideSession();
-    sessionOpen.current = false;
-  }, [sharingEnabled]);
+    closeReportedSession();
+  }, [closeReportedSession, sharingEnabled]);
   // Leaving the page, or moving on to another line, ends the session.
   useEffect(() => end, [end, source?.agencyId, source?.routeId]);
 

@@ -1,7 +1,8 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import type { ComponentProps } from 'react';
-import type { StyleProp, TextStyle, ViewStyle } from 'react-native';
+import { View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
 
 import { useTheme } from '../theme/AppSettings';
 import { PhosphorGlyph } from './PhosphorGlyph';
@@ -69,7 +70,6 @@ const glyphs = {
 /** Icons kept from Ionicons, where its shape reads better than Phosphor's: [outline, filled]. */
 const ioniconGlyphs = {
   crosshair: ['locate-outline', 'locate'],
-  locate: ['locate-outline', 'locate'],
   map: ['map-outline', 'map'],
   // Spoken directions on or muted (the trip screen).
   voice: ['volume-high-outline', 'volume-high'],
@@ -87,7 +87,10 @@ const materialGlyphs = {
   travel: ['walk', 'walk'],
 } as const satisfies Record<string, readonly [MaterialIconName, MaterialIconName]>;
 
-export type IconName = keyof typeof glyphs | keyof typeof ioniconGlyphs | keyof typeof materialGlyphs;
+/** Pathly's own drawings, where no icon set has the shape. */
+const customGlyphs = { locate: LocateGlyph } as const;
+
+export type IconName = keyof typeof glyphs | keyof typeof ioniconGlyphs | keyof typeof materialGlyphs | keyof typeof customGlyphs;
 
 type IconProps = {
   color?: string;
@@ -120,6 +123,10 @@ export function Icon({ color, filled = true, name, size = 22, style, testID }: I
     style: style as StyleProp<TextStyle>,
     testID,
   };
+  if (name in customGlyphs) {
+    const Glyph = customGlyphs[name as keyof typeof customGlyphs];
+    return <Glyph color={color ?? colors.primary} filled={filled} size={size} style={style} testID={testID} />;
+  }
   if (name in materialGlyphs) {
     return <MaterialCommunityIcons {...font} name={materialGlyphs[name as keyof typeof materialGlyphs][filled ? 1 : 0]} />;
   }
@@ -127,4 +134,19 @@ export function Icon({ color, filled = true, name, size = 22, style, testID }: I
     return <Ionicons {...font} name={ioniconGlyphs[name as keyof typeof ioniconGlyphs][filled ? 1 : 0]} />;
   }
   return <PhosphorGlyph color={color ?? colors.primary} name={glyphs[name as keyof typeof glyphs][filled ? 1 : 0]} size={size} style={style} testID={testID} />;
+}
+
+/**
+ * Locate: a soft target, one thick ring around a dot, with no ticks. The dot grows while the map is
+ * centered on (or following) the rider.
+ */
+function LocateGlyph({ color, filled, size, style, testID }: { color: string; filled: boolean; size: number; style?: StyleProp<ViewStyle>; testID?: string }) {
+  return (
+    <View accessibilityElementsHidden={true} importantForAccessibility="no-hide-descendants" style={[{ height: size, width: size }, style]} testID={testID}>
+      <Svg fill="none" height={size} viewBox="0 0 24 24" width={size}>
+        <Circle cx={12} cy={12} r={7.5} stroke={color} strokeWidth={2.6} />
+        <Circle cx={12} cy={12} fill={color} r={filled ? 4.2 : 2.6} />
+      </Svg>
+    </View>
+  );
 }

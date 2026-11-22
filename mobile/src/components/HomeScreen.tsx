@@ -42,9 +42,10 @@ import { useDebug } from '../debug/DebugContext';
 import { pinnedSpotLabel } from '../debug/presets';
 import { useCurrentLocation, type Coordinates } from '../hooks/useCurrentLocation';
 import { useActiveTrip } from '../hooks/useActiveTrip';
-import { useNewAccountPlacesPrompt } from '../hooks/useNewAccountPlacesPrompt';
+import { AccountWriteCancelled, useAccountWrites } from '../hooks/useAccountWrites';
 import { discardAccount } from '../data/accountData';
 import { useTripGuidanceAlerts } from '../hooks/useTripGuidanceAlerts';
+import { useBackgroundTripAlerts } from '../hooks/useBackgroundTripAlerts';
 import { useTripRide } from '../hooks/useTripRide';
 import { useNow } from '../hooks/useNow';
 import { useThumbSide } from '../hooks/useThumbSide';
@@ -57,7 +58,9 @@ import { SavedPlacesProvider } from './SavedPlaceMarkers';
 import { ConfirmDialog } from './ConfirmDialog';
 import { CurrentLocationButton } from './CurrentLocationButton';
 import { DeparturesView } from './DeparturesView';
-import { EnrouteNavigationView, EnrouteRecoveryView, type EnrouteLocationState } from './EnrouteNavigationView';
+import { EnrouteRecoveryView, TripDemoControls, type EnrouteLocationState } from './EnrouteNavigationView';
+import { PlannedTripDetailView, type LiveTripFollow } from './PlannedTripDetailView';
+import { useHurryUp } from '../hooks/useHurryUp';
 import { RideGuideView } from './RideGuideView';
 import { HomeMap, type HomeMapCamera } from './HomeMap';
 import { LineLayersSheet } from './LineLayersSheet';
@@ -74,11 +77,12 @@ import { RouteDetailView, type TappedStop } from './RouteDetailView';
 import { SavedPlaceDetailsSheet } from './SavedPlaceDetailsSheet';
 import { StopRoutesSheet } from './StopRoutesSheet';
 import type { MapStop } from '../map/mapTypes';
+import { Toast, type ToastMessage } from './Toast';
 import { SavePlaceSheet, type SavePlaceRequest } from './SavePlaceSheet';
-import { SetPlacesPrompt } from './SetPlacesPrompt';
+import { OnboardingScreen } from './OnboardingScreen';
 import { ResumeTripCard } from './ResumeTripCard';
 import { CURRENT_LOCATION_LABEL, initialResultsCriteria, RouteResultsView, type ResultsCriteria } from './RouteResultsView';
-import type { TripMapCamera } from '../data/tripMap';
+import { navigationMapProgress, type TripMapCamera } from '../data/tripMap';
 import { useSupportPopup } from '../data/nudgePrompt';
 import { useSystemNotice } from '../data/systemNotices';
 import { SupportCard } from './SupportCard';
@@ -87,7 +91,7 @@ import { SystemNoticeBanner } from './SystemNoticeBanner';
 import { SearchHeader } from './SearchHeader';
 import { SearchView } from './SearchView';
 import { TransitSheet, type TransitTabId } from './TransitSheet';
-import { mapPageMapHeight } from './mapSheetLayout';
+import { mapPageMapHeight, SHEET_LOWER_DROP } from './mapSheetLayout';
 import { radii } from '../theme/shape';
 
 // Height reserved for the floating search header at the top of the map.
@@ -128,12 +132,15 @@ type ActiveView =
   // Route View's GO: one line from the rider's stop, to pick where they get off; back returns to `previous`.
   | { name: 'rideGuide'; request: RideGuideRequest; previous: ActiveView }
   | ResultsViewState
-  | { name: 'enroute' }
+  // The trip under way, followed on its Trip Details page.
+  | { name: 'activeTrip' }
   | { name: 'profile'; route?: 'places' }
   | { name: 'admin' };
 
 
 const MAX_SAVED_LOCATIONS = 50;
+const NO_SAVED_ROUTES: readonly SavedRoute[] = [];
+const NO_SAVED_LOCATIONS: readonly SavedLocation[] = [];
 
 /** The place a Route Results destination stands for; a swapped-in or demo one is known only by name. */
 function destinationPlaceOf(criteria: ResultsCriteria): SearchPlace {
@@ -221,15 +228,23 @@ export function HomeScreen() {
   const { user } = useAuth();
   // A guest has a session but no account: nothing is saved, as if signed out.
   const uid = user?.isAnonymous ? undefined : user?.uid;
+  const { run: writeAccount, isCurrent: isCurrentAccount } = useAccountWrites(uid);
+  const [actionFeedback, setActionFeedback] = useState<(ToastMessage & { uid: string }) | null>(null);
+  const feedback = useCallback((text: string) => {
+    if (uid && isCurrentAccount()) setActionFeedback({ text, uid, id: Date.now() });
+  }, [isCurrentAccount, uid]);
+  const pendingStars = useRef(new Map<string, { value: boolean }>());
+  const alertIntents = useRef(new Map<string, number>());
   // One "Save" star replaces pin + favorite: saved routes lead Nearby and fill Favorites -> Routes.
   // Real lines are saved to the account (with their alert setting), so they show anywhere and
   // the backend can push their alerts; the demo catalog's illustrative routes stay on this device.
   // Nothing is saved by default.
-  const [accountRoutes, setAccountRoutes] = useState<readonly SavedRoute[]>([]);
+  const [savedRouteState, setSavedRouteState] = useState<{ uid: string; routes: readonly SavedRoute[] } | null>(null);
+  const accountRoutes = savedRouteState && savedRouteState.uid === uid ? savedRouteState.routes : NO_SAVED_ROUTES;
   const [localSavedRouteIds, setLocalSavedRouteIds] = useState<readonly string[]>([]);
   useEffect(() => {
     if (!uid) return undefined;
-    return subscribeToSavedRoutes(uid, setAccountRoutes);
+    return subscribeToSavedRoutes(uid, (routes) => setSavedRouteState({ uid, routes }));
   }, [uid]);
   // Starred lines only; a line kept just for its alerts isn't a favorite.
   const savedRouteIds = useMemo(() => [...accountRoutes.filter((route) => route.favorite).map((route) => route.id), ...localSavedRouteIds], [accountRoutes, localSavedRouteIds]);
@@ -267,13 +282,14 @@ export function HomeScreen() {
   }, []);
   const activeRideRequest = rideRequest && trip.active && isRideGuideTrip(rideRequest, trip.active.itinerary.id) ? rideRequest : null;
   const tripView = useMemo<ActiveView>(
-    () => (activeRideRequest ? { name: 'rideGuide', request: activeRideRequest, previous: { name: 'home' } } : { name: 'enroute' }),
+    () => (activeRideRequest ? { name: 'rideGuide', request: activeRideRequest, previous: { name: 'home' } } : { name: 'activeTrip' }),
     [activeRideRequest],
   );
   const activeView = useMemo<ActiveView>(() => requestedView ?? (
     trip.status === 'active' || trip.status === 'recovery' ? tripView : { name: 'home' }
   ), [requestedView, trip.status, tripView]);
-  const [savedLocations, setSavedLocations] = useState<readonly SavedLocation[]>([]);
+  const [savedPlaceState, setSavedPlaceState] = useState<{ uid: string; locations: readonly SavedLocation[] } | null>(null);
+  const savedLocations = savedPlaceState && savedPlaceState.uid === uid ? savedPlaceState.locations : NO_SAVED_LOCATIONS;
   const { height } = useViewportSize();
   const { location, mocked: locationMocked, navigationFix, navigationStale, provisional: locationProvisional, refresh: refreshLocation, status: locationStatus } = useCurrentLocation(trip.active != null);
   // Shares the ride the trip's on, wherever in the app the rider is, Route View included.
@@ -289,12 +305,17 @@ export function HomeScreen() {
   );
   // Spoken steps, vibrations, and the lock-screen notification, wherever in the app the rider is.
   useTripGuidanceAlerts({
+    uid: user?.uid,
+    stepIndex: trip.active?.cursor.stepIndex,
     sessionId: trip.active?.sessionId ?? null,
     guidance: resumeGuidance,
     arrivedDestination,
     settings: userPreferences.tripGuidance,
-    notificationsEnabled: userPreferences.notifications.enabled,
+    notificationsEnabled: userPreferences.notifications.enabled && userPreferences.notifications.tripReminders,
   });
+  useBackgroundTripAlerts(trip.active, !locationMocked && userPreferences.tripGuidance.notification
+    && userPreferences.notifications.enabled && userPreferences.notifications.tripReminders, trip.advance,
+  { hydrating: trip.status === 'hydrating', recovery: trip.recovery });
   const hasResumableTrip = trip.status === 'active' || trip.status === 'recovery';
   const supportPopup = useSupportPopup(hasResumableTrip, userPreferences.supportPrompts);
   // A holiday that changes service on every line (Thanksgiving, Christmas…), under the search bar.
@@ -501,35 +522,50 @@ export function HomeScreen() {
   // A line's star and its alerts are separate: each can be on without the other. Both live on the
   // line's one record, which goes away once neither is on.
   const toggleSavedRoute = useCallback((route: RouteDetail) => {
+    if (uid && !isCurrentAccount()) return;
     const id = route.liveSource ? `${route.liveSource.agencyId}:${route.liveSource.routeId}` : route.id;
     const saved = route.liveSource && uid ? savedRouteFrom(route, 'off') : null;
     if (!saved || !uid) {
       setLocalSavedRouteIds((current) => toggleItem(current, id));
       return;
     }
-    // The listener shows the change; a rejected write leaves the star as it was.
+    const key = `${uid}:route:${id}`;
     const existing = accountRoutes.find((entry) => entry.id === id);
-    if (!existing) saveRoute(uid, saved).catch(() => undefined);
-    else if (!existing.favorite) setRouteFavorite(uid, id, true).catch(() => undefined);
-    else if (existing.alerts === 'off') removeSavedRoute(uid, id).catch(() => undefined);
-    else setRouteFavorite(uid, id, false).catch(() => undefined);
-  }, [accountRoutes, uid]);
-  const chooseRouteAlerts = useCallback((setting: RouteAlertSetting, hours?: AlertHours) => {
+    const intent = { value: !(pendingStars.current.get(key)?.value ?? existing?.favorite ?? false) };
+    pendingStars.current.set(key, intent);
+    void writeAccount(`route:${id}`, (owner) => intent.value
+      ? existing && existing.alerts !== 'off' ? setRouteFavorite(owner, id, true) : saveRoute(owner, { ...saved, ...existing, favorite: true })
+      : existing && existing.alerts !== 'off' ? setRouteFavorite(owner, id, false) : removeSavedRoute(owner, id), { serialize: false }).then(
+      () => { if (pendingStars.current.get(key) === intent) pendingStars.current.delete(key); },
+      (error) => { if (pendingStars.current.get(key) !== intent) return; pendingStars.current.delete(key); if (!(error instanceof AccountWriteCancelled)) feedback('Favorite could not be updated. Check your connection and try again.'); },
+    );
+  }, [accountRoutes, feedback, isCurrentAccount, uid, writeAccount]);
+  const chooseRouteAlerts = useCallback(async (setting: RouteAlertSetting, hours?: AlertHours) => {
     const prompt = alertsPrompt;
-    setAlertsPrompt(null);
-    if (!prompt || !uid) return;
-    if (setting === prompt.setting && setting !== 'custom') return;
-    const existing = accountRoutes.find((entry) => entry.id === prompt.id);
-    if (existing) {
-      // Alerts off on a line that isn't starred: nothing left to keep.
-      if (setting === 'off' && !existing.favorite) removeSavedRoute(uid, prompt.id).catch(() => undefined);
-      else setRouteAlerts(uid, prompt.id, setting, hours).catch(() => undefined);
-    } else {
-      const record = savedRouteFrom(prompt.route, setting, false);
-      if (record) saveRoute(uid, { ...record, ...(setting === 'custom' && hours ? { alertHours: hours } : {}) }).catch(() => undefined);
+    if (!prompt || !uid || !isCurrentAccount()) throw new AccountWriteCancelled();
+    if (setting === prompt.setting && setting !== 'custom') {
+      setAlertsPrompt((current) => current === prompt ? null : current);
+      return;
     }
-    if (setting !== 'off') void registerForRouteAlerts(uid);
-  }, [accountRoutes, alertsPrompt, uid]);
+    const existing = accountRoutes.find((entry) => entry.id === prompt.id);
+    const intent = (alertIntents.current.get(prompt.id) ?? 0) + 1;
+    alertIntents.current.set(prompt.id, intent);
+    await writeAccount(`route:${prompt.id}`, async (owner) => {
+      if (existing) {
+        if (setting === 'off' && !existing.favorite) await removeSavedRoute(owner, prompt.id);
+        else await setRouteAlerts(owner, prompt.id, setting, hours);
+      } else {
+        const record = savedRouteFrom(prompt.route, setting, false);
+        if (!record) throw new Error('This line cannot be saved');
+        await saveRoute(owner, { ...record, ...(setting === 'custom' && hours ? { alertHours: hours } : {}) });
+      }
+    });
+    setAlertsPrompt((current) => current === prompt ? null : current);
+    if (!isCurrentAccount() || setting === 'off' || alertIntents.current.get(prompt.id) !== intent) return;
+    void registerForRouteAlerts(uid).catch(() => false).then((registered) => {
+      if (isCurrentAccount() && alertIntents.current.get(prompt.id) === intent && !registered) feedback('Alert preference saved. Push notifications are not ready on this device. Check notification permissions.');
+    });
+  }, [accountRoutes, alertsPrompt, feedback, isCurrentAccount, uid, writeAccount]);
   // Route view's bell: the line's alert setting, to change, starred or not.
   const routeAlertsFor = (route: RouteDetail) => {
     if (!route.liveSource || !uid) return undefined;
@@ -597,10 +633,9 @@ export function HomeScreen() {
   // The transit menu scrolls over the map in one page scroll; the location button rides up with it.
   const [homeScrollY] = useState(() => new Animated.Value(0));
   // The line layers button stays put on the map, under the search bar, and the transit menu slides
-  // over it as it scrolls up (it's drawn with the map, beneath the menu). Its spot is measured from
-  // the row it lines up with under the search bar (which moves down with a resume-trip card).
-  const [layersRow, setLayersRow] = useState<{ y: number; height: number } | null>(null);
-  const layersButtonTop = statusBarInset + (layersRow ? layersRow.y + (layersRow.height - MAP_CONTROL_SIZE) / 2 : 74);
+  // over it as it scrolls up. The button stays aligned with the top of the row as the card fills it.
+  const [underSearchTop, setUnderSearchTop] = useState<number | null>(null);
+  const layersButtonTop = statusBarInset + (underSearchTop ?? 74);
 
   const showHome = useCallback(() => setActiveView({ name: 'home' }), []);
   const showSearch = useCallback(() => {
@@ -617,22 +652,25 @@ export function HomeScreen() {
   }, []);
   useEffect(() => {
     if (!uid) return undefined;
-    return subscribeToSavedLocations(uid, MAX_SAVED_LOCATIONS, setSavedLocations);
+    return subscribeToSavedLocations(uid, MAX_SAVED_LOCATIONS, (locations) => setSavedPlaceState({ uid, locations }));
   }, [uid]);
   const [guestSavePrompt, setGuestSavePrompt] = useState(false);
-  const placesPrompt = useNewAccountPlacesPrompt(user);
   const isPlaceSaved = useCallback((place: SearchPlace) => findSavedLocation(savedLocations, place) != null, [savedLocations]);
   const toggleSavedPlace = useCallback((place: SearchPlace) => {
+    if (uid && !isCurrentAccount()) return;
     if (!uid) {
       setGuestSavePrompt(true);
       return;
     }
     const saved = findSavedLocation(savedLocations, place);
-    // The listener picks up the change (Firestore applies local writes right away, even offline),
-    // so the star needs no state of its own; a rejected write just leaves it as it was.
-    const write = saved ? removeSavedLocation(uid, saved.address.placeId) : saveLocation(uid, place, 'Destination');
-    write.catch(() => undefined);
-  }, [savedLocations, uid]);
+    const key = `${uid}:place:${place.id}`;
+    const intent = { value: !(pendingStars.current.get(key)?.value ?? Boolean(saved)) };
+    pendingStars.current.set(key, intent);
+    void writeAccount(`place:${place.id}`, (owner) => intent.value ? saveLocation(owner, place, 'Destination') : removeSavedLocation(owner, saved?.address.placeId ?? place.id), { serialize: false }).then(
+      () => { if (pendingStars.current.get(key) === intent) pendingStars.current.delete(key); },
+      (error) => { if (pendingStars.current.get(key) !== intent) return; pendingStars.current.delete(key); if (!(error instanceof AccountWriteCancelled)) feedback('Favorite could not be updated. Check your connection and try again.'); },
+    );
+  }, [feedback, isCurrentAccount, savedLocations, uid, writeAccount]);
   const openSavedLocation = useCallback((location: SavedLocation) => {
     const place = locationToPlace(location.address);
     setSelectedTrip(null);
@@ -640,6 +678,12 @@ export function HomeScreen() {
   }, []);
   // Adding a saved place: search for it, then name it (or save it straight away as Home or Work).
   const [saveRequest, setSaveRequest] = useState<SavePlaceRequest | null>(null);
+  const [saveRequestOwner, setSaveRequestOwner] = useState(uid);
+  if (saveRequestOwner !== uid) {
+    setSaveRequestOwner(uid);
+    if (saveRequest) setSaveRequest(null);
+    if (alertsPrompt) setAlertsPrompt(null);
+  }
   const addSavedPlace = useCallback((returnTo: SavedPlacePick['returnTo'], label?: SavedPlacePick['label']) => {
     setActiveView({ name: 'search', pickSavedPlace: { label, returnTo } });
   }, []);
@@ -649,11 +693,8 @@ export function HomeScreen() {
     else if (returnTo === 'settings') setActiveView({ name: 'profile', route: 'places' });
     else setActiveView({ name: 'search' });
   }, [showFavorites]);
-  const saveNamedPlace = useCallback((place: SearchPlace, label: string, style?: SavedPlaceStyle, replacing?: string) => {
-    if (!uid) return;
-    // As with the star, the listener shows the write; a rejected one just leaves the list as it was.
-    saveLabeledLocation(uid, place, label, savedLocations, style, replacing).catch(() => undefined);
-  }, [savedLocations, uid]);
+  const saveNamedPlace = useCallback((place: SearchPlace, label: string, style?: SavedPlaceStyle, replacing?: string) => writeAccount(`place:${replacing ?? place.id}`,
+    (owner) => saveLabeledLocation(owner, place, label, savedLocations, style, replacing)), [savedLocations, writeAccount]);
   const editSavedPlace = useCallback((location: SavedLocation) => {
     const { address } = location;
     setSaveRequest({ place: locationToPlace(address), label: savedPlaceName(address), style: { icon: address.icon, color: address.color, group: address.group }, editing: true });
@@ -667,14 +708,18 @@ export function HomeScreen() {
         setSaveRequest(null);
         setActiveView({ name: 'search', pickSavedPlace: { returnTo: 'settings', replacing: draft } });
       }}
-      onRemove={() => {
+      onRemove={async () => {
         // A place whose address was being changed is still saved under its old one.
-        if (uid && saveRequest) removeSavedLocation(uid, saveRequest.replacing ?? saveRequest.place.id).catch(() => undefined);
-        setSaveRequest(null);
+        const request = saveRequest;
+        if (!request) return;
+        await writeAccount(`place:${request.replacing ?? request.place.id}`, (owner) => removeSavedLocation(owner, request.replacing ?? request.place.id));
+        setSaveRequest((current) => current === request ? null : current);
       }}
-      onSave={(label, style) => {
-        if (saveRequest) saveNamedPlace(saveRequest.place, label, style, saveRequest.replacing);
-        setSaveRequest(null);
+      onSave={async (label, style) => {
+        const request = saveRequest;
+        if (!request) return;
+        await saveNamedPlace(request.place, label, style, request.replacing);
+        setSaveRequest((current) => current === request ? null : current);
       }}
       request={saveRequest}
     />
@@ -706,16 +751,20 @@ export function HomeScreen() {
     }
     showSearch();
   }, [activeView, showFavorites, showHome, showSearch]);
-  const startPlannedTrip = useCallback(async (itinerary: Itinerary) => {
+  // The trip that started itself because the rider was already taking it, for its notice.
+  const [autoStartedTripId, setAutoStartedTripId] = useState<string | null>(null);
+  const startPlannedTrip = useCallback(async (itinerary: Itinerary, automatic = false) => {
     if (activeView.name !== 'results' || !selectedTrip) {
-      setTripStartFailed(true);
+      if (!automatic) setTripStartFailed(true);
       return;
     }
     const { resumeRequest } = selectedTrip;
+    setAutoStartedTripId(automatic ? itinerary.id : null);
     const result = await startActiveTrip({ itinerary, origin: resumeRequest.origin, destination: resumeRequest.destination, resumeRequest });
     if (result === 'started') {
       setSelectedTrip(null);
-      setActiveView({ name: 'enroute' });
+      // GO keeps the rider on Trip Details: the same page, now following the trip.
+      setActiveView({ name: 'activeTrip' });
     } else if (result !== 'replacement-required') {
       setTripStartFailed(true);
     }
@@ -845,11 +894,12 @@ export function HomeScreen() {
     : allDiscoveredRoutes;
   const activeLiveRouteIds = activeView.name === 'home' ? visibleRouteIds : openedRoute ? [openedRoute.id] : [];
   const screen = (node: ReactNode) => (
-    <TransitLiveProvider activeRouteIds={activeLiveRouteIds} extraRoutes={liveRoutes} location={livePoint}>
+    <TransitLiveProvider activeRouteIds={activeLiveRouteIds} extraRoutes={liveRoutes} key={user?.uid ?? 'signed-out'} location={livePoint}>
       <SavedPlacesProvider locations={savedLocations}>
       <ScreenTransition depth={activeView.name === 'home' ? 0 : activeView.name === 'search' ? 1 : 2} group="home" key={transitionKey}>{node}</ScreenTransition>
       </SavedPlacesProvider>
       {savePlaceSheet}
+      <Toast message={actionFeedback?.uid === uid ? actionFeedback : null} onHidden={() => setActionFeedback(null)} />
       <ConfirmDialog
         body="Your guest session ends and you can sign in or sign up."
         confirmLabel="Create account"
@@ -884,8 +934,8 @@ export function HomeScreen() {
               return;
             }
             setSelectedTrip(null);
-            // Route View's ride is followed on its own page.
-            if (activeView.name !== 'rideGuide') setActiveView({ name: 'enroute' });
+            // Route View's ride is followed on its own page; any other trip on Trip Details.
+            if (activeView.name !== 'rideGuide') setActiveView({ name: 'activeTrip' });
           });
         }}
         testID="replace-active-trip-confirm"
@@ -915,39 +965,72 @@ export function HomeScreen() {
         ? trip.locationState
         : 'located';
 
+  // How the trip page follows the trip under way, whichever page (Trip Details or Route View's ride) shows it.
+  const hurryUp = useHurryUp(trip.active ?? null, navigationFix, enrouteLocationState === 'located');
+  const activeTrip = trip.status === 'active' ? trip.active : null;
+  const followPoint = activeTrip && followEvidence?.sessionId === activeTrip.sessionId ? followEvidence.fix.point : null;
+  const followProgress = useMemo(
+    () => (activeTrip ? navigationMapProgress(activeTrip.plan, activeTrip.cursor, followPoint) : null),
+    // The point's coordinates, not its object, decide when the progress changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTrip?.plan, activeTrip?.cursor, followPoint?.lat, followPoint?.lng],
+  );
+  const firstCheckpoint = activeTrip?.plan.checkpoints[0];
+  const liveFollow: LiveTripFollow | null = activeTrip && followProgress ? {
+    progress: followProgress,
+    followLocation: followPoint,
+    userLocation: navigationFix ? navigationFix.point : null,
+    userLocationStale: enrouteLocationState !== 'located',
+    hurry: hurryUp,
+    ride: tripRide,
+    startedAutomatically: autoStartedTripId === activeTrip.itinerary.id,
+    rideFix: rideFixFrom(navigationFix, enrouteLocationState === 'stale' || enrouteLocationState === 'unavailable' || enrouteLocationState === 'loading'),
+    ...(tripLeg ? { currentRoute: tripLeg } : {}),
+    ...(isAdmin ? {
+      adminPanel: (
+        <TripDemoControls
+          checkpoints={activeTrip.plan.checkpoints}
+          initialIndex={activeTrip.cursor.checkpointOrdinal}
+          onCheckpoint={(checkpoint) => setMockLocation({ label: checkpoint.label, latitude: checkpoint.point.lat, longitude: checkpoint.point.lng })}
+          onReset={() => {
+            void resetTripForAdmin().then((reset) => {
+              if (reset && firstCheckpoint) setMockLocation({ label: firstCheckpoint.label, latitude: firstCheckpoint.point.lat, longitude: firstCheckpoint.point.lng });
+            });
+          }}
+        />
+      ),
+    } : {}),
+  } : null;
+
   // Holds Home back so it can't flash before a trip in progress takes over; looks like the rest of startup.
   if (trip.status === 'hydrating') {
     return <LoadingScreen />;
   }
 
-  if (activeView.name === 'enroute') {
-    if (trip.status === 'active' && trip.active) {
-      const session = trip.active;
-      const firstCheckpoint = session.plan.checkpoints[0];
+  if (activeView.name === 'activeTrip') {
+    if (activeTrip) {
       return screen(
-        <EnrouteNavigationView
-          cursor={session.cursor}
-          fix={navigationFix}
-          followFix={followEvidence?.sessionId === session.sessionId ? followEvidence.fix : null}
-          isAdmin={isAdmin}
-          locationState={enrouteLocationState}
-          onBack={showHome}
-          onDemoCheckpoint={isAdmin ? (checkpoint) => setMockLocation({ label: checkpoint.label, latitude: checkpoint.point.lat, longitude: checkpoint.point.lng }) : undefined}
-          onEnd={() => {
-            void endTrip().then((ended) => {
-              if (!ended) return;
-              showHome();
-            });
-          }}
-          onResetDemo={isAdmin ? () => {
-            void resetTripForAdmin().then((reset) => {
-              if (reset && firstCheckpoint) setMockLocation({ label: firstCheckpoint.label, latitude: firstCheckpoint.point.lat, longitude: firstCheckpoint.point.lng });
-            });
-          } : undefined}
-          plan={session.plan}
-          ride={tripRide}
-          session={session}
-        />,
+        <>
+          <PlannedTripDetailView
+            destination={activeTrip.destination.label}
+            isActive={true}
+            isFavorite={false}
+            itinerary={activeTrip.itinerary}
+            live={liveFollow}
+            onBack={showHome}
+            onEnd={() => {
+              void endTrip().then((ended) => {
+                if (!ended) return;
+                showHome();
+              });
+            }}
+            onStart={() => undefined}
+            onToggleFavorite={() => undefined}
+            origin={activeTrip.origin.label}
+            showFavorite={false}
+          />
+          {tripStartDialogs}
+        </>,
       );
     }
     if (trip.status === 'recovery' && trip.recovery) {
@@ -1046,7 +1129,7 @@ export function HomeScreen() {
     return screen(
       <SearchView
         near={riderLocation(location, locationStatus)}
-        onAddSavedPlace={uid ? (label) => addSavedPlace('search', label) : undefined}
+        onAddSavedPlace={uid ? () => addSavedPlace('search') : undefined}
         onCancel={showHome}
         onChooseOnMap={() => setActiveView({ name: 'search', pickOnMap: true })}
         onSelect={showRouteResults}
@@ -1117,6 +1200,7 @@ export function HomeScreen() {
     return screen(
       <>
         <RideGuideView
+          follow={rideTrip ? liveFollow : null}
           live={rideTrip}
           onBack={closeCurrentView}
           onEnd={() => {
@@ -1155,7 +1239,10 @@ export function HomeScreen() {
           onCloseTrip={closePlannedTrip}
           onEditEndpoint={(field, mapCamera) => setActiveView({ name: 'search', editing: { field, results: { ...activeView, mapCamera } } })}
           onOpenTrip={showPlannedTrip}
-          onStartTrip={startPlannedTrip}
+          onStartTrip={(itinerary) => void startPlannedTrip(itinerary)}
+          // Only real GPS counts as being on the way; another trip under way still asks first.
+          followFix={rideFixFrom(navigationFix, Boolean(navigationStale))}
+          onAutoStartTrip={(itinerary) => void startPlannedTrip(itinerary, true)}
           onToggleSaveDestination={() => toggleSavedPlace(destinationPlaceOf(activeView.criteria))}
           riderLocation={riderLocation(location, locationStatus)}
           selectedItinerary={selectedTrip?.itinerary ?? null}
@@ -1225,8 +1312,9 @@ export function HomeScreen() {
 
   const homeMap = (
       <>
-        {/* The map stays fixed while the sheet scrolls over it; its fixed height keeps the legal credits above the resting sheet. */}
-        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: mapHeight }} testID="home-map-viewport">
+        {/* The map stays fixed while the sheet scrolls over it, filling the window TransitSheet gives it, which reaches below the resting sheet for a sheet dragged lower.
+            The map's credit must stay visible: on phones the bottom padding lifts it above the resting sheet; on web TransitSheet ends the map's window at the sheet's edge. */}
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} testID="home-map-viewport">
         <HomeMap
           initialCamera={homeCamera}
           lines={mapLines}
@@ -1248,7 +1336,7 @@ export function HomeScreen() {
           }}
           onOrientationChange={setMapOrientation}
           onSavedLocationPress={openSavedLocationFromMap}
-          padding={{ top: homeHeaderInset, bottom: 0 }}
+          padding={{ top: homeHeaderInset, bottom: Platform.OS === 'web' ? 0 : SHEET_LOWER_DROP }}
           recenterRequest={recenterRequest}
           reorientRequest={reorientRequest}
           savedLocations={savedLocations}
@@ -1317,35 +1405,33 @@ export function HomeScreen() {
               onProfilePress={() => setActiveView({ name: 'profile' })}
               onSearchPress={showSearch}
             />
-            {hasResumableTrip ? (
-              <View style={styles.resumeCardWrap}>
-                <ResumeTripCard
-                  destination={trip.active?.destination.label ?? trip.recovery?.destination.label ?? 'destination'}
-                  instruction={resumeGuidance?.currentAction ?? (trip.status === 'recovery' ? 'Exact route needs recovery' : undefined)}
-                  onResume={() => setActiveView(tripView)}
-                />
-              </View>
-            ) : null}
-            {/* A holiday reminder beside the line layers button, under the profile button. */}
             <View
-              onLayout={(event) => setLayersRow({ y: event.nativeEvent.layout.y, height: event.nativeEvent.layout.height })}
+              onLayout={(event) => setUnderSearchTop(event.nativeEvent.layout.y)}
               pointerEvents="box-none"
               style={[styles.underSearch, { flexDirection: thumb.row }]}
+              testID="home-under-search"
             >
-              <View pointerEvents="none" style={styles.nudge} />
+              <View pointerEvents="box-none" style={styles.underSearchContent}>
+                {hasResumableTrip ? (
+                  <ResumeTripCard
+                    destination={trip.active?.destination.label ?? trip.recovery?.destination.label ?? 'destination'}
+                    instruction={resumeGuidance?.currentAction ?? (trip.status === 'recovery' ? 'Exact route needs recovery' : undefined)}
+                    onResume={() => setActiveView(tripView)}
+                  />
+                ) : null}
+              </View>
               {/* Room for the line layers button, which is drawn with the map (see homeMap). */}
               <View pointerEvents="none" style={[styles.layersSlot, thumb.edgeMargin(4)]} />
             </View>
             {/* One popup at a time: places first for a new account, then a holiday reminder, then the occasional ask. */}
-            {systemNotice.notice && !placesPrompt.show && !popupPreview ? <SystemNoticeBanner notice={systemNotice.notice} onDismiss={systemNotice.dismiss} /> : null}
+            {systemNotice.notice && !popupPreview ? <SystemNoticeBanner notice={systemNotice.notice} onDismiss={systemNotice.dismiss} /> : null}
             {popupPreview === 'holiday' ? <SystemNoticeBanner notice={PREVIEW_NOTICE} onDismiss={() => setPopupPreview(null)} /> : null}
             {popupPreview === 'arrival' ? <SupportCard onDismiss={() => setPopupPreview(null)} onDonate={() => setPopupPreview(null)} /> : null}
-            {popupPreview === 'places' ? <SetPlacesPrompt onDone={() => setPopupPreview(null)} onSet={() => setPopupPreview(null)} places={savedLocations} /> : null}
             {popupPreview === 'support' ? (
               <SupportPopup onDismiss={() => setPopupPreview(null)} onFeedback={() => setPopupPreview(null)} onNeverAsk={() => setPopupPreview(null)} onSupport={() => setPopupPreview(null)} />
             ) : null}
             {/* The occasional ask to support Pathly or share feedback, once the rider has used it a while. */}
-            {supportPopup.visible && !systemNotice.notice && !placesPrompt.show && !popupPreview ? (
+            {supportPopup.visible && !systemNotice.notice && !popupPreview ? (
               <SupportPopup
                 onDismiss={supportPopup.dismiss}
                 onFeedback={supportPopup.feedback}
@@ -1381,9 +1467,9 @@ export function HomeScreen() {
           scrollY={homeScrollY}
         />
         {savePlaceSheet}
-        {placesPrompt.show && !saveRequest ? (
-          <SetPlacesPrompt onDone={placesPrompt.dismiss} onSet={(label) => addSavedPlace('home', label)} places={savedLocations} />
-        ) : null}
+        <Toast message={actionFeedback?.uid === uid ? actionFeedback : null} onHidden={() => setActionFeedback(null)} />
+        {/* Admin tools' preview of a new account's onboarding (it saves for real). */}
+        {popupPreview === 'onboarding' ? <View style={StyleSheet.absoluteFill}><OnboardingScreen onDone={() => setPopupPreview(null)} /></View> : null}
         <LineLayersSheet choice={lineChoice} lines={layerCandidates} onChange={changeLineChoice} onClose={() => setLayersOpen(false)} visible={layersOpen} />
         <StopRoutesSheet onClose={() => setStopRoutesFor(null)} onOpenRoute={openRouteAtMapStop} stop={stopRoutesFor} />
         <SavedPlaceDetailsSheet
@@ -1421,10 +1507,8 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     zIndex: 30,
   },
   header: { paddingTop: 10, paddingHorizontal: 16 },
-  resumeCardWrap: { marginTop: 8 },
-  // Centered under the 54 px profile button.
-  underSearch: { alignItems: 'center', gap: 10, marginTop: 10 },
-  nudge: { flex: 1 },
+  underSearch: { alignItems: 'flex-start', gap: 10, marginTop: 10 },
+  underSearchContent: { flex: 1, minWidth: 0 },
   layersSlot: { width: MAP_CONTROL_SIZE, height: MAP_CONTROL_SIZE },
   layersButton: { position: 'absolute' },
   locationButton: {

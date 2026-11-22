@@ -109,6 +109,74 @@ it('gates initial hydration, then restores only the same account at the exact cu
   other.unmount();
 });
 
+it('ignores an earlier account epoch after A returns, ends its trip, and starts a new session', async () => {
+  const first = await idleHook();
+  await act(async () => { expect(await first.result.current.start(input())).toBe('started'); });
+  const originalSession = first.result.current.active!.sessionId;
+  first.unmount();
+  const oldRestore = deferred<{ data: { itineraries: Itinerary[] } }>();
+  planTripMock().mockClear();
+  planTripMock().mockReturnValueOnce(oldRestore.promise)
+    .mockResolvedValueOnce({ data: { itineraries: [structuredClone(fixtures[0]!)] } });
+  const hook = renderHook(({ uid }: { uid: string }) => useActiveTrip(uid), { initialProps: { uid: 'alice' } });
+  await waitFor(() => expect(planTripMock()).toHaveBeenCalledTimes(1));
+  hook.rerender({ uid: 'bob' });
+  await waitFor(() => expect(hook.result.current.status).toBe('idle'));
+  hook.rerender({ uid: 'alice' });
+  await waitFor(() => expect(hook.result.current.status).toBe('active'));
+  expect(hook.result.current.active?.sessionId).toBe(originalSession);
+  await act(async () => {
+    expect(await hook.result.current.end()).toBe(true);
+    expect(await hook.result.current.start(input(fixtures[1]!))).toBe('started');
+  });
+  const replacementSession = hook.result.current.active!.sessionId;
+  expect(replacementSession).not.toBe(originalSession);
+  await act(async () => { oldRestore.resolve({ data: { itineraries: [structuredClone(fixtures[0]!)] } }); });
+  expect(hook.result.current.active?.sessionId).toBe(replacementSession);
+  expect(hook.result.current.active?.itinerary.id).toBe(fixtures[1]!.id);
+  expect((await readNavigationDocument('alice')).active?.sessionId).toBe(replacementSession);
+  hook.unmount();
+});
+
+it('does not migrate a pending legacy restore after its owning hook unmounts', async () => {
+  const first = await idleHook();
+  await act(async () => { expect(await first.result.current.start(input())).toBe('started'); });
+  const stored = (await readNavigationDocument('alice')).active!;
+  await updateNavigationDocument('alice', (document) => ({
+    ...document,
+    active: document.active ? { ...document.active, selection: {
+      version: 1,
+      itineraryId: stored.selection.itineraryId,
+      departureTime: stored.selection.legacy!.departureTime,
+      arrivalTime: stored.selection.legacy!.arrivalTime,
+      fingerprint: stored.selection.legacy!.fingerprint,
+    } } : null,
+  }));
+  first.unmount();
+  const pending = deferred<{ data: { itineraries: Itinerary[] } }>();
+  planTripMock().mockClear();
+  planTripMock().mockReturnValueOnce(pending.promise);
+  const restored = renderHook(() => useActiveTrip('alice'));
+  await waitFor(() => expect(planTripMock()).toHaveBeenCalledTimes(1));
+  restored.unmount();
+  await act(async () => { pending.resolve({ data: { itineraries: [structuredClone(fixtures[0]!)] } }); });
+  expect((await readNavigationDocument('alice')).active?.selection.version).toBe(1);
+});
+
+it('keeps active and recent line summaries when a selected run ID is unknown', async () => {
+  const selected = structuredClone(fixtures[0]!);
+  for (const step of selected.steps) if (step.kind === 'transit') delete step.tripId;
+  const expectedLines = selected.steps.filter((step) => step.kind === 'transit').map((step) => expect.objectContaining({ mode: step.mode, name: step.line.name }));
+  expect(expectedLines.length).toBeGreaterThan(0);
+  const hook = await idleHook();
+  await act(async () => { expect(await hook.result.current.start(input(selected))).toBe('started'); });
+  expect((await readNavigationDocument('alice')).active?.lines).toEqual(expectedLines);
+  await act(async () => { expect(await hook.result.current.end()).toBe(true); });
+  expect(hook.result.current.recents[0]?.lines).toEqual(expectedLines);
+  expect(hook.result.current.recents[0]?.lines.every((line) => line.tripId === undefined)).toBe(true);
+  hook.unmount();
+});
+
 it('restores a version-1 trip at its unambiguous initial walking cursor without an anchor', async () => {
   const first = await idleHook();
   await act(async () => {

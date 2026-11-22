@@ -70,6 +70,7 @@ describe('placesSearch', () => {
     expect(JSON.parse(init.body)).toEqual({
       input: '100 Nicolls',
       sessionToken: 'token-1',
+      languageCode: 'en',
       includedRegionCodes: ['us'],
       locationRestriction: {
         rectangle: {
@@ -96,6 +97,7 @@ describe('placesSearch', () => {
     expect(places[0]?.location).toEqual({ latitude: 40.91, longitude: -73.1 });
     const nearbyCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith(':searchText'));
     expect(JSON.parse(String(nearbyCall?.[1]?.body)).rankPreference).toBe('DISTANCE');
+    expect(JSON.parse(String(nearbyCall?.[1]?.body)).languageCode).toBe('en');
   });
 
   it('still offers suggestions when the nearby search fails', async () => {
@@ -133,7 +135,7 @@ describe('placesSearch', () => {
     const place = await fetchPlaceDetails({ placeId: 'abc', sessionToken: 'token-1' });
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('https://places.googleapis.com/v1/places/abc?sessionToken=token-1');
+    expect(url).toBe('https://places.googleapis.com/v1/places/abc?sessionToken=token-1&languageCode=en');
     expect(init.headers['X-Goog-Api-Key']).toBe('places-key');
     expect(init.headers['X-Goog-FieldMask']).toBe('id,displayName,formattedAddress,location');
     expect(place).toEqual({

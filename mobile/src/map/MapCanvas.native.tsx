@@ -9,7 +9,7 @@ import {
   type MapRef,
   type ViewStateChangeEvent,
 } from '@maplibre/maplibre-react-native';
-import { createContext, forwardRef, useContext, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createContext, forwardRef, useContext, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type ComponentRef } from 'react';
 import { StyleSheet, View, type NativeSyntheticEvent } from 'react-native';
 
 import { useTheme } from '../theme/AppSettings';
@@ -112,6 +112,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
   const mapStyle = useMemo(() => JSON.stringify(pathlyMapStyle(isDark, mapTheme, transitIcons)), [isDark, mapTheme, transitIcons]);
   const mapRef = useRef<MapRef>(null);
   const cameraRef = useRef<CameraRef>(null);
+  const viewRef = useRef<ComponentRef<typeof View>>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [bearingStore] = useState(() => createBearingStore(initialCamera.bearing ?? 0));
   const [zoomStore] = useState(() => createZoomStore(initialCamera.zoom));
@@ -155,6 +156,19 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
         return null;
       }
     },
+    async pointForCoordinate(point) {
+      const map = mapRef.current;
+      const view = viewRef.current;
+      if (!map || !view) return null;
+      try {
+        const [x, y] = await map.project([point.longitude, point.latitude]);
+        return await new Promise<{ x: number; y: number }>((resolve) => {
+          view.measureInWindow((left, top) => resolve({ x: left + x, y: top + y }));
+        });
+      } catch {
+        return null;
+      }
+    },
   }), [size]);
 
   const contentInset = useMemo(
@@ -164,7 +178,9 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
 
   return (
     <View
+      collapsable={false}
       onLayout={(event) => setSize({ width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height })}
+      ref={viewRef}
       style={[StyleSheet.absoluteFill, { backgroundColor: mapLandColor(isDark, mapTheme) }]}
       testID={testID}
     >
@@ -226,7 +242,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
         />
         <BearingContext.Provider value={bearingStore}><ZoomContext.Provider value={zoomStore}>{children}</ZoomContext.Provider></BearingContext.Provider>
       </Map>
-      <MapCredit />
+      <MapCredit bottomInset={padding?.bottom ?? 0} />
     </View>
   );
 });

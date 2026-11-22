@@ -1,11 +1,15 @@
 
 import { callable } from '../lib/firebase';
 import { whenWarm } from './backendWarmup';
+import type { StationEntrance } from './stationEntrances';
 import type { StationTransfer, TransferMode } from './stationTransfers';
 import type { LiveSource } from './transit';
 
-/** `offsetMinutes` is this stop's real scheduled time, relative to `stops[0]` — see gtfsDiscovery.ts's getRouteGeometry. */
-export type GeometryStop = { stopId: string; name: string; lat: number; lon: number; offsetMinutes: number };
+/**
+ * `offsetMinutes` is this stop's real scheduled time, relative to `stops[0]` — see gtfsDiscovery.ts's getRouteGeometry.
+ * `entrances`: the station's ways in and out, for subway and PATH stations (stationEntrances.ts).
+ */
+export type GeometryStop = { stopId: string; name: string; lat: number; lon: number; offsetMinutes: number; entrances?: readonly StationEntrance[] };
 /** `path` is the agency's published track/street geometry (GTFS shapes); absent when it has none (or from an older backend), in which case the line joins the stops. */
 export type RouteGeometry = { headsign: string; stops: readonly GeometryStop[]; path?: readonly { lat: number; lon: number }[] };
 
@@ -50,7 +54,7 @@ export function clearRouteTransfersCache(): void {
 }
 
 function transferMode(agencyId: LiveSource['agencyId']): TransferMode {
-  if (agencyId === 'subway') return 'subway';
+  if (agencyId === 'subway' || agencyId === 'path') return 'subway';
   if (agencyId === 'lirr' || agencyId === 'metronorth') return 'rail';
   if (agencyId === 'nycferry' || agencyId === 'siferry') return 'ferry';
   return 'bus';

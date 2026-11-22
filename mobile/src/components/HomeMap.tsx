@@ -1,22 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { MapLine } from '../data/lineLayers';
 import { themedRouteColor } from '../data/routeColors';
 import { MAP_EXPLORATION_BOUNDS } from '../data/serviceArea';
 import { zoomForRegion } from '../data/stopDeclutter';
-import type { SavedLocation } from '../data/userData';
+import { metersPerPixelAtZoom, savedPinUnderDot, stackSavedPins } from '../data/savedPlacePin';
+import { locationPoint, type SavedLocation } from '../data/userData';
 import type { Coordinates } from '../hooks/useCurrentLocation';
 import { MapCanvas, MapMarker, MapPolyline } from '../map/MapCanvas';
 import type { MapCameraChange, MapCanvasRef, MapStop } from '../map/mapTypes';
 import { useTheme } from '../theme/AppSettings';
-import { CurrentLocationMarker } from './CurrentLocationMarker';
+import { CURRENT_LOCATION_SIZE, CurrentLocationMarker } from './CurrentLocationMarker';
 import { HeadingBeamMarker } from './HeadingBeamMarker';
 import { SavedPlaceMarkers } from './SavedPlaceMarkers';
 import { StopPill } from './StopPill';
 
 /** Where the map opens with no camera to restore: around the rider at street-and-neighborhood scale. */
 const HOME_ZOOM = 14;
-const MIN_ZOOM = 8;
+// Far enough out to see the whole region at once, from Montauk to Poughkeepsie.
+const MIN_ZOOM = 6;
 const RECENTER_MS = 400;
 /** Within this many degrees of north-up and flat, the map counts as oriented. */
 const ORIENTED_TOLERANCE_DEGREES = 2;
@@ -138,6 +140,22 @@ export function HomeMap({
   }, [onCameraChange, onOrientationChange, onUserMoveEnd]);
 
   const showRider = simulatedLocation || locationKnown;
+  // The saved places' pins where they're drawn at this zoom (stacked as SavedPlaceMarkers stacks them).
+  const savedPins = useMemo(() => {
+    const placed = savedLocations.flatMap((saved) => {
+      const point = locationPoint(saved.address);
+      return point ? [{ saved, point }] : [];
+    });
+    if (placed.length === 0) return [];
+    const stacks = stackSavedPins(placed.map(({ point }) => point), metersPerPixelAtZoom(zoom, placed[0]!.point.latitude));
+    return placed.map(({ saved }, index) => ({ saved, position: stacks[index]!.position }));
+  }, [savedLocations, zoom]);
+  // The dot is drawn over the pins and takes the tap, so a tap on it opens a favorite it covers
+  // (the rider standing at home).
+  const onRiderPress = onSavedLocationPress && savedPins.length > 0 ? () => {
+    const under = savedPinUnderDot(savedPins, location, CURRENT_LOCATION_SIZE, metersPerPixelAtZoom(zoom, location.latitude));
+    if (under) onSavedLocationPress(under.saved, savedPins.filter((pin) => pin.position === under.position).map((pin) => pin.saved));
+  } : undefined;
 
   return (
     <MapCanvas
@@ -169,7 +187,7 @@ export function HomeMap({
       <SavedPlaceMarkers locations={savedLocations} onPress={onSavedLocationPress} zIndex={1} zoom={zoom} />
       {selectedStop ? <StopPill key={`${selectedStop.name}@${selectedStop.coordinate.latitude},${selectedStop.coordinate.longitude}`} onPress={() => onOpenStop?.(selectedStop)} stop={selectedStop} /> : null}
       {showRider ? (
-        <MapMarker coordinate={location} testID={simulatedLocation ? 'mock-location-marker' : `${testID}-user-location`} zIndex={5}>
+        <MapMarker coordinate={location} onPress={onRiderPress} testID={simulatedLocation ? 'mock-location-marker' : `${testID}-user-location`} zIndex={5}>
           <CurrentLocationMarker />
         </MapMarker>
       ) : null}

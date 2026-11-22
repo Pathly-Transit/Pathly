@@ -26,14 +26,30 @@ export const isSuffolk = (agency: string) => agency === 'Suffolk County Transit'
 /** Google has used both the MTA's official name and its shorter railroad name. */
 export const isMetroNorth = (agency: string) => /metro[\s-]*north|\bmnr\b/i.test(agency);
 
+/** PATH: Google names it "PATH" or by the Port Authority's full name for it. */
+export const isPath = (agency: string) => /^path$|port authority trans[\s-]*hudson/i.test(agency.trim());
+
+type StepLine = { line?: { name?: string; shortName?: string } };
+
+/**
+ * The rider-facing mode of a step on an agency whose vehicles Google may type loosely: PATH rides
+ * as rapid transit (subway). Other steps keep the mode of their vehicle type.
+ */
+export function modeForAgency(step: Pick<TransitStep, 'agency' | 'mode'> & StepLine): TransitStep['mode'] {
+  const name = step.agency.name;
+  if (isPath(name) && (step.mode === 'rail' || step.mode === 'other')) return 'subway';
+  return step.mode;
+}
+
 /**
  * The Pathly agencies whose timetable a Google transit step may run on, most likely first. A city
  * bus could be in any of the borough feeds (a route can cross boroughs), so all of them are tried.
  */
-export function agencyIdsForStep(step: Pick<TransitStep, 'agency' | 'mode'>): AgencyId[] {
+export function agencyIdsForStep(step: Pick<TransitStep, 'agency' | 'mode'> & StepLine): AgencyId[] {
   const name = step.agency.name;
   if (name === LIRR_AGENCY) return ['lirr'];
   if (isMetroNorth(name)) return ['metronorth'];
+  if (isPath(name)) return ['path'];
   // The Staten Island Railway comes as an NYCT rail line; its timetable is the subway feed's SI.
   if (name === NYCT_AGENCY && (step.mode === 'subway' || step.mode === 'rail')) return ['subway'];
   if (((name === NYCT_AGENCY || name === MTA_AGENCY) && step.mode === 'bus') || isMtaBusCompany(name)) return [...MTA_BUS_AGENCY_IDS];

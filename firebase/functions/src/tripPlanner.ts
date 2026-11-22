@@ -28,6 +28,7 @@ import {
   type TripStop,
   type WalkStep,
 } from './tripPlanning';
+import { legEntrances } from './stationEntrances';
 import { liveTripRefs, type LiveTripRef } from './tripLive';
 import { hasWalkingData, walkingMeters, walkingPath } from './walkingGraph';
 
@@ -535,6 +536,8 @@ function transitStep(context: PlanContext, ride: RideLeg, iso: (seconds: number)
       alightStopId: network.stopId(ride.alightStop),
       ...(direction >= 0 ? { directionId: direction } : {}),
     },
+    // Where to go in at the boarding station and out at the alighting one.
+    ...legEntrances(agencyId, network.stopId(ride.boardStop), network.stopId(ride.alightStop)),
   };
   const departures = rideDepartures(context, ride, iso);
   if (departures.length > 1) step.departures = departures;

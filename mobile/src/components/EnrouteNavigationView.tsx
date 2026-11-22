@@ -1,64 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useAuth } from '../auth/AuthContext';
-import { normalizeBeanAvatar } from '../avatars/beanAvatar';
-import {
-  guidanceForNavigation,
-  type ActiveTripRuntime,
-  type NavigationCheckpoint,
-  type NavigationCursor,
-  type NavigationFix,
-  type NormalizedNavigationPlan,
-} from '../data/enrouteNavigation';
-import { hurryUpFor, hurryUpMessage } from '../data/hurryUp';
-import { rideFixFrom, withOwnAvatar, type RideTracking } from '../data/rideTracking';
-import { useSupportPrompt } from '../data/supportPrompt';
-import { useUserPreferences } from '../data/userPreferences';
-import { navigationMapProgress } from '../data/tripMap';
-import { badgeMode, formatDurationMinutes, formatTripClock, tripMinutes } from '../data/tripPlanning';
-import { useClock } from '../hooks/useClock';
-import { useOnBoardVehicle } from '../hooks/useTripRide';
-import { legSource, useTripVehicles } from '../hooks/useTripVehicles';
-import { useViewportSize } from '../hooks/useViewportSize';
-import { notifyNow } from '../lib/notifications';
+import type { NavigationCheckpoint } from '../data/enrouteNavigation';
 import { ThemedStatusBar, useTheme, useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
-import { fontFamilies, typography } from '../theme/typography';
+import { typography } from '../theme/typography';
 import { ConfirmDialog } from './ConfirmDialog';
-import { DetailMapPage } from './DetailMapPage';
 import { Icon } from './Icon';
-import { Mascot } from './Mascot';
 import { MapControlButton } from './MapControlButton';
-import { mapPageMapHeight } from './mapSheetLayout';
 import { PressableScale } from './PressableScale';
-import { RideReportBar } from './RideReportBar';
-import { RouteBadge } from './RouteBadge';
-import { SupportCard } from './SupportCard';
-import { TripMap } from './TripMap';
 import { radii } from '../theme/shape';
 
-const METERS_PER_MILE = 1609.344;
-const FEET_PER_METER = 3.28084;
+/**
+ * A trip under way is followed on its own Trip Details page (PlannedTripDetailView, or
+ * RideGuideView for Route View's GO). What's left here: the page for a saved trip whose exact
+ * route can't be restored yet, and the admin's checkpoint stepper shown on the live trip page.
+ */
 
 export type EnrouteLocationState = 'located' | 'loading' | 'unavailable' | 'stale' | 'poor-accuracy' | 'off-route';
-
-type EnrouteNavigationViewProps = {
-  cursor: NavigationCursor;
-  fix: NavigationFix | null;
-  followFix?: NavigationFix | null;
-  isAdmin: boolean;
-  locationState: EnrouteLocationState;
-  onBack: () => void;
-  onDemoCheckpoint?: (checkpoint: NavigationCheckpoint, index: number) => void;
-  onEnd: () => void;
-  onResetDemo?: () => void;
-  plan: NormalizedNavigationPlan;
-  /** Runs for the whole trip (HomeScreen), so it carries on behind other pages. */
-  ride?: RideTracking;
-  session: ActiveTripRuntime;
-};
 
 type EnrouteRecoveryViewProps = {
   destination: string;
@@ -68,345 +28,62 @@ type EnrouteRecoveryViewProps = {
   onRetry: () => void;
 };
 
-const locationCopy: Record<Exclude<EnrouteLocationState, 'located'>, string> = {
-  loading: 'Updating your location…',
-  unavailable: 'Live location is unavailable. Keeping your last confirmed step.',
-  stale: 'Your last location is old. Keeping your last confirmed step while we update it.',
-  'poor-accuracy': 'Location accuracy is too low to confirm the next step yet.',
-  'off-route': "We can't match this location to the planned route yet.",
+type TripDemoControlsProps = {
+  checkpoints: readonly NavigationCheckpoint[];
+  /** Where the trip is now, so the stepper starts there. */
+  initialIndex: number;
+  onCheckpoint: (checkpoint: NavigationCheckpoint, index: number) => void;
+  onReset: () => void;
 };
 
-type FormattedCopy = { accessible: string; visible: string };
-
-function relativeTimeCopy(iso: string, now: number): FormattedCopy {
-  const differenceMs = Date.parse(iso) - now;
-  if (differenceMs > 30_000) {
-    const minutes = Math.max(1, Math.ceil(differenceMs / 60_000));
-    const duration = formatDurationMinutes(minutes);
-    return { accessible: `in ${duration.accessibility}`, visible: `in ${duration.visible}` };
-  }
-  if (differenceMs >= -30_000) return { accessible: 'now', visible: 'now' };
-  const minutes = Math.max(1, Math.floor(Math.abs(differenceMs) / 60_000));
-  const duration = formatDurationMinutes(minutes);
-  return { accessible: `${duration.accessibility} ago`, visible: `${duration.visible} ago` };
-}
-
-function distanceCopy(meters: number): FormattedCopy {
-  const miles = meters / METERS_PER_MILE;
-  if (miles >= 0.1) {
-    const value = miles.toFixed(1);
-    return { accessible: `${value} miles`, visible: `${value} mi` };
-  }
-  const feet = Math.max(50, Math.round((meters * FEET_PER_METER) / 50) * 50);
-  return { accessible: `${feet} feet`, visible: `${feet} ft` };
-}
-
-function movementMetadata(distanceMeters: number | null, durationSeconds: number | null, phase: 'walking' | 'transferring'): FormattedCopy | null {
-  const distance = distanceMeters === null ? null : distanceCopy(distanceMeters);
-  const minutes = durationSeconds === null ? null : tripMinutes(durationSeconds);
-  const duration = minutes === null ? null : formatDurationMinutes(minutes);
-  const visible = [distance?.visible, duration?.visible].filter(Boolean).join(', ');
-  if (!visible) return null;
-  const action = phase === 'walking' ? 'Walking' : 'Transfer';
-  const accessible = [
-    distance ? `${action} distance ${distance.accessible}` : null,
-    duration === null ? null : `estimated ${action.toLowerCase()} time ${duration.accessibility}`,
-  ].filter(Boolean).join('. ');
-  return { accessible: `${accessible}.`, visible };
-}
-
-/** The map-first foreground navigation experience driven by the pure progress engine. */
-export function EnrouteNavigationView({ cursor, fix, followFix, isAdmin, locationState, onBack, onDemoCheckpoint, onEnd, onResetDemo, plan, ride, session }: EnrouteNavigationViewProps) {
+/** Admin only: moves the mock location through the trip's checkpoints, to walk a trip without walking it. */
+export function TripDemoControls({ checkpoints, initialIndex, onCheckpoint, onReset }: TripDemoControlsProps) {
   const styles = useThemedStyles(createStyles);
-  const { colors } = useTheme();
-  const now = useClock(30_000);
-  const { height } = useViewportSize();
-  const guidance = useMemo(() => guidanceForNavigation(plan, cursor), [cursor, plan]);
-  // The line goes gray right where the rider is (their last on-route fix), not at the last stop passed.
-  const riderLat = followFix?.point.lat;
-  const riderLng = followFix?.point.lng;
-  const mapProgress = useMemo(
-    () => navigationMapProgress(plan, cursor, riderLat !== undefined && riderLng !== undefined ? { lat: riderLat, lng: riderLng } : null),
-    [cursor, plan, riderLat, riderLng],
-  );
-  const currentStep = session.itinerary.steps[cursor.stepIndex];
-  const currentTransitStep = currentStep?.kind === 'transit' ? currentStep : null;
-  // The rides' live vehicles; the one the rider's own location says they're on carries their Pathling.
-  const { vehicles, approachLines } = useTripVehicles(session.itinerary, colors.primary);
-  const rideFix = rideFixFrom(fix, locationState === 'stale' || locationState === 'unavailable' || locationState === 'loading');
-  const onBoard = useOnBoardVehicle(vehicles, rideFix);
-  const reportTripId = ride?.ridingTripId ?? onBoard;
-  const reportRoute = currentTransitStep?.liveRoute;
-  const { avatar } = useAuth();
-  const shownVehicles = useMemo(
-    () => vehicles.map((vehicle) => (vehicle.tripId === onBoard || vehicle.tripId === ride?.ridingTripId ? withOwnAvatar(vehicle, normalizeBeanAvatar(avatar ?? null)) : vehicle)),
-    [avatar, onBoard, ride?.ridingTripId, vehicles],
-  );
-  const [confirmingEnd, setConfirmingEnd] = useState(false);
-  const [controlsHeight, setControlsHeight] = useState(64);
-  const supportPrompt = useSupportPrompt(session.sessionId, guidance.phase === 'arrived');
-  const [centerRequest, setCenterRequest] = useState(1);
-  const [following, setFollowing] = useState(true);
-  const [demoIndex, setDemoIndex] = useState(Math.max(0, cursor.checkpointOrdinal));
-  const userLocation = fix ? fix.point : null;
-  // Walking to a stop with too little time to spare: a banner here, and once per stop a
-  // notification, so it reaches a rider who has put the phone away.
-  const { notifications: notificationPrefs } = useUserPreferences().preferences;
-  const hurryAlertsOn = notificationPrefs.enabled && notificationPrefs.tripReminders;
-  const hurry = fix && locationState === 'located' ? hurryUpFor(plan, cursor, fix.point, now) : null;
-  const hurryCopy = hurry ? hurryUpMessage(hurry) : null;
-  const nudgedKeys = useRef(new Set<string>());
-  const hurryKey = hurry?.key;
-  useEffect(() => {
-    if (!hurryKey || !hurryCopy || !hurryAlertsOn || nudgedKeys.current.has(hurryKey)) return;
-    nudgedKeys.current.add(hurryKey);
-    void notifyNow(hurryCopy.title, hurryCopy.body);
-    // Once per boarding: the copy's changing minutes don't nudge again.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hurryAlertsOn, hurryKey]);
-  const routeColor = guidance.line?.color ?? colors.primary;
-  const arrivalContext = relativeTimeCopy(guidance.arrivalTime, now);
-  // Keep the countdown together when a narrow footer needs a second metadata line.
-  const footerCountdown = arrivalContext.visible.replaceAll(' ', '\u00a0');
-  const departureContext = guidance.departureTime ? relativeTimeCopy(guidance.departureTime, now) : null;
-  const stepMetadata = guidance.phase === 'walking' || guidance.phase === 'transferring'
-    ? movementMetadata(guidance.distanceMeters, guidance.durationSeconds, guidance.phase)
-    : null;
-  const departureAccessibility = guidance.phase === 'waiting-to-board' && guidance.departureTime && departureContext
-    ? `Selected departure ${formatTripClock(guidance.departureTime)}, ${departureContext.accessible}. `
-    : '';
-  const movementAccessibility = stepMetadata ? `${stepMetadata.accessible} ` : '';
-  const remainingStopsAccessibility = guidance.remainingStops === null
-    ? ''
-    : `${guidance.remainingStops} ${guidance.remainingStops === 1 ? 'stop' : 'stops'} remaining. `;
-
+  const [demoIndex, setDemoIndex] = useState(Math.max(0, initialIndex));
   const moveDemo = (index: number) => {
-    const bounded = Math.max(0, Math.min(plan.checkpoints.length - 1, index));
-    const checkpoint = plan.checkpoints[bounded];
+    const bounded = Math.max(0, Math.min(checkpoints.length - 1, index));
+    const checkpoint = checkpoints[bounded];
     if (!checkpoint) return;
     setDemoIndex(bounded);
-    onDemoCheckpoint?.(checkpoint, bounded);
+    onCheckpoint(checkpoint, bounded);
   };
-
-  // Spoken directions, muted or restored right here (it's the Settings -> Notifications toggle).
-  const { preferences: { tripGuidance }, updatePreferences } = useUserPreferences();
-  const controls = (
-    <View onLayout={({ nativeEvent }) => setControlsHeight(Math.ceil(nativeEvent.layout.height))} pointerEvents="box-none" style={styles.topBar}>
-      <MapControlButton accessibilityLabel="Back to Home; navigation will stay active" icon="back" onPress={onBack} testID="enroute-back" />
-      <MapControlButton
-        accessibilityLabel={tripGuidance.voice ? 'Mute spoken directions' : 'Turn on spoken directions'}
-        icon={tripGuidance.voice ? 'voice' : 'voiceOff'}
-        onPress={() => updatePreferences({ tripGuidance: { voice: !tripGuidance.voice } })}
-        testID="enroute-voice"
-      />
-    </View>
-  );
-
-  const locateButton = (
-      <MapControlButton
-        accessibilityLabel="Follow current location"
-        icon="locate"
-        onPress={() => {
-          setFollowing(true);
-          setCenterRequest((value) => value + 1);
-        }}
-        selected={following}
-        testID="enroute-location"
-      />
-  );
-
   return (
-    <>
-      <DetailMapPage
-        contentStyle={styles.content}
-        contentTestID="enroute-content"
-        controls={controls}
-        controlsHeight={controlsHeight}
-        footer={(
-          <SafeAreaView edges={['bottom', 'left', 'right']} style={styles.footer} testID="enroute-footer">
-            <View style={styles.footerRow}>
-              <View
-                accessibilityLabel={`${session.destination.label}. Arrive ${formatTripClock(guidance.arrivalTime)}, ${arrivalContext.accessible}.`}
-                accessible={true}
-                style={styles.footerSummary}
-                testID="enroute-trip-summary"
-              >
-                <Text style={styles.footerDestination} testID="enroute-destination">{session.destination.label}</Text>
-                <Text style={styles.footerEta} testID="enroute-eta">{`Arrive ${formatTripClock(guidance.arrivalTime).replaceAll(' ', '\u00a0')}, ${footerCountdown}`}</Text>
-              </View>
-              <PressableScale
-                accessibilityLabel="End current trip"
-                accessibilityRole="button"
-                onPress={() => setConfirmingEnd(true)}
-                style={styles.endButton}
-                testID="enroute-end"
-              >
-                <Icon color={colors.onPrimary} name="stop" size={20} />
-                <Text style={styles.endText}>End trip</Text>
-              </PressableScale>
-            </View>
-          </SafeAreaView>
-        )}
-        interactiveMap={true}
-        mapButtons={locateButton}
-        map={(
-          <TripMap
-            approachLines={approachLines}
-            centerOnUserRequest={centerRequest}
-            followLocation={followFix ? followFix.point : null}
-            followUser={following}
-            interactive={true}
-            itinerary={session.itinerary}
-            navigationProgress={mapProgress}
-            onFollowModeChange={setFollowing}
-            onUserPan={() => setFollowing(false)}
-            padding={{ top: controlsHeight + 24, right: 32, bottom: 72, left: 32 }}
-            testID="enroute-trip-map"
-            userLocation={userLocation}
-            userLocationStale={locationState !== 'located'}
-            vehicles={shownVehicles}
-          />
-        )}
-        mapHeight={mapPageMapHeight(height)}
-        mapTestID="enroute-map"
-        scrollTestID="enroute-scroll"
-        testID="enroute-navigation-view"
-      >
-        <ThemedStatusBar />
-        <View style={styles.guidanceCard} testID="enroute-guidance-card">
-          <View
-            accessibilityLabel={`${guidance.currentAction}. ${departureAccessibility}${movementAccessibility}${guidance.nextAction ? `Next: ${guidance.nextAction}. ` : ''}${remainingStopsAccessibility}Arrive ${formatTripClock(guidance.arrivalTime)}, ${arrivalContext.accessible}.`}
-            accessible={true}
-            testID="enroute-guidance"
+    <View style={styles.demoPanel} testID="trip-demo-controls">
+      <View style={styles.demoHeadingRow}>
+        <Text style={styles.demoTitle}>Admin trip checkpoints</Text>
+        <PressableScale accessibilityLabel="Reset trip simulation" accessibilityRole="button" onPress={() => {
+          setDemoIndex(0);
+          onReset();
+        }} style={styles.demoReset} testID="trip-demo-reset">
+          <Icon name="refresh" size={16} />
+          <Text style={styles.demoResetText}>Reset</Text>
+        </PressableScale>
+      </View>
+      <ScrollView contentContainerStyle={styles.checkpointList} horizontal={true} showsHorizontalScrollIndicator={false}>
+        {checkpoints.map((checkpoint, index) => (
+          <PressableScale
+            key={checkpoint.key}
+            accessibilityLabel={`Move mock location to ${checkpoint.label}`}
+            accessibilityRole="button"
+            accessibilityState={{ selected: index === demoIndex }}
+            onPress={() => moveDemo(index)}
+            style={[styles.checkpoint, index === demoIndex && styles.selectedCheckpoint]}
+            testID={`trip-demo-checkpoint-${index}`}
           >
-            <View style={styles.phaseRow}>
-              <Text style={styles.arrival}>{`Arrive ${formatTripClock(guidance.arrivalTime)}, ${arrivalContext.visible}`}</Text>
-            </View>
-            <View style={styles.currentRow}>
-              {guidance.line ? (
-                <RouteBadge
-                  agency={currentTransitStep?.agency.name ?? ''}
-                  color={routeColor}
-                  mode={currentTransitStep ? badgeMode(currentTransitStep) : undefined}
-                  shortName={guidance.line.shortName ?? guidance.line.name}
-                  size="large"
-                  textColor={guidance.line.textColor}
-                />
-              ) : guidance.phase === 'arrived' ? (
-                <Mascot mood="happy" motion="pop" size={52} testID="enroute-arrived-mascot" />
-              ) : <View style={styles.walkIcon}><Icon color={colors.ink} name="travel" size={24} /></View>}
-              <View style={styles.currentCopy}>
-                <Text style={styles.currentAction} testID="enroute-current-action">{guidance.currentAction}</Text>
-                {guidance.headsign ? <Text style={styles.headsign}>{guidance.headsign}</Text> : null}
-                {guidance.phase === 'waiting-to-board' && guidance.departureTime && departureContext ? (
-                  <Text style={styles.stepMetadata} testID="enroute-departure-time">{`Departs ${formatTripClock(guidance.departureTime)}, ${departureContext.visible}`}</Text>
-                ) : null}
-                {stepMetadata ? <Text style={styles.stepMetadata} testID="enroute-step-metadata">{stepMetadata.visible}</Text> : null}
-              </View>
-            </View>
-            {guidance.nextAction ? (
-              <View style={styles.nextCard} testID="enroute-next-card">
-                <Text style={styles.nextLabel}>Next</Text>
-                <Text style={styles.nextAction} testID="enroute-next-action">{guidance.nextAction}</Text>
-                {guidance.remainingStops !== null ? <Text style={styles.remaining} testID="enroute-remaining-stops">{`${guidance.remainingStops} ${guidance.remainingStops === 1 ? 'stop' : 'stops'} remaining`}</Text> : null}
-              </View>
-            ) : null}
-            {hurryCopy ? (
-              <View accessibilityLiveRegion="assertive" style={styles.hurryNotice} testID="enroute-hurry-up">
-                <Icon color={colors.highlightInk} name="travel" size={20} />
-                <View style={styles.hurryCopy}>
-                  <Text style={styles.hurryTitle}>{hurryCopy.title}</Text>
-                  <Text style={styles.locationNoticeText}>{hurryCopy.body}</Text>
-                </View>
-              </View>
-            ) : null}
-          </View>
-          {ride?.ridingTripId ? (
-            <View style={styles.rideNotice} testID="enroute-ride-sharing">
-              <Icon color={colors.primary} name="people" size={20} />
-              <Text style={styles.locationNoticeText}>Sharing this ride. Other riders see your avatar, never your name.</Text>
-              <PressableScale
-                accessibilityLabel="I'm not on this vehicle; stop sharing"
-                accessibilityRole="button"
-                onPress={() => { if (ride.ridingTripId) ride.dismiss(ride.ridingTripId); }}
-                style={styles.rideDismiss}
-                testID="enroute-ride-not-on"
-              >
-                <Text style={styles.rideDismissText}>Not on this</Text>
-              </PressableScale>
-            </View>
-          ) : null}
-          {reportTripId && reportRoute ? (
-            <View style={styles.rideReport}>
-              <RideReportBar fix={rideFix} key={reportTripId} source={legSource(reportRoute)} tripId={reportTripId} />
-            </View>
-          ) : null}
-          {locationState !== 'located' ? (
-            <View accessibilityLiveRegion="polite" style={styles.locationNotice} testID={`enroute-location-${locationState}`}>
-              <Icon color={colors.warning} name="alert" size={18} />
-              <Text style={styles.locationNoticeText}>{locationCopy[locationState]}</Text>
-            </View>
-          ) : null}
-        </View>
-
-        {supportPrompt.visible ? <SupportCard onDismiss={supportPrompt.dismiss} onDonate={supportPrompt.donate} /> : null}
-
-        {isAdmin && onDemoCheckpoint && onResetDemo ? (
-          <View style={styles.demoPanel} testID="enroute-demo-controls">
-            <View style={styles.demoHeadingRow}>
-              <View>
-                <Text style={styles.demoLabel}>Admin demo</Text>
-                <Text style={styles.demoTitle}>Trip checkpoints</Text>
-              </View>
-              <PressableScale accessibilityLabel="Reset trip simulation" accessibilityRole="button" onPress={() => {
-                setDemoIndex(0);
-                onResetDemo();
-              }} style={styles.demoReset} testID="enroute-demo-reset">
-                <Icon name="refresh" size={16} />
-                <Text style={styles.demoResetText}>Reset</Text>
-              </PressableScale>
-            </View>
-            <ScrollView contentContainerStyle={styles.checkpointList} horizontal={true} showsHorizontalScrollIndicator={false}>
-              {plan.checkpoints.map((checkpoint, index) => (
-                <PressableScale
-                  key={checkpoint.key}
-                  accessibilityLabel={`Move mock location to ${checkpoint.label}`}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: index === demoIndex }}
-                  onPress={() => moveDemo(index)}
-                  style={[styles.checkpoint, index === demoIndex && styles.selectedCheckpoint]}
-                  testID={`enroute-demo-checkpoint-${index}`}
-                >
-                  <Text style={[styles.checkpointText, index === demoIndex && styles.selectedCheckpointText]}>{checkpoint.label}</Text>
-                </PressableScale>
-              ))}
-            </ScrollView>
-            <View style={styles.demoActions}>
-              <PressableScale accessibilityLabel="Previous demo checkpoint" accessibilityRole="button" disabled={demoIndex === 0} onPress={() => moveDemo(demoIndex - 1)} style={[styles.demoStep, demoIndex === 0 && styles.disabled]} testID="enroute-demo-previous">
-                <Icon name="back" size={18} /><Text style={styles.demoStepText}>Previous</Text>
-              </PressableScale>
-              <Text style={styles.demoCount}>{`${demoIndex + 1} / ${plan.checkpoints.length}`}</Text>
-              <PressableScale accessibilityLabel="Next demo checkpoint" accessibilityRole="button" disabled={demoIndex >= plan.checkpoints.length - 1} onPress={() => moveDemo(demoIndex + 1)} style={[styles.demoStep, demoIndex >= plan.checkpoints.length - 1 && styles.disabled]} testID="enroute-demo-next">
-                <Text style={styles.demoStepText}>Next</Text><Icon name="forward" size={18} />
-              </PressableScale>
-            </View>
-          </View>
-        ) : null}
-      </DetailMapPage>
-      <ConfirmDialog
-        body="You'll stop following this trip."
-        confirmLabel="End trip"
-        destructive={true}
-        onCancel={() => setConfirmingEnd(false)}
-        onConfirm={() => {
-          setConfirmingEnd(false);
-          onEnd();
-        }}
-        testID="enroute-end-confirm"
-        title="End this trip?"
-        visible={confirmingEnd}
-      />
-    </>
+            <Text style={[styles.checkpointText, index === demoIndex && styles.selectedCheckpointText]}>{checkpoint.label}</Text>
+          </PressableScale>
+        ))}
+      </ScrollView>
+      <View style={styles.demoActions}>
+        <PressableScale accessibilityLabel="Previous demo checkpoint" accessibilityRole="button" disabled={demoIndex === 0} onPress={() => moveDemo(demoIndex - 1)} style={[styles.demoStep, demoIndex === 0 && styles.disabled]} testID="trip-demo-previous">
+          <Icon name="back" size={18} /><Text style={styles.demoStepText}>Previous</Text>
+        </PressableScale>
+        <Text style={styles.demoCount}>{`${demoIndex + 1} / ${checkpoints.length}`}</Text>
+        <PressableScale accessibilityLabel="Next demo checkpoint" accessibilityRole="button" disabled={demoIndex >= checkpoints.length - 1} onPress={() => moveDemo(demoIndex + 1)} style={[styles.demoStep, demoIndex >= checkpoints.length - 1 && styles.disabled]} testID="trip-demo-next">
+          <Text style={styles.demoStepText}>Next</Text><Icon name="forward" size={18} />
+        </PressableScale>
+      </View>
+    </View>
   );
 }
 
@@ -458,7 +135,6 @@ export function EnrouteRecoveryView({ destination, loading = false, onBack, onEn
 }
 
 const createStyles = (colors: Palette) => StyleSheet.create({
-  content: { paddingHorizontal: 16, paddingTop: 22, paddingBottom: 52 },
   recoveryViewport: { flex: 1, alignItems: 'center', backgroundColor: colors.background },
   recoverySafeArea: { width: '100%', maxWidth: 540, flex: 1, padding: 16, backgroundColor: colors.canvas },
   recoveryCard: { marginTop: 80, alignItems: 'center', padding: 24, borderWidth: 1, borderColor: colors.border, borderRadius: radii.card, backgroundColor: colors.surface },
@@ -469,39 +145,8 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   recoveryPrimaryText: { color: colors.onPrimary, ...typography.bodyStrong },
   recoveryEnd: { minHeight: 44, alignItems: 'center', justifyContent: 'center', marginTop: 8, paddingHorizontal: 20 },
   recoveryEndText: { color: colors.red, ...typography.bodyStrong },
-  topBar: { minHeight: 64, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 8, paddingHorizontal: 16 },
-  footer: { paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.surface },
-  footerRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  footerSummary: { flex: 1, minWidth: 0 },
-  footerDestination: { color: colors.ink, ...typography.bodyStrong, fontSize: 18 },
-  footerEta: { marginTop: 3, color: colors.mutedInk, ...typography.metadata, fontSize: 13, fontVariant: ['tabular-nums'] },
-  endButton: { flexShrink: 0, minWidth: 112, minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 12, paddingHorizontal: 14, borderRadius: radii.pill, backgroundColor: colors.red },
-  endText: { color: colors.onPrimary, fontFamily: fontFamilies.extraBold, fontSize: 16 },
-  guidanceCard: { padding: 18, borderWidth: 1, borderColor: colors.border, borderRadius: radii.card, backgroundColor: colors.surface },
-  phaseRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: 10, rowGap: 6 },
-  arrival: { color: colors.ink, ...typography.bodyStrong },
-  currentRow: { marginTop: 15, flexDirection: 'row', alignItems: 'center', gap: 13 },
-  walkIcon: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 23, backgroundColor: colors.blueSoft },
-  currentCopy: { flex: 1, minWidth: 0 },
-  currentAction: { color: colors.ink, ...typography.sectionHeading, fontSize: 21 },
-  headsign: { marginTop: 2, color: colors.mutedInk, ...typography.body },
-  stepMetadata: { marginTop: 4, color: colors.primary, ...typography.metadata, fontVariant: ['tabular-nums'] },
-  nextCard: { marginTop: 17, padding: 13, borderRadius: radii.card, backgroundColor: colors.surfaceMuted },
-  nextLabel: { color: colors.mutedInk, ...typography.label },
-  nextAction: { marginTop: 3, color: colors.ink, ...typography.bodyStrong, fontSize: 16 },
-  remaining: { marginTop: 2, color: colors.primary, ...typography.metadata },
-  locationNotice: { marginTop: 13, flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderRadius: radii.control, backgroundColor: colors.amberSoft },
-  locationNoticeText: { flex: 1, color: colors.ink, ...typography.metadata },
-  rideReport: { marginTop: 13 },
-  rideNotice: { marginTop: 13, flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderRadius: radii.control, backgroundColor: colors.blueSoft },
-  rideDismiss: { minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
-  rideDismissText: { color: colors.primary, ...typography.bodyStrong, fontSize: 13 },
-  hurryNotice: { marginTop: 13, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: radii.control, backgroundColor: colors.highlightSoft },
-  hurryCopy: { flex: 1, gap: 2 },
-  hurryTitle: { color: colors.ink, ...typography.bodyStrong },
-  demoPanel: { marginTop: 14, padding: 15, borderWidth: 1, borderColor: colors.accent, borderRadius: radii.card, backgroundColor: colors.blueSoft },
+  demoPanel: { marginBottom: 12, padding: 15, borderWidth: 1, borderColor: colors.accent, borderRadius: radii.card, backgroundColor: colors.blueSoft },
   demoHeadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  demoLabel: { color: colors.primary, ...typography.label },
   demoTitle: { color: colors.ink, ...typography.bodyStrong, fontSize: 16 },
   demoReset: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surface },
   demoResetText: { color: colors.primary, ...typography.metadata },

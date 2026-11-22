@@ -65,6 +65,11 @@ export function modeForRouteType(type: number): TransitMode {
   return 'other';
 }
 
+/** A route's mode: its GTFS route type's, except PATH, which its feed calls rail but rides as rapid transit, like the subway. */
+export function modeForRoute(agencyId: AgencyId, type: number): TransitMode {
+  return agencyId === 'path' ? 'subway' : modeForRouteType(type);
+}
+
 const VEHICLE_NAMES: Record<TransitMode, string> = { subway: 'Subway', rail: 'Train', bus: 'Bus', ferry: 'Ferry', other: 'Transit' };
 const BUS_AGENCIES = new Set<AgencyId>(['bx', 'bk', 'mn', 'qn', 'si', 'busco', 'nice', 'suffolk']);
 
@@ -196,7 +201,7 @@ export class TransitNetwork {
         if (parent >= 0) this.stopParent[global] = stopOffset + parent;
       }
       for (const route of timetable.routes) {
-        const mode = modeForRouteType(route.type);
+        const mode = modeForRoute(agencyId, route.type);
         const agency = timetable.agencies[route.agency] ?? timetable.agencies[0];
         const textColor = BUS_AGENCIES.has(agencyId) ? '#FFFFFF' : /^[0-9a-f]{6}$/i.test(route.textColor) ? `#${route.textColor.toUpperCase()}` : undefined;
         this.routes.push({

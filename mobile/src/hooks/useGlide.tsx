@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
+import { useAppSettings } from '../theme/AppSettings';
+
 /** How long a moved vehicle takes to slide to its new spot. */
 const GLIDE_MS = 1200;
 
@@ -9,16 +11,18 @@ const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 
 
 /**
  * A point that slides to each new value instead of jumping, so a vehicle's refreshed position is
- * seen leaving where it was. A jump farther than `maxMeters` (a new trip, a GPS glitch) snaps.
+ * seen leaving where it was. A jump farther than `maxMeters` (a new trip, a GPS glitch) snaps, and
+ * so does every move with reduced motion on.
  */
 export function useGlide(target: Point, maxMeters = 3_000): Point {
+  const { reducedMotionActive } = useAppSettings();
   const [shown, setShown] = useState(target);
   const shownRef = useRef(target);
   useEffect(() => {
     const from = shownRef.current;
     if (from.lat === target.lat && from.lon === target.lon) return undefined;
     const meters = Math.hypot((target.lat - from.lat) * 111_320, (target.lon - from.lon) * 111_320 * Math.cos((target.lat * Math.PI) / 180));
-    if (meters > maxMeters || typeof requestAnimationFrame !== 'function') {
+    if (meters > maxMeters || reducedMotionActive || typeof requestAnimationFrame !== 'function') {
       shownRef.current = target;
       setShown(target);
       return undefined;
@@ -35,7 +39,7 @@ export function useGlide(target: Point, maxMeters = 3_000): Point {
     };
     frame = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frame);
-  }, [target.lat, target.lon, maxMeters]); // eslint-disable-line react-hooks/exhaustive-deps -- keyed on the coordinates
+  }, [target.lat, target.lon, maxMeters, reducedMotionActive]); // eslint-disable-line react-hooks/exhaustive-deps -- keyed on the coordinates
   return shown;
 }
 

@@ -79,7 +79,7 @@ function RequestRow({ entry }: { entry: RequestLogEntry }) {
 }
 
 /** The app's small popups, shown on demand to check how they look. */
-export type PopupPreview = 'support' | 'holiday' | 'arrival' | 'places';
+export type PopupPreview = 'support' | 'holiday' | 'arrival' | 'onboarding';
 
 type AdminToolsViewProps = { onBack: () => void; onPickMockLocation: () => void; onPreviewPopup: (popup: PopupPreview) => void };
 
@@ -210,7 +210,7 @@ export function AdminToolsView({ onBack, onPickMockLocation, onPreviewPopup }: A
             <SettingRow detail="Tip and quick survey, as Home asks now and then" label="Feedback and tips" onPress={() => onPreviewPopup('support')} testID="admin-popup-support" />
             <SettingRow detail="The reminder before a holiday schedule" label="Holiday service" onPress={() => onPreviewPopup('holiday')} testID="admin-popup-holiday" />
             <SettingRow detail="The tip ask after a trip ends" label="Glad you made it" onPress={() => onPreviewPopup('arrival')} testID="admin-popup-arrival" />
-            <SettingRow detail="A new account's first prompt" label="Your places" onPress={() => onPreviewPopup('places')} testID="admin-popup-places" />
+            <SettingRow detail="A new account's first page" label="Onboarding" onPress={() => onPreviewPopup('onboarding')} testID="admin-popup-onboarding" />
           </Card>
 
           <Text style={profile.sectionLabel}>Overlays</Text>

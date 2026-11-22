@@ -32,6 +32,8 @@ Streets change slowly, so rebuilding every month or two is enough.
 
 Route Results gets real transit itineraries from the `planTrip` Cloud Function. The function calls the Google Routes API (`computeRoutes` in transit mode, with alternatives). It uses the same `GOOGLE_MAPS_API_KEY` secret as the other backend proxies, so the key never ships in the app.
 
+Optional timetable preparation and intermediate-stop matching share a three-second budget after Google answers. Only agencies used by the returned trips are prepared, with at most three preparations in flight across requests on one instance. If that budget expires, routes use already active or bundled data and may omit optional stop details; live-feed enrichment has its own 2.5-second budget. A late snapshot may fill the shared hydration cache, but cannot replace active data until a later request prepares it. The `trip_static_data_budget_exceeded` log marks this fallback. This server-side behavior reaches existing installed apps after deploying `planTrip`; it does not require a new mobile build.
+
 - **Enable the API:** in the Google Cloud console for `pathly-b7f0f`, open **APIs & Services → Library**, find **Routes API**, and select **Enable**. If the server key has API restrictions (**APIs & Services → Credentials** → the key → **API restrictions**), add **Routes API** to the allowed list.
 - **Cost:** transit requests bill as **Routes: Compute Routes Essentials**. The first 10,000 requests per month are free, then $5 per 1,000. Each plan is one request. The app caches plans for 2 minutes and limits each rider to 20 plans per minute.
 - **Cap it:** to keep a bug from running past the free tier, lower the Routes API's per-day request quota. In **Google Maps Platform → Quotas**, select **Routes API**, choose **Edit** on the per-day quota, and enter a value such as 300 (about 9,000 a month).
@@ -40,8 +42,8 @@ Route Results gets real transit itineraries from the `planTrip` Cloud Function. 
 
 ## Live data sources
 
-- **Real-time vehicles and departures:** each agency's GTFS-RT feed. Metro-North and LIRR use their MTA railroad feeds; the MTA Bus Time, Swiftly, and NYC Ferry feeds serve their configured agencies. Agencies without a live feed, such as the Staten Island Ferry, show timetable departures only.
-- **Service alerts:** MTA's public GTFS-RT alerts feed (subway, city buses, LIRR, and Metro-North). Route detail lists these alerts under the departure times. If the alerts feed fails, the route shows no alerts instead of failing.
+- **Real-time vehicles and departures:** each agency's GTFS-RT feed. Metro-North and LIRR use their MTA railroad feeds; the MTA Bus Time, Swiftly, and NYC Ferry feeds serve their configured agencies. PATH uses a community GTFS-RT feed (path.transitdata.nyc, built on the Port Authority's RidePATH arrivals; PATH publishes no official one). Agencies without a live feed, such as the Staten Island Ferry, show timetable departures only.
+- **Service alerts:** MTA's public GTFS-RT alerts feed (subway, city buses, LIRR, and Metro-North). PATH has no alerts feed. Route detail lists these alerts under the departure times. If the alerts feed fails, the route shows no alerts instead of failing.
 
 ## Secrets
 
@@ -63,7 +65,7 @@ Don't create or share Firebase Admin service-account JSON keys for routine devel
 
 ## Static GTFS refresh
 
-Every day at 04:00 `America/New_York`, the deployed backend refreshes the official static GTFS feeds for every agency: Metro-North, LIRR, subway, NICE Bus, Suffolk County Transit, MTA city buses (five boroughs and MTA Bus Company), NYC Ferry, and the Staten Island Ferry. A successful run works like this:
+Every day at 04:00 `America/New_York`, the deployed backend refreshes the official static GTFS feeds for every agency: Metro-North, LIRR, subway, NICE Bus, Suffolk County Transit, MTA city buses (five boroughs and MTA Bus Company), NYC Ferry, the Staten Island Ferry, and PATH. A successful run works like this:
 
 1. It validates the full feed.
 2. It uploads an immutable ZIP to `gtfs/v1/<agency>/versions/<archive-sha256>.zip`.
@@ -76,6 +78,10 @@ Each snapshot also gets a prepared-index archive at `gtfs/v1/<agency>/derived/<v
 The city bus and ferry agencies are too large to copy into every instance, so their prepared timetable is split. A small core archive holds the indexes and `route-files.json`, and each route gets its own object under `gtfs/v1/<agency>/derived/<version>/<format>/`. Instances fetch and verify a route's object the first time they need it. These agencies have no bundled copy, so each one is skipped until its first snapshot is published.
 
 The Staten Island Ferry's feed leaves `direction_id` blank, so the refresh fills in each trip's direction from its first and last stops before publishing.
+
+Some feeds are reshaped before they're validated (`gtfsTransforms.ts`). PATH's timetable names platforms while its live feed names stations, so each platform becomes its parent station. To refresh a committed copy by hand, download the agency's `staticFeedUrl` and run `node scripts/import-static-feed.js <agency> <zip>` after `npm run build`.
+
+PATH's published feed (Trillium's copy of the Port Authority's) ended its service on 2026-06-01, and no newer one was published as of 2026-11-18. The refresh rejects it as expired, so PATH shows its stations, lines and live arrivals but no timetable times until a new feed appears.
 
 **Retention.** Once the version a publication replaced has been current for a day, the publication deletes the version from two publications back: its ZIP, prepared archive, and route files. The two live versions are never touched. Deletion is by name from the manifests, so the writer needs no list permission. Logs show `gtfs_snapshot_retired`, or `gtfs_snapshot_retire_failed` with the reason.
 
@@ -111,6 +117,8 @@ The Staten Island Ferry's feed leaves `direction_id` blank, so the refresh fills
 5. Wait up to five minutes, use the signed-in nearby-transit flow, and confirm a `gtfs_snapshot_hydrated` event (with `prepared: true`) for each agency.
 
 Set up alerts on `gtfs_refresh_failed`, `gtfs_snapshot_fallback`, `gtfs_snapshot_derived_failed`, and `gtfs_service_expiring`. Also alert if no complete refresh (`gtfs_refresh_completed`) succeeds within 26 hours.
+
+A single slow cold start can log up to one `gtfs_snapshot_fallback` per agency and then recover by itself. So the fallback alert uses the `pathly_gtfs_snapshot_fallback` log-based metric and fires only when there are more than 8 events across all functions in an hour.
 
 The refresh keeps immutable ZIP history instead of deleting archives during publication. That keeps content rollback and A-to-B-to-A reuse safe. Don't apply a blanket lifecycle rule that could remove an archive a live manifest references. If you ever need to clean up by hand, pause the scheduler first, and keep every current and previous archive that a manifest references.
 

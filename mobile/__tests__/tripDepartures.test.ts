@@ -1,7 +1,8 @@
-import { savedPlaceIcon } from '../src/components/SavedPlacesStrip';
+import { savedPlaceIcon } from '../src/components/FavoritesStrip';
 import { stopRevealZoom, zoomForRegion } from '../src/data/stopDeclutter';
 import { viaRevealZooms, type TripMapStop } from '../src/data/tripMap';
 import { legDepartureOptions, quickDepartureOptions, retimeItinerary } from '../src/data/tripDepartures';
+import { createTripSelectionIdentity, sameTripSelection } from '../src/data/enrouteNavigation';
 import type { Itinerary, TransitStep, WalkStep } from '../src/data/tripPlanning';
 
 const at = (minutes: number) => new Date(Date.UTC(2026, 9, 15, 13, 0) + minutes * 60_000).toISOString();
@@ -67,6 +68,52 @@ describe('picking a departure for a planned trip', () => {
     expect(retimed.departureTime).toBe(at(15));
     expect(retimed.arrivalTime).toBe(at(53));
     expect(retimed.durationSeconds).toBe(38 * 60);
+  });
+
+  it('drops the previous run ID on changed departures and matches the exact newly identified run', () => {
+    const identified: Itinerary = {
+      ...trip,
+      steps: trip.steps.map((step, index) => step.kind === 'transit' ? {
+        ...step,
+        tripId: `original-run-${index}`,
+        liveRoute: { agencyId: 'mta-bus', routeId: 'M15', boardStopId: `board-${index}`, alightStopId: `alight-${index}`, directionId: 1 },
+      } : step),
+    };
+    const selected = retimeItinerary(identified, new Map([[0, at(20)]]), now);
+    expect(transit(selected).every((step) => step.tripId === undefined)).toBe(true);
+    expect(transit(selected).map((step) => step.liveRoute)).toEqual(transit(identified).map((step) => step.liveRoute));
+    const fresh: Itinerary = {
+      ...selected,
+      steps: selected.steps.map((step, index) => step.kind === 'transit' ? { ...step, tripId: `actual-later-run-${index}` } : step),
+    };
+    expect(sameTripSelection(createTripSelectionIdentity(selected), createTripSelectionIdentity(fresh))).toBe(true);
+    const wrongTime: Itinerary = { ...fresh, steps: fresh.steps.map((step, index) => index === 1 && step.kind === 'transit'
+      ? { ...step, from: { ...step.from, time: at(21) } } : step) };
+    expect(sameTripSelection(createTripSelectionIdentity(selected), createTripSelectionIdentity(wrongTime))).toBe(false);
+  });
+
+  it('keeps known run IDs for unchanged departures and still rejects conflicting known IDs', () => {
+    const identified: Itinerary = { ...trip, steps: trip.steps.map((step, index) => step.kind === 'transit' ? { ...step, tripId: `run-${index}` } : step) };
+    const unchanged = retimeItinerary(identified, new Map(), now);
+    expect(unchanged).toBe(identified);
+    expect(transit(unchanged).map((step) => step.tripId)).toEqual(['run-1', 'run-2']);
+    const conflicting: Itinerary = { ...identified, steps: identified.steps.map((step) => step.kind === 'transit' ? { ...step, tripId: 'different-run' } : step) };
+    expect(sameTripSelection(createTripSelectionIdentity(unchanged), createTripSelectionIdentity(conflicting))).toBe(false);
+  });
+
+  it('retains an unchanged first run when only the following leg changes', () => {
+    const identified: Itinerary = { ...trip, steps: trip.steps.map((step, index) => step.kind === 'transit' ? { ...step, tripId: `run-${index}` } : step) };
+    const selected = retimeItinerary(identified, new Map([[1, at(35)]]), now);
+    expect(transit(selected).map((step) => step.tripId)).toEqual(['run-1', undefined]);
+  });
+
+  it('retains a known run for an equivalent departure instant with a different timezone spelling', () => {
+    const sameInstant = '2026-10-15T09:10:00-04:00';
+    const identified: Itinerary = { ...trip, steps: trip.steps.map((step, index) => index === 1 && step.kind === 'transit'
+      ? { ...step, tripId: 'same-run', departures: [{ departs: sameInstant, arrives: '2026-10-15T09:20:00-04:00' }] } : step) };
+    const selected = retimeItinerary(identified, new Map([[0, sameInstant]]), now);
+    expect(transit(selected)[0]?.from.time).toBe(sameInstant);
+    expect(transit(selected)[0]?.tripId).toBe('same-run');
   });
 
   it('pulls later legs earlier when an earlier departure is picked', () => {

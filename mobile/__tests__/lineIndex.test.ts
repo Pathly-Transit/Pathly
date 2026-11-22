@@ -18,6 +18,7 @@ const index: IndexedLine[] = [
   line('lirr', 'Port Jefferson', 'Port Jefferson Branch', '1'),
   line('metronorth', 'Hudson', 'Hudson', '1'),
   line('metronorth', 'New Haven', 'New Haven', '3'),
+  line('metronorth', 'Harlem', 'Harlem', '2'),
   line('nycferry', 'ER', 'East River'),
   line('siferry', 'SIF', 'Staten Island Ferry'),
 ];
@@ -52,6 +53,10 @@ describe('line search on the device', () => {
     expect(names('metro north')).toEqual(expect.arrayContaining(['metronorth:Hudson', 'metronorth:New Haven']));
     expect(names('MNR')).toEqual(expect.arrayContaining(['metronorth:Hudson', 'metronorth:New Haven']));
     expect(names('Hudson')).toContain('metronorth:Hudson');
+    // As riders say them: "Hudson Line", "Harlem line", "New Haven Line".
+    expect(names('Hudson Line')[0]).toBe('metronorth:Hudson');
+    expect(names('harlem line')[0]).toBe('metronorth:Harlem');
+    expect(names('New Haven Line')[0]).toBe('metronorth:New Haven');
     expect(names('commuter rail')).toEqual(expect.arrayContaining(['lirr:Port Jefferson', 'metronorth:Hudson', 'metronorth:New Haven']));
     expect(names('Manhattan bus')).toEqual([]);
   });
@@ -72,5 +77,22 @@ describe('line search duplicates', () => {
     ];
     expect(searchLineIndex(copies, 'B46')).toHaveLength(1);
     expect(searchLineIndex(copies, 'bus')).toHaveLength(1);
+  });
+});
+
+describe('PATH in line search', () => {
+  // As the backend's line list names them (static_data/path).
+  const pathLines: IndexedLine[] = [
+    { agencyId: 'path', agencyDisplayName: 'PATH', routeId: '862', shortName: 'NWK-WTC', routeName: 'Newark - World Trade Center', color: '#D93A30' },
+    { agencyId: 'path', agencyDisplayName: 'PATH', routeId: '859', shortName: 'HOB-33', routeName: 'Hoboken - 33rd Street', color: '#4D92FB' },
+  ];
+  const found = (query: string) => searchLineIndex([...index, ...pathLines], query).map((line) => `${line.agencyId}:${line.routeId}`);
+
+  it('finds PATH lines by name, place, and agency', () => {
+    expect(found('Newark World Trade Center')[0]).toBe('path:862');
+    expect(found('hoboken 33rd')[0]).toBe('path:859');
+    expect(found('PATH')).toEqual(expect.arrayContaining(['path:862', 'path:859']));
+    expect(found('NWK-WTC')[0]).toBe('path:862');
+    expect(found('hob 33')[0]).toBe('path:859');
   });
 });

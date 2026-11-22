@@ -2,6 +2,7 @@ import { parse as parseSync } from 'csv-parse/sync';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
+import { pathLineCode } from './pathLines';
 import { displayTransitName } from './transitNames';
 
 /**
@@ -26,7 +27,7 @@ export function readCsv<T>(dataDir: string, filename: string): T[] {
 }
 
 type RouteRow = { route_id: string; route_short_name: string; route_long_name: string; route_color: string };
-type StopRow = { stop_id: string; stop_name: string; stop_lat: string; stop_lon: string; parent_station?: string; wheelchair_boarding?: string };
+type StopRow = { stop_id: string; stop_name: string; stop_lat: string; stop_lon: string; location_type?: string; parent_station?: string; wheelchair_boarding?: string };
 type TripRow = { trip_id: string; route_id: string; trip_headsign: string; direction_id: string; service_id: string; peak_offpeak?: string; shape_id?: string };
 type ShapeRow = { shape_id: string; shape_pt_lat: string; shape_pt_lon: string; shape_pt_sequence: string };
 export type StopTimeRow = { trip_id: string; stop_id: string; arrival_time: string; departure_time: string; stop_sequence: string };
@@ -39,6 +40,8 @@ type CalendarDateRow = { service_id: string; date: string; exception_type: strin
 
 /** `wheelchair`: stops.txt's wheelchair_boarding (1 yes, 2 no), null when the feed doesn't say. */
 export type GtfsStop = { stopId: string; name: string; lat: number; lon: number; parentStation: string | null; wheelchair?: boolean | null };
+/** A stops.txt entrance or exit (location_type 2); feeds name none of them beyond their station. */
+export type GtfsEntrance = { lat: number; lon: number };
 /** `peakOffpeak` is LIRR's own real schedule classification (trips.txt's peak_offpeak column) — null for agencies whose trips.txt doesn't have that column (e.g. subway, which doesn't have peak/off-peak fares at all). */
 export type GtfsTrip = { tripId: string; routeId: string; headsign: string; directionId: number; serviceId: string; peakOffpeak: boolean | null; shapeId: string | null };
 export type ShapePoint = { lat: number; lon: number };
@@ -55,6 +58,8 @@ export type AgencyStaticData = {
   calendarByService: Map<string, GtfsCalendar>;
   /** service_id -> "YYYYMMDD" dates added (exception_type 1) or removed (exception_type 2) on top of the weekly pattern (or, for calendar.txt-less agencies, the *entire* schedule). */
   calendarExceptionsByService: Map<string, Map<string, '1' | '2'>>;
+  /** parent_station -> its entrances and exits (stops.txt location_type 2), kept out of stopsById since no trip stops at them. */
+  entrancesByStation?: Map<string, GtfsEntrance[]>;
 };
 
 /** An agency's small-to-medium files (not stop_times.txt or shapes.txt), indexed. */
@@ -63,12 +68,19 @@ export function readAgencyStaticData(dataDir: string): AgencyStaticData {
   for (const row of readCsv<RouteRow>(dataDir, 'routes.txt')) {
     // LIRR's routes.txt has no route_short_name column at all (not just blank) — fall all the
     // way back to the route_id itself rather than leaving this undefined.
-    const shortName = row.route_short_name || row.route_long_name || row.route_id;
+    // PATH names every route "PATH"; riders know its lines by code (NWK-WTC), built from the long name.
+    const pathCode = row.route_short_name === 'PATH' ? pathLineCode(row.route_long_name) : null;
+    const shortName = pathCode || row.route_short_name || row.route_long_name || row.route_id;
     routesById.set(row.route_id, { routeId: row.route_id, shortName, name: row.route_long_name || shortName, color: row.route_color });
   }
 
   const stopsById = new Map<string, GtfsStop>();
+  const entrancesByStation = new Map<string, GtfsEntrance[]>();
   for (const row of readCsv<StopRow>(dataDir, 'stops.txt')) {
+    if (row.location_type === '2') {
+      if (row.parent_station) entrancesByStation.set(row.parent_station, [...(entrancesByStation.get(row.parent_station) ?? []), { lat: Number(row.stop_lat), lon: Number(row.stop_lon) }]);
+      continue;
+    }
     stopsById.set(row.stop_id, {
       stopId: row.stop_id,
       // MTA's city buses publish names in all caps; riders see them recased.
@@ -116,7 +128,7 @@ export function readAgencyStaticData(dataDir: string): AgencyStaticData {
     calendarExceptionsByService.set(row.service_id, exceptions);
   }
 
-  return { routesById, stopsById, tripsById, calendarByService, calendarExceptionsByService };
+  return { routesById, stopsById, tripsById, calendarByService, calendarExceptionsByService, entrancesByStation };
 }
 
 /** shape_id -> ordered points from shapes.txt (several MB for some agencies). */

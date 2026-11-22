@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { createReadStream, existsSync } from 'node:fs';
+import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, sep } from 'node:path';
 
@@ -13,6 +13,7 @@ import { unzipSync, zipSync, type Zippable } from 'fflate';
 import { AGENCY_CONFIGS, type AgencyId } from './gtfsAgencies';
 import { DERIVED_DIR, DERIVED_VERSION } from './gtfsDerived';
 import { buildDerivedData } from './gtfsDerivedBuild';
+import { transformSourceArchive } from './gtfsTransforms';
 
 const SNAPSHOT_SCHEMA_VERSION = 1;
 const SNAPSHOT_ROOT = 'gtfs/v1';
@@ -40,6 +41,10 @@ const MAX_STOP_TIMES_PER_TRIP = 500;
 const MANIFEST_CHECK_INTERVAL_MS = 5 * 60_000;
 const DOWNLOAD_TIMEOUT_MS = 2 * 60_000;
 const SNAPSHOT_CHECK_TIMEOUT_MS = 10_000;
+// A new instance has no last good snapshot, so a timeout there means serving the older bundled
+// copy (or no data, for on-demand agencies). Give its first check longer, but keep two rounds of
+// a warm-up's agency checks inside the 60 s callable deadline.
+const FIRST_SNAPSHOT_CHECK_TIMEOUT_MS = 25_000;
 
 const RUNTIME_FILES = [
   'routes.txt',
@@ -1305,7 +1310,9 @@ export async function refreshGtfsSnapshot(agencyId: AgencyId): Promise<'publishe
   const limits = snapshotLimitsFor(agencyId);
   const downloaded = await downloadArchive(config.staticFeedUrl, limits.archiveBytes, config.staticFeedHeaders);
   const { sourceLastModified } = downloaded;
-  const archive = config.fillTripDirections ? fillTripDirections(downloaded.archive) : downloaded.archive;
+  const filled = config.fillTripDirections ? fillTripDirections(downloaded.archive) : downloaded.archive;
+  // PATH's platforms as stations (gtfsTransforms.ts).
+  const archive = transformSourceArchive(config, filled);
   const extracted = extractGtfsArchive(archive, { limits });
   if (gtfsFeedShouldWaitForStart(extracted, current.manifest?.serviceEndDate)) {
     logger.info('Keeping the published GTFS snapshot until the new feed starts', { agencyId, event: 'gtfs_feed_not_started' });
@@ -1734,25 +1741,104 @@ async function tryLoadDerivedFiles(
   }
 }
 
-/**
- * Moves a staged snapshot directory into its content-addressed place. Windows reports an
- * existing target as EPERM rather than ENOTEMPTY, and can briefly lock just-written folders
- * (antivirus, search indexer), so a locked rename onto a missing target is retried.
- */
-async function renameIntoPlace(stagingDir: string, dataDir: string): Promise<void> {
+type HydratedFile = { size: number; sha256: string };
+const snapshotInstallations = new Map<string, Promise<void>>();
+
+/** A content-addressed name alone does not establish that a prior hydration completed. */
+async function cachedSnapshotMatches(dataDir: string, expected: ReadonlyMap<string, HydratedFile>): Promise<boolean> {
+  try {
+    if (!(await lstat(dataDir)).isDirectory()) return false;
+    let files = 0;
+    const checkDirectory = async (directory: string, prefix = ''): Promise<boolean> => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const name = join(prefix, entry.name);
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) {
+          if (!(await checkDirectory(path, name))) return false;
+          continue;
+        }
+        const file = expected.get(name);
+        if (!entry.isFile() || !file) return false;
+        const info = await lstat(path);
+        if (!info.isFile() || info.size !== file.size) return false;
+        const hash = createHash('sha256');
+        // Hash one file at a time without keeping another copy of a large timetable in memory.
+        for await (const chunk of createReadStream(path)) hash.update(chunk);
+        if (hash.digest('hex') !== file.sha256) return false;
+        files += 1;
+      }
+      return true;
+    };
+    return await checkDirectory(dataDir) && files === expected.size;
+  } catch {
+    return false;
+  }
+}
+
+const transientRenameError = (error: unknown) => ['EPERM', 'EBUSY', 'EACCES'].includes((error as NodeJS.ErrnoException | null)?.code ?? '');
+
+/** Install a fully written snapshot, repairing incomplete/corrupt destinations rather than trusting their name. */
+async function installSnapshot(stagingDir: string, dataDir: string, expected: ReadonlyMap<string, HydratedFile>): Promise<void> {
   for (let attempt = 0; ; attempt += 1) {
     try {
       await rename(stagingDir, dataDir);
       return;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException | null)?.code;
-      // Another hydration in this instance won the race for the same content-addressed path.
-      if (code === 'EEXIST' || code === 'ENOTEMPTY') return;
-      if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') throw error;
-      if (existsSync(dataDir)) return;
+      if (!['EEXIST', 'ENOTEMPTY', 'ENOTDIR', 'EISDIR'].includes(code ?? '') && !transientRenameError(error)) throw error;
+      if (await cachedSnapshotMatches(dataDir, expected)) return;
       if (attempt >= 10) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      // Do not merge files into a directory readers might observe half repaired. Move the invalid
+      // root aside, then publish the verified staging directory in one rename. A previous active
+      // snapshot has a different version/path and remains untouched until preparation activates us.
+      const invalidDir = join(dirname(dataDir), `.${basename(dataDir)}.${randomUUID()}.invalid`);
+      try {
+        await rename(dataDir, invalidDir);
+      } catch (moveError) {
+        if ((moveError as NodeJS.ErrnoException | null)?.code !== 'ENOENT' && !transientRenameError(moveError)) throw moveError;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        continue;
+      }
+      try {
+        await rename(stagingDir, dataDir);
+      } catch (installError) {
+        // Preserve the old directory if publishing the replacement failed. Another process may
+        // already have published its own valid copy; never remove that winner during rollback.
+        if (await cachedSnapshotMatches(dataDir, expected)) {
+          await removeInvalidSnapshot(invalidDir);
+          return;
+        }
+        if (!existsSync(dataDir)) await rename(invalidDir, dataDir);
+        if (!transientRenameError(installError)) throw installError;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        continue;
+      }
+      await removeInvalidSnapshot(invalidDir);
+      return;
     }
+  }
+}
+
+async function removeInvalidSnapshot(dataDir: string): Promise<void> {
+  try {
+    await rm(dataDir, { recursive: true, force: true });
+  } catch (error) {
+    logger.warn('Could not remove a replaced invalid GTFS snapshot cache', {
+      event: 'gtfs_snapshot_cache_prune_failed',
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/** Late timed-out hydrations can overlap a retry; serialize validation/repair of the same disk root. */
+async function renameIntoPlace(stagingDir: string, dataDir: string, expected: ReadonlyMap<string, HydratedFile>): Promise<void> {
+  const previous = snapshotInstallations.get(dataDir) ?? Promise.resolve();
+  const installation = previous.catch(() => undefined).then(() => installSnapshot(stagingDir, dataDir, expected));
+  snapshotInstallations.set(dataDir, installation);
+  try {
+    await installation;
+  } finally {
+    if (snapshotInstallations.get(dataDir) === installation) snapshotInstallations.delete(dataDir);
   }
 }
 
@@ -1784,14 +1870,16 @@ async function hydrateManifest(manifest: GtfsSnapshotManifest): Promise<Hydrated
     // With prepared files, leave the raw stop times out (as a deploy does): the loaders then read
     // only the prepared files, and /tmp (held in memory) stays about the size it was before.
     const rawFiles = [...extracted.files].filter(([name]) => !derivedFiles || name !== 'stop_times.txt');
+    const expectedFiles = new Map<string, HydratedFile>(rawFiles.map(([name, data]) => [name, { size: data.length, sha256: sha256(data) }]));
     await Promise.all(rawFiles.map(([name, data]) => writeFile(join(stagingDir, name), data)));
     if (derivedFiles) {
       for (const dir of new Set([...derivedFiles.keys()].map((name) => dirname(join(stagingDir, DERIVED_DIR, name))))) {
         await mkdir(dir, { recursive: true });
       }
       await Promise.all([...derivedFiles].map(([name, data]) => writeFile(join(stagingDir, DERIVED_DIR, name), data)));
+      for (const [name, data] of derivedFiles) expectedFiles.set(join(DERIVED_DIR, name), { size: data.length, sha256: sha256(data) });
     }
-    await renameIntoPlace(stagingDir, dataDir);
+    await renameIntoPlace(stagingDir, dataDir, expectedFiles);
   } finally {
     await rm(stagingDir, { recursive: true, force: true });
   }
@@ -1822,13 +1910,14 @@ async function checkForSnapshot(
 export async function hydrateCurrentGtfsSnapshot(
   agencyId: AgencyId,
   nowMs = Date.now(),
-  snapshotCheckTimeoutMs = SNAPSHOT_CHECK_TIMEOUT_MS,
+  timeoutMs?: number,
 ): Promise<HydratedGtfsSnapshot | null> {
   if (!remoteSnapshotsEnabled()) return null;
 
   const previous = snapshotStates.get(agencyId) ?? { checkedAtMs: 0, snapshot: null };
   if (previous.inFlight) return previous.inFlight;
   if (nowMs - previous.checkedAtMs < MANIFEST_CHECK_INTERVAL_MS) return previous.snapshot;
+  const snapshotCheckTimeoutMs = timeoutMs ?? (previous.snapshot ? SNAPSHOT_CHECK_TIMEOUT_MS : FIRST_SNAPSHOT_CHECK_TIMEOUT_MS);
 
   // Share the handled promise, not the raw storage operation. Every concurrent caller must
   // resolve to the same last-good/bundled fallback when Storage fails.

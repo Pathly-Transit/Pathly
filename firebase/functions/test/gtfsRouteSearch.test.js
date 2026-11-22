@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { getRouteTransfers, searchRoutes } = require('../lib/gtfsDiscovery');
+const { getRouteTransfers, LINE_INDEX_FORMAT, listLines, searchRoutes } = require('../lib/gtfsDiscovery');
 
 // Bowling Green, Lower Manhattan.
 const MANHATTAN = [40.7046, -74.0139];
@@ -25,6 +25,14 @@ test('Metro-North branch names and agency terms find discoverable lines', async 
   const mnr = await searchRoutes('MNR', 41.6, -73.9);
   assert.ok(mnr.length > 0);
   assert.ok(mnr.every((route) => route.agencyId === 'metronorth'));
+});
+
+test("the app's line list names every Metro-North line, so the app can find it by name", async () => {
+  await searchRoutes('Hudson', 41.6, -73.9);
+  const names = listLines().filter((line) => line.agencyId === 'metronorth').map((line) => line.routeName);
+  for (const name of ['Hudson', 'Harlem', 'New Haven', 'New Canaan', 'Danbury', 'Waterbury']) assert.ok(names.includes(name), name);
+  // The list saved before Metro-North was format 1; a deploy must not keep serving it.
+  assert.ok(LINE_INDEX_FORMAT >= 2);
 });
 
 test('a query matching nothing finds nothing', async () => {

@@ -35,7 +35,12 @@ module.exports = {
     experiments: { reactCompiler: true, baseUrl: '/app' },
     ios: {
       supportsTablet: true,
-      bundleIdentifier: 'com.pathly.app',
+      // Must match the app record in App Store Connect. Android's package stays com.pathly.app.
+      bundleIdentifier: 'com.mpaxos.pathly',
+      // Networking/authentication use standard or Apple OS-provided cryptography.
+      infoPlist: {
+        ITSAppUsesNonExemptEncryption: false,
+      },
     },
     android: {
       // Permanent once the app is uploaded to Google Play.
@@ -77,6 +82,10 @@ module.exports = {
         'expo-location',
         {
           locationWhenInUsePermission: 'Pathly uses your location to center the map on you and show nearby transit.',
+          locationAlwaysAndWhenInUsePermission: 'Pathly uses your location during an active trip to update stop alerts while your phone is locked. Tracking stops when the trip ends or trip notifications are turned off.',
+          isIosBackgroundLocationEnabled: true,
+          isAndroidBackgroundLocationEnabled: true,
+          isAndroidForegroundServiceEnabled: true,
         },
       ],
       [

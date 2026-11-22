@@ -16,8 +16,16 @@
         "buildType": "apk"
       }
     },
+    "ios-simulator": {
+      "extends": "preview",
+      "ios": {
+        "simulator": true
+      }
+    },
     "production": {
+      "node": "24.9.0",
       "autoIncrement": true,
+      "distribution": "store",
       "environment": "production",
       "android": {
         "buildType": "app-bundle"
@@ -26,6 +34,13 @@
   },
   "submit": {
     "production": {
+      "ios": {
+        "appleTeamId": "MRANRL5SNC",
+        "ascAppId": "6836052767",
+        "ascApiKeyPath": "$EXPO_ASC_API_KEY_PATH",
+        "ascApiKeyId": "$EXPO_ASC_KEY_ID",
+        "ascApiKeyIssuerId": "$EXPO_ASC_ISSUER_ID"
+      },
       "android": {
         "serviceAccountKeyPath": "./play-service-account.json",
         "track": "internal",

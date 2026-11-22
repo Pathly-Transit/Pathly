@@ -4,6 +4,7 @@ import {
   type TripEndpointReference,
   type TripSelectionIdentity,
 } from './enrouteNavigation';
+import { parseEntrances } from './stationEntrances';
 import type { Itinerary, LatLng, ResumePlanRequest, TransitStep, TripStop, WalkStep } from './tripPlanning';
 
 /** Active-only geometry for the one-line ride assembled by Pathly's Ride Guide. */
@@ -93,6 +94,8 @@ function transit(value: unknown): TransitStep | null {
     };
   }
 
+  const boardEntrances = parseEntrances(value.boardEntrances);
+  const alightEntrances = parseEntrances(value.alightEntrances);
   // Persist selected navigation evidence, not alternate departures or stale live/alert/fare state.
   return {
     kind: 'transit', mode: value.mode as TransitStep['mode'], agency: { name: value.agency.name },
@@ -108,6 +111,8 @@ function transit(value: unknown): TransitStep | null {
     from, to, stopCount: value.stopCount as number, durationSeconds: value.durationSeconds, path: geometry,
     ...(stops === undefined ? {} : { stops }),
     ...(liveRoute ? { liveRoute } : {}),
+    ...(boardEntrances ? { boardEntrances } : {}),
+    ...(alightEntrances ? { alightEntrances } : {}),
   };
 }
 

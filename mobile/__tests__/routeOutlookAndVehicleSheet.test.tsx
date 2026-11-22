@@ -84,9 +84,11 @@ describe('VehicleSheet', () => {
     expect(ridersLabel({ count: 2, avatars: [avatar], you: false, feed })).toBe('2 riders on board');
   });
 
-  it('says where the position comes from', () => {
-    expect(renderSheet({}).getByText(/Location from the agency/)).toBeTruthy();
-    expect(renderSheet({ vehicle: vehicle({ count: 1, avatars: [avatar], you: false, feed }) }).getByText(/Location from riders on board/)).toBeTruthy();
+  it('leads with where it is headed, and no longer says where the position comes from', () => {
+    const screen = renderSheet({});
+    expect(screen.getByTestId('vehicle-sheet-title').props.children).toBe('Penn Station');
+    expect(screen.queryByText(/Location from/)).toBeNull();
+    expect(renderSheet({ vehicle: vehicle({ count: 1, avatars: [avatar], you: false, feed }) }).queryByText(/Location from/)).toBeNull();
   });
 
   it('offers "I’m on this" only with sharing on and the rider nearby', () => {

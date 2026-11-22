@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { DEFAULT_ALERT_HOURS, formatAlertTime, parseAlertTime, ROUTE_ALERT_OPTIONS, type AlertHours, type RouteAlertSetting } from '../data/savedRoutes';
@@ -9,6 +9,7 @@ import { SheetPanel } from './SheetPanel';
 import { Icon } from './Icon';
 import { PressableScale } from './PressableScale';
 import { radii } from '../theme/shape';
+import { Toast, type ToastMessage } from './Toast';
 
 /** What the sheet is asking about: a line's alert setting, from route view's bell. */
 export type RouteAlertsRequest = {
@@ -21,7 +22,7 @@ export type RouteAlertsRequest = {
 type RouteAlertsPromptProps = {
   /** Null hides the sheet. */
   request: RouteAlertsRequest | null;
-  onDone: (setting: RouteAlertSetting, hours: AlertHours | undefined) => void;
+  onDone: (setting: RouteAlertSetting, hours: AlertHours | undefined) => Promise<void> | void;
   onClose: () => void;
 };
 
@@ -51,12 +52,31 @@ function AlertsForm({ onClose, onDone, request }: RouteAlertsPromptProps & { req
   // What's typed in each field; read as a time when it's left, and again on Done.
   const [typed, setTyped] = useState({ start: formatAlertTime(initialHours.start), end: formatAlertTime(initialHours.end) });
   const [hours, setHours] = useState<AlertHours>(initialHours);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<ToastMessage | null>(null);
+  const pending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const read = (field: keyof AlertHours): number => parseAlertTime(typed[field]) ?? hours[field];
   // A time that doesn't read goes back to the last good one.
   const settle = (field: keyof AlertHours) => {
     const minutes = read(field);
     setHours((current) => ({ ...current, [field]: minutes }));
     setTyped((current) => ({ ...current, [field]: formatAlertTime(minutes) }));
+  };
+  const save = async () => {
+    if (pending.current) return;
+    pending.current = true;
+    setBusy(true);
+    setFeedback(null);
+    try {
+      await onDone(setting, setting === 'custom' ? { start: read('start'), end: read('end') } : undefined);
+    } catch {
+      if (mounted.current) setFeedback((current) => ({ text: 'Alert preference could not be saved. Your hours are still here. Try again.', id: (current?.id ?? 0) + 1 }));
+    } finally {
+      pending.current = false;
+      if (mounted.current) setBusy(false);
+    }
   };
 
   return (
@@ -77,6 +97,7 @@ function AlertsForm({ onClose, onDone, request }: RouteAlertsPromptProps & { req
               accessibilityLabel={option.label}
               accessibilityRole="radio"
               accessibilityState={{ selected }}
+              disabled={busy || undefined}
               key={option.value}
               onPress={() => setSetting(option.value)}
               style={[styles.option, selected && styles.optionSelected]}
@@ -97,6 +118,7 @@ function AlertsForm({ onClose, onDone, request }: RouteAlertsPromptProps & { req
                 accessibilityLabel={field === 'start' ? 'Alerts from' : 'Alerts until'}
                 autoCapitalize="none"
                 autoCorrect={false}
+                editable={!busy}
                 onBlur={() => settle(field)}
                 onChangeText={(text) => setTyped((current) => ({ ...current, [field]: text }))}
                 onSubmitEditing={() => settle(field)}
@@ -112,9 +134,10 @@ function AlertsForm({ onClose, onDone, request }: RouteAlertsPromptProps & { req
           ))}
         </View>
       ) : null}
-      <PressableScale accessibilityRole="button" onPress={() => onDone(setting, setting === 'custom' ? { start: read('start'), end: read('end') } : undefined)} style={styles.done} testID="route-alerts-prompt-done">
+      <PressableScale accessibilityRole="button" accessibilityState={{ busy, disabled: busy }} disabled={busy || undefined} onPress={() => void save()} style={styles.done} testID="route-alerts-prompt-done">
         <Text style={styles.doneText}>Done</Text>
       </PressableScale>
+      <Toast message={feedback} onHidden={() => setFeedback(null)} />
     </SheetPanel>
   );
 }

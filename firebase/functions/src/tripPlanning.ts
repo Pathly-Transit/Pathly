@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 
 import { simplifyPath } from './gtfsGeometry';
+import type { StationEntrance } from './stationEntrances';
 
 /**
  * The trip-planning request and itinerary formats the app reads (mirrored in
@@ -53,6 +54,9 @@ export type TransitStep = {
   departures?: TripDeparture[];
   /** The leg's GTFS line, direction and boarding stop, so the app can show its live vehicles. */
   liveRoute?: { agencyId: string; routeId: string; boardStopId: string; alightStopId?: string; directionId?: number };
+  /** The boarding and alighting stations' ways in and out (stationEntrances.ts); absent where the agency publishes none. */
+  boardEntrances?: StationEntrance[];
+  alightEntrances?: StationEntrance[];
   /** What the agency's live feed says about this leg's trip (tripLive.ts); absent when it says nothing. */
   live?: LegLive;
   /** The connection into this leg from the previous one, when it's tight or already missed (tripLive.ts). */

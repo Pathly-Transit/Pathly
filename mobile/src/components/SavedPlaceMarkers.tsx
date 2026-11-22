@@ -7,7 +7,7 @@ import { locationPoint, savedPlaceName, type SavedLocation } from '../data/userD
 import { MapMarker } from '../map/MapCanvas';
 import { useTheme } from '../theme/AppSettings';
 import { Icon, type IconName } from './Icon';
-import { savedLocationIcon } from './SavedPlacesStrip';
+import { savedLocationIcon } from './FavoritesStrip';
 
 /**
  * The rider's saved places, for every map to show (HomeScreen provides them): the home map makes
@@ -25,18 +25,22 @@ export function useSavedPlaces(): readonly SavedLocation[] {
 
 /**
  * A saved place's map marker: its icon centered in a round badge right on the place, in the
- * place's color. A marker stacked under another leaves its icon off.
+ * place's color. A marker stacked under another leaves its icon off. The clear square around the
+ * badge is part of the marker, so it takes taps too.
  */
 function SavedPlacePin({ color, icon }: { color: string; icon: IconName | null }) {
   const { colors } = useTheme();
   return (
-    <View style={[pinStyles.badge, { backgroundColor: color, borderColor: colors.savedPlaceBorder }]}>
-      {icon ? <Icon color={colors.ring} name={icon} size={16} /> : null}
+    <View style={pinStyles.hitArea}>
+      <View style={[pinStyles.badge, { backgroundColor: color, borderColor: colors.savedPlaceBorder }]}>
+        {icon ? <Icon color={colors.ring} name={icon} size={16} /> : null}
+      </View>
     </View>
   );
 }
 
 const pinStyles = StyleSheet.create({
+  hitArea: { width: SAVED_PIN.hitSize, height: SAVED_PIN.hitSize, alignItems: 'center', justifyContent: 'center' },
   badge: { width: SAVED_PIN.size, height: SAVED_PIN.size, alignItems: 'center', justifyContent: 'center', borderRadius: SAVED_PIN.size / 2, borderWidth: 2.5 },
 });
 

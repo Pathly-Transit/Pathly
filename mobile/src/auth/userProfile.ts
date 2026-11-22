@@ -11,6 +11,8 @@ function profileFor(user: User) {
     email: user.email ?? null,
     createdAt: serverTimestamp(),
     avatar: randomBeanAvatar(),
+    // Only profiles made from here on start with onboarding; older ones have no field and skip it.
+    onboarding: 'pending' as const,
   };
 }
 
@@ -41,4 +43,19 @@ export function subscribeUserAvatar(uid: string, onChange: (avatar: BeanAvatarCo
 export async function saveUserAvatar(user: User, avatar: BeanAvatarConfig): Promise<void> {
   await ensureUserProfile(user);
   await setDoc(doc(db, 'users', user.uid), { avatar: normalizeBeanAvatar(avatar) }, { merge: true });
+}
+
+/**
+ * Whether this account still has its first-run onboarding ahead: `undefined` until the profile
+ * exists (sign-up may still be writing it), then true only while it's `pending`.
+ */
+export function subscribeOnboardingPending(uid: string, onChange: (pending: boolean | undefined) => void, onError: () => void) {
+  return onSnapshot(doc(db, 'users', uid), (snapshot) => {
+    onChange(snapshot.exists() ? snapshot.data()?.onboarding === 'pending' : undefined);
+  }, onError);
+}
+
+/** Onboarding finished or skipped: it never comes back, on this device or any other. */
+export async function finishOnboarding(uid: string): Promise<void> {
+  await setDoc(doc(db, 'users', uid), { onboarding: 'done' }, { merge: true });
 }

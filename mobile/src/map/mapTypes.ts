@@ -36,6 +36,8 @@ export interface MapCanvasRef {
   fitPoints(points: readonly MapPoint[], options?: FitOptions): void;
   /** Where the camera is now, or null before the map is ready. */
   getCamera(): Promise<MapCamera | null>;
+  /** Where `point` is on the screen (window coordinates), or null before the map is ready. */
+  pointForCoordinate(point: MapPoint): Promise<{ x: number; y: number } | null>;
 }
 
 /** A station or bus stop on the base map (mapStyle.ts's transit icons), as tapped. */

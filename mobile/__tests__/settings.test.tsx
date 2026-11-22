@@ -144,7 +144,8 @@ describe('Settings', () => {
       });
       const saved = (await getDocs(collection({} as never, 'users', UID, 'savedRoutes'))).docs.map((entry) => entry.data());
       expect(saved).toContainEqual(expect.objectContaining({ routeId: '10', agencyId: 'lirr', alerts: 'all', favorite: true }));
-      expect(screen.getByText('PJ added to Favorite Lines, alerts: All times')).toBeTruthy();
+      expect(screen.getByText(/PJ added to Favorite Lines, alerts: All times/)).toBeTruthy();
+      expect(screen.getByText(/Push notifications are not ready on this device/)).toBeTruthy();
       resetLineIndexForTests();
     });
 

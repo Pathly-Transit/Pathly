@@ -1,4 +1,6 @@
 import { logger } from 'firebase-functions';
+import { getApps, initializeApp } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
 import { defineSecret } from 'firebase-functions/params';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
@@ -33,6 +35,7 @@ import { availableAgencyIds, isAgencyAvailable, loadAgencyStaticData, loadGlobal
 import { nearbyIndexSource, saveNearbyIndex } from './gtfsNearbyIndex';
 import { getRouteAlerts } from './gtfsAlerts';
 import { sendSavedRouteAlerts } from './routeAlerts';
+import { parsePushInstallationRequest, updatePushInstallation as savePushInstallation } from './pushInstallations';
 import { getRouteStatus } from './gtfsStatus';
 import { isInServiceArea } from './serviceArea';
 import { lookupStations, searchStops, type StationLookup } from './stopSearch';
@@ -51,6 +54,7 @@ import {
 } from './tripPlanning';
 import { walkingPath } from './walkingGraph';
 import { addLiveStatus } from './tripLive';
+import { withStopEntrances } from './stationEntrances';
 
 const CALLABLE_RUNTIME_SERVICE_ACCOUNT = 'pathly-callable-runtime@pathly-b7f0f.iam.gserviceaccount.com';
 const GTFS_WRITER_SERVICE_ACCOUNT = 'pathly-gtfs-writer@pathly-b7f0f.iam.gserviceaccount.com';
@@ -61,6 +65,8 @@ const googleMapsApiKey = defineSecret('GOOGLE_MAPS_API_KEY');
 const swiftlyApiKey = defineSecret('SWIFTLY_API_KEY');
 /** Set once with: firebase functions:secrets:set MTA_BUS_TIME_API_KEY. MTA Bus Time's live feed for every NYC city bus. */
 const mtaBusTimeApiKey = defineSecret('MTA_BUS_TIME_API_KEY');
+/** Every secret a live feed may need. */
+const liveFeedSecrets = [swiftlyApiKey, mtaBusTimeApiKey];
 
 // Keep false until web and native releases are producing valid App Check tokens. This is
 // version-controlled deliberately so a deploy from a machine missing local config cannot
@@ -263,7 +269,7 @@ type RouteLiveStatusRequest = { agencyId: AgencyId; routeId: string; direction1S
  * (For agencies where one stop_id serves a station regardless of direction, pass the same id
  * for both direction1StopId and direction0StopId.)
  */
-export const getRouteLiveStatus = onCall<RouteLiveStatusRequest>({ ...liveStatusCallableOptions, secrets: [swiftlyApiKey, mtaBusTimeApiKey] }, async (request) => {
+export const getRouteLiveStatus = onCall<RouteLiveStatusRequest>({ ...liveStatusCallableOptions, secrets: liveFeedSecrets }, async (request) => {
   const uid = await enforceCallableSecurity(request, 'getRouteLiveStatus', RATE_LIMITS.getRouteLiveStatus);
   const data = request.data ?? ({} as RouteLiveStatusRequest);
   await prepareAgencyStaticData(requiredAgencyId(data.agencyId));
@@ -303,7 +309,7 @@ type ReportRideRequest = { agencyId: AgencyId; routeId: string; tripId: string; 
  * with an accurate fix near where the agency's own feed puts that vehicle; anything else ends the
  * rider's session instead. Client call: httpsCallable(functions, 'reportRide')({ agencyId, routeId, tripId, lat, lon, accuracyMeters }).
  */
-export const reportRide = onCall<ReportRideRequest>({ ...liveStatusCallableOptions, secrets: [swiftlyApiKey, mtaBusTimeApiKey] }, async (request) => {
+export const reportRide = onCall<ReportRideRequest>({ ...liveStatusCallableOptions, secrets: liveFeedSecrets }, async (request) => {
   const uid = await enforceCallableSecurity(request, 'reportRide', RATE_LIMITS.reportRide);
   // Anyone can mint a guest session, so guests can't place vehicles for other riders.
   if (request.auth?.token.firebase?.sign_in_provider === 'anonymous') throw new HttpsError('permission-denied', 'Create an account to share rides.');
@@ -330,7 +336,7 @@ type ReportRideConditionRequest = ReportRideRequest & { kind: RideReportKind };
  * A rider says how their ride is going (rideReports.ts). Like reportRide it needs an accurate fix
  * near that vehicle, so only someone on it can report; the fix is checked, not stored.
  */
-export const reportRideCondition = onCall<ReportRideConditionRequest>({ ...liveStatusCallableOptions, secrets: [swiftlyApiKey, mtaBusTimeApiKey] }, async (request) => {
+export const reportRideCondition = onCall<ReportRideConditionRequest>({ ...liveStatusCallableOptions, secrets: liveFeedSecrets }, async (request) => {
   const uid = await enforceCallableSecurity(request, 'reportRideCondition', RATE_LIMITS.reportRideCondition);
   if (request.auth?.token.firebase?.sign_in_provider === 'anonymous') throw new HttpsError('permission-denied', 'Create an account to report on rides.');
   const data = request.data ?? ({} as ReportRideConditionRequest);
@@ -393,7 +399,7 @@ type RoutesLiveStatusRequest = { routes: Omit<RouteLiveStatusRequest, 'lat' | 'l
  * Client call: httpsCallable(functions, 'getRoutesLiveStatus')({ routes: [{ agencyId, routeId, direction1StopId, direction0StopId }, ...], lat, lon }).
  */
 // minInstances 0 stated outright, so a deploy clears the earlier always-on setting (it billed while idle).
-export const getRoutesLiveStatus = onCall<RoutesLiveStatusRequest>({ ...liveStatusCallableOptions, minInstances: 0, secrets: [swiftlyApiKey, mtaBusTimeApiKey] }, async (request) => {
+export const getRoutesLiveStatus = onCall<RoutesLiveStatusRequest>({ ...liveStatusCallableOptions, minInstances: 0, secrets: liveFeedSecrets }, async (request) => {
   const uid = await enforceCallableSecurity(request, 'getRoutesLiveStatus', RATE_LIMITS.getRoutesLiveStatus);
   const data = request.data ?? ({} as RoutesLiveStatusRequest);
   if (!Array.isArray(data.routes) || data.routes.length === 0 || data.routes.length > MAX_BATCH_ROUTES) {
@@ -434,7 +440,7 @@ const FULL_DEPARTURES_LIMIT = 200;
  * Client call: httpsCallable(functions, 'getStopDepartures')({ agencyId, routeId, direction1StopId, direction0StopId, directionId }).
  */
 // Reads the same live feeds as getRouteLiveStatus, so it shares that instance's feed cache and quota.
-export const getStopDepartures = onCall<StopDeparturesRequest>({ ...liveStatusCallableOptions, secrets: [swiftlyApiKey, mtaBusTimeApiKey] }, async (request) => {
+export const getStopDepartures = onCall<StopDeparturesRequest>({ ...liveStatusCallableOptions, secrets: liveFeedSecrets }, async (request) => {
   await enforceCallableSecurity(request, 'getStopDepartures', RATE_LIMITS.getStopDepartures);
   const data = request.data ?? ({} as StopDeparturesRequest);
   const agencyId = requiredAgencyId(data.agencyId);
@@ -600,7 +606,8 @@ export const getRouteGeometry = onCall<RouteGeometryRequest>(protectedCallableOp
 
   const geometry = await getRouteGeometryDiscovery(agencyId, routeId, directionId);
   if (!geometry) throw new HttpsError('not-found', `No scheduled trips found for ${agencyId} route "${routeId}" direction ${directionId}`);
-  return geometry;
+  // Each station's ways in and out, for the stop list (stationEntrances.ts).
+  return { ...geometry, stops: withStopEntrances(agencyId, geometry.stops) };
 });
 
 /**
@@ -803,7 +810,7 @@ export function setTransitPlannerForTests(planner: typeof planTransitTrip | unde
 export const planTrip = onCall<PlanTripRequest, Promise<{ itineraries: Itinerary[] }>>(
   // The bus feeds' keys for the live check (NYC, Suffolk, and NICE buses, tripLive.ts); the Maps key
   // only locates a place sent without coordinates. Every agency's timetable is held for planning.
-  { ...protectedCallableOptions, memory: '2GiB', secrets: [googleMapsApiKey, swiftlyApiKey, mtaBusTimeApiKey], timeoutSeconds: 60 },
+  { ...protectedCallableOptions, memory: '2GiB', secrets: [googleMapsApiKey, ...liveFeedSecrets], timeoutSeconds: 60 },
   async (request) => {
     await enforceCallableSecurity(request, 'planTrip', RATE_LIMITS.planTrip);
     const nowMs = Date.now();
@@ -865,6 +872,8 @@ export const geocodeAddress = onCall<GeocodeRequest, Promise<GeocodeResult>>(
 
     const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
     url.searchParams.set('address', address);
+    // Pathly is in English; without this Google may answer in another language.
+    url.searchParams.set('language', 'en');
     url.searchParams.set('key', googleMapsApiKey.value());
 
     const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
@@ -898,6 +907,7 @@ export const reverseGeocode = onCall<ReverseGeocodeRequest>(
     const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
     url.searchParams.set('latlng', `${lat},${lon}`);
     url.searchParams.set('result_type', 'street_address|premise|route|intersection');
+    url.searchParams.set('language', 'en');
     url.searchParams.set('key', googleMapsApiKey.value());
     const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     const body = (await response.json()) as ReverseGeocodingApiResponse;
@@ -913,7 +923,7 @@ export const reverseGeocode = onCall<ReverseGeocodeRequest>(
  * last scheduled refresh, whether its live feed answers, and the caller's own rate-limit allowance.
  * Client call: httpsCallable(functions, 'getBackendStatus')().
  */
-export const getBackendStatus = onCall({ ...protectedCallableOptions, secrets: [swiftlyApiKey, mtaBusTimeApiKey] }, async (request) => {
+export const getBackendStatus = onCall({ ...protectedCallableOptions, secrets: liveFeedSecrets }, async (request) => {
   const uid = await enforceCallableSecurity(request, 'getBackendStatus', RATE_LIMITS.getBackendStatus);
   requireAdmin(request);
   const [agencies, myRateLimits] = await Promise.all([collectBackendStatus(), peekRateLimits(uid, RATE_LIMITS)]);
@@ -954,4 +964,24 @@ export const searchTransitStops = onCall<SearchTransitStopsRequest>(protectedCal
   await prepareAllAgencyStaticData();
   if (stations) return { stations: await lookupStations(stations, point) };
   return { stops: await searchStops(query!, point) };
+});
+
+/** The private installation capability also permits cleanup after the Firebase user signed out. */
+export const updatePushInstallation = onCall(protectedCallableOptions, async (request) => {
+  const data = parsePushInstallationRequest(request.data);
+  if (data.token !== null && (!request.auth || request.auth.uid !== data.ownerUid || request.auth.token.firebase?.sign_in_provider === 'anonymous')) {
+    throw new HttpsError('unauthenticated', 'Sign in to register alerts.');
+  }
+  // Cleanup has no account session after sign-out. The unguessable capability is checked by the
+  // transaction; its own hash-keyed budget prevents one valid installation flooding cleanup.
+  if (!request.auth) {
+    // Also bound total unauthenticated tombstone creation: inventing capabilities must not
+    // provide an unbounded public Firestore write endpoint.
+    await enforceCallableSecurity({ ...request, auth: { uid: 'signed-out-push-cleanup', token: {} } } as typeof request,
+      'updatePushInstallation-global-cleanup', { userPerMinute: 300 });
+  }
+  const rateRequest = request.auth ? request : { ...request, auth: { uid: `push-installation:${data.capability}`, token: {} } } as typeof request;
+  await enforceCallableSecurity(rateRequest, 'updatePushInstallation', { userPerMinute: 30 });
+  const firestore = getFirestore(getApps()[0] ?? initializeApp());
+  return savePushInstallation(firestore, data, request.auth?.uid ?? null);
 });

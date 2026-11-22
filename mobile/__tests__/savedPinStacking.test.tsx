@@ -1,7 +1,7 @@
 import { act, fireEvent, render } from '@testing-library/react-native';
 
 import { HomeMap } from '../src/components/HomeMap';
-import { metersPerPixelAtZoom, stackSavedPins } from '../src/data/savedPlacePin';
+import { metersPerPixelAtZoom, savedPinUnderDot, stackSavedPins } from '../src/data/savedPlacePin';
 import { placeToLocation, type SavedLocation } from '../src/data/userData';
 import { AppSettingsProvider } from '../src/theme/AppSettings';
 
@@ -27,6 +27,18 @@ describe('stackSavedPins', () => {
       { position: GYM, leader: true },
       { position: FAR, leader: true },
     ]);
+  });
+
+  it('finds the nearest pin the rider\'s dot covers', () => {
+    const dot = { latitude: 40.75, longitude: -73.99 };
+    const near = { id: 'near', position: { latitude: 40.75030, longitude: -73.99 } };
+    const nearer = { id: 'nearer', position: { latitude: 40.75001, longitude: -73.99 } };
+    const far = { id: 'far', position: { latitude: 40.76, longitude: -73.99 } };
+    // At 1 m a pixel, a 38 px dot reaches pins centered within (38 + 44) / 2 = 41 m.
+    expect(savedPinUnderDot([near, nearer, far], dot, 38, 1)?.id).toBe('nearer');
+    expect(savedPinUnderDot([near, far], dot, 38, 1)?.id).toBe('near');
+    expect(savedPinUnderDot([far], dot, 38, 1)).toBeNull();
+    expect(savedPinUnderDot([], dot, 38, 1)).toBeNull();
   });
 });
 

@@ -5,9 +5,6 @@ import type { User } from 'firebase/auth';
 
 import { needsEmailConfirmation, setSignUpDraft, signUpWithEmail } from '../src/auth/authService';
 import { AuthScreen } from '../src/components/AuthScreen';
-import { SetPlacesPrompt } from '../src/components/SetPlacesPrompt';
-import { isNewAccount } from '../src/hooks/useNewAccountPlacesPrompt';
-import type { SavedLocation } from '../src/data/userData';
 
 const asUser = (fields: Record<string, unknown>) => fields as unknown as User;
 const passwordUser = (fields: Record<string, unknown> = {}) => asUser({
@@ -125,34 +122,5 @@ describe('email confirmation', () => {
     expect(needsEmailConfirmation(passwordUser({ isAnonymous: true, providerData: [] }))).toBe(false);
     expect(needsEmailConfirmation(passwordUser({ providerData: [{ providerId: 'google.com' }] }))).toBe(false);
     expect(needsEmailConfirmation(passwordUser({ metadata: { creationTime: '2026-05-01T00:00:00Z' } }))).toBe(false);
-  });
-});
-
-describe('places prompt', () => {
-  const now = Date.parse('2026-11-03T00:00:00Z');
-
-  it('is for new accounts, not older ones or guests', () => {
-    expect(isNewAccount(passwordUser(), now)).toBe(true);
-    expect(isNewAccount(passwordUser({ metadata: { creationTime: '2026-09-01T00:00:00Z' } }), now)).toBe(false);
-    expect(isNewAccount(passwordUser({ isAnonymous: true }), now)).toBe(false);
-    expect(isNewAccount(null, now)).toBe(false);
-  });
-
-  it('offers home, work and school, and can be skipped', () => {
-    const onSet = jest.fn();
-    const onDone = jest.fn();
-    render(<SetPlacesPrompt onDone={onDone} onSet={onSet} places={[]} />);
-    fireEvent.press(screen.getByTestId('set-places-school'));
-    expect(onSet).toHaveBeenCalledWith('School');
-    expect(screen.getByTestId('set-places-done')).toHaveTextContent('Skip for now');
-    fireEvent.press(screen.getByTestId('set-places-done'));
-    expect(onDone).toHaveBeenCalled();
-  });
-
-  it('shows what is already set', () => {
-    const home = { address: { label: 'Home', name: '12 Elm St', placeId: 'p' } } as unknown as SavedLocation;
-    render(<SetPlacesPrompt onDone={jest.fn()} onSet={jest.fn()} places={[home]} />);
-    expect(screen.getByTestId('set-places-home')).toHaveTextContent(/12 Elm St/);
-    expect(screen.getByTestId('set-places-done')).toHaveTextContent('Done');
   });
 });

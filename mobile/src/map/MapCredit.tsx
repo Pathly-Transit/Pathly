@@ -19,9 +19,10 @@ const CREDIT_TEXT = MAP_ATTRIBUTION.replace(/^©\s*/, '');
 /**
  * The map's credit (mapStyle.ts MAP_ATTRIBUTION: OpenStreetMap's footpaths need it): a small ©
  * chip tucked into the bottom corner across from Locate, opening into the credit, which links to
- * OpenStreetMap's copyright page. Closed until tapped.
+ * OpenStreetMap's copyright page. Closed until tapped. `bottomInset` lifts it clear of what covers
+ * the map's bottom (the map's bottom padding: the home sheet resting over it).
  */
-export function MapCredit() {
+export function MapCredit({ bottomInset = 0 }: { bottomInset?: number }) {
   const styles = useThemedStyles(createStyles);
   const { colors } = useTheme();
   const thumb = useThumbSide();
@@ -32,7 +33,7 @@ export function MapCredit() {
       accessibilityRole="button"
       hitSlop={10}
       onPress={() => setOpen((value) => !value)}
-      style={[styles.button, thumb.leftHanded ? { right: EDGE } : { left: EDGE }, open && styles.open]}
+      style={[styles.button, thumb.leftHanded ? { right: EDGE } : { left: EDGE }, bottomInset > 0 && { bottom: EDGE + bottomInset }, open && styles.open]}
       testID="map-credit"
     >
       {/* Pathly's blue, like the other map buttons. */}

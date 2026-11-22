@@ -5,7 +5,7 @@ import { useAuth } from '../auth/AuthContext';
 import { feedVehicles } from '../data/rideTracking';
 import type { LiveSource } from '../data/transit';
 import { fetchRouteLiveData } from '../data/transitLive';
-import { isAdminEmail } from './admin';
+import { isAdminUser } from './admin';
 import { setClockMockTime, type MockTime } from './clock';
 import { setRequestLogEnabled } from './requestLog';
 
@@ -65,7 +65,7 @@ function parseState(raw: string | null): DebugState {
  */
 export function DebugProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
-  const isAdmin = isAdminEmail(user?.email);
+  const isAdmin = isAdminUser(user);
   const [stored, setStored] = useState<DebugState>(EMPTY_STATE);
   const hadUser = useRef(false);
 

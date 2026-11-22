@@ -6,7 +6,7 @@ const { resetCallableSecurityForTests } = require('../lib/callableSecurity');
 const { AGENCY_CONFIGS } = require('../lib/gtfsAgencies');
 const { getBackendStatus } = require('../lib');
 
-const run = (email) => getBackendStatus.run({ auth: { uid: 'status-user', token: { email } }, data: {}, rawRequest: {} });
+const run = (email, verified = true) => getBackendStatus.run({ auth: { uid: 'status-user', token: { email, email_verified: verified } }, data: {}, rawRequest: {} });
 const published = async () => ({ state: 'published', version: 'abc', publishedAt: '2026-10-14T00:00:00Z', serviceEndDate: '20261231', hasDerived: true });
 
 test.beforeEach(() => resetCallableSecurityForTests());
@@ -24,6 +24,23 @@ test('rejects a non-admin before doing any work', async () => {
     assert.equal(fetched, false);
   } finally {
     global.fetch = originalFetch;
+  }
+});
+
+test('rejects an unverified allowlisted caller before reading backend status', async () => {
+  const originalFetch = global.fetch;
+  const originalAdmins = process.env.ADMIN_EMAILS;
+  let fetched = false;
+  process.env.ADMIN_EMAILS = 'ops@example.com';
+  global.fetch = async () => { fetched = true; return new Response(''); };
+  try {
+    await assert.rejects(run('ops@example.com', false), { code: 'permission-denied' });
+    await assert.rejects(getBackendStatus.run({ auth: { uid: 'status-user', token: { email: 'ops@example.com' } }, data: {}, rawRequest: {} }), { code: 'permission-denied' });
+    assert.equal(fetched, false);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalAdmins === undefined) delete process.env.ADMIN_EMAILS;
+    else process.env.ADMIN_EMAILS = originalAdmins;
   }
 });
 

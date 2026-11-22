@@ -10,7 +10,7 @@ const { routeById: mockRouteById, routes: mockRoutes, stopsForDirection: mockSto
 
 // Firebase needs real project config (unavailable in Jest) and hits the network on init;
 // stub it so existing screens still render as if a user is already signed in.
-const mockUser = { uid: 'test-uid', email: 'rider@example.com', displayName: 'Pathly Rider', providerData: [{ providerId: 'password' }] };
+const mockUser = { uid: 'test-uid', email: 'rider@example.com', emailVerified: true, displayName: 'Pathly Rider', providerData: [{ providerId: 'password' }] };
 // Tests sign in as the admin by changing this email (jest.setupAfterEnv.js resets it).
 globalThis.__mockAuthUser = mockUser;
 
@@ -55,6 +55,8 @@ jest.mock('expo-notifications', () => ({
   AndroidNotificationVisibility: { PUBLIC: 1 },
   dismissNotificationAsync: jest.fn(() => Promise.resolve()),
   getExpoPushTokenAsync: jest.fn(() => Promise.resolve({ data: 'ExponentPushToken[test]' })),
+  addPushTokenListener: jest.fn(() => ({ remove: jest.fn() })),
+  unregisterForNotificationsAsync: jest.fn(() => Promise.resolve()),
   getPermissionsAsync: jest.fn(() => Promise.resolve({ granted: false, canAskAgain: false })),
   requestPermissionsAsync: jest.fn(() => Promise.resolve({ granted: false, canAskAgain: false })),
   scheduleNotificationAsync: jest.fn(() => Promise.resolve('notification')),
@@ -337,9 +339,12 @@ jest.mock('expo-location', () => ({
 jest.mock('./src/map/MapCanvas', () => {
   const { forwardRef, useEffect, useImperativeHandle } = require('react');
   const { View } = require('react-native');
-  // Shared across every map so tests can assert when a map was told to move.
+  // Shared across every map so tests can assert when a map was told to move, set the camera a
+  // map reports (e.g. rotated by the rider), and say where a point is on the screen.
   const mockEaseTo = jest.fn();
   const mockFitPoints = jest.fn();
+  const mockPointForCoordinate = jest.fn(() => Promise.resolve({ x: 0, y: 0 }));
+  const mockCamera = { bearing: 0, pitch: 0 };
   const MockMapCanvas = forwardRef(({ children, onReady, ...props }, ref) => {
     // The base map the real canvas would draw for the theme, for tests to read.
     const { useTheme } = require('./src/theme/AppSettings');
@@ -348,7 +353,8 @@ jest.mock('./src/map/MapCanvas', () => {
     useImperativeHandle(ref, () => ({
       easeTo: mockEaseTo,
       fitPoints: mockFitPoints,
-      getCamera: () => Promise.resolve({ center: props.initialCamera.center, zoom: props.initialCamera.zoom, bearing: 0, pitch: 0 }),
+      getCamera: () => Promise.resolve({ center: props.initialCamera.center, zoom: props.initialCamera.zoom, ...mockCamera }),
+      pointForCoordinate: mockPointForCoordinate,
     }));
     // Loaded at once, as a real map is soon after it mounts.
     useEffect(() => {
@@ -379,8 +385,10 @@ jest.mock('./src/map/MapCanvas', () => {
     MapPolyline: MockMapPolyline,
     MapCircles: MockMapCircles,
     MapMarker: MockMapMarker,
+    mockCamera,
     mockEaseTo,
     mockFitPoints,
+    mockPointForCoordinate,
   };
 });
 

@@ -6,6 +6,7 @@ import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 
 import { getRouteAlerts, type RouteAlert } from './gtfsAlerts';
 import { AGENCY_CONFIGS, type AgencyId } from './gtfsAgencies';
+import { ownedPushTokens } from './pushInstallations';
 
 /** Mirrors mobile/src/data/savedRoutes.ts's RouteAlertSetting. 'peak' is kept for lines saved before Custom hours. */
 export type RouteAlertSetting = 'all' | 'peak' | 'custom' | 'off';
@@ -69,6 +70,58 @@ export function alertInboxEntry(route: SavedRouteDoc, alert: RouteAlert, now: Da
 
 const sentKey = (route: SavedRouteDoc, alert: RouteAlert) => createHash('sha256').update(`${route.agencyId}:${route.routeId}:${alert.id}:${alert.header}`).digest('hex').slice(0, 40);
 
+/** One Expo push to one device. */
+export type ExpoPushMessage = { to: string; title: string; body: string; data: Record<string, string>; sound: 'default'; priority: 'high'; channelId: string };
+
+/** What Expo said about one message: accepted, or why not (DeviceNotRegistered, InvalidCredentials, ...). */
+export type ExpoPushOutcome = { status: 'ok' } | { status: 'error'; error: string };
+
+/** The channel the app creates for service alerts (mobile/src/lib/notifications.ts's defaultChannel). */
+const ALERT_CHANNEL_ID = 'default';
+
+/**
+ * A saved line's alert as a push to one device. High priority: Android otherwise holds a
+ * normal-priority push while the phone dozes and can deliver it late or in a bunch.
+ */
+export function alertPushMessage(token: string, route: SavedRouteDoc, alert: RouteAlert): ExpoPushMessage {
+  return { to: token, ...alertMessage(route, alert), data: { agencyId: route.agencyId, routeId: route.routeId }, sound: 'default', priority: 'high', channelId: ALERT_CHANNEL_ID };
+}
+
+/**
+ * Sends pushes through Expo, a batch at a time, and reads back one outcome per message. Expo answers
+ * 200 even when every message failed, so the tickets, not the HTTP status, say what happened; a
+ * batch that couldn't be sent at all counts as failed for each of its messages.
+ */
+export async function sendExpoPushes(messages: readonly ExpoPushMessage[], fetchImpl: typeof fetch = fetch): Promise<ExpoPushOutcome[]> {
+  const outcomes: ExpoPushOutcome[] = [];
+  for (let index = 0; index < messages.length; index += EXPO_BATCH) {
+    const batch = messages.slice(index, index + EXPO_BATCH);
+    const failed = (error: string) => batch.map((): ExpoPushOutcome => ({ status: 'error', error }));
+    try {
+      const response = await fetchImpl(EXPO_PUSH_URL, {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/json' },
+        body: JSON.stringify(batch),
+      });
+      if (!response.ok) {
+        logger.warn('Expo push request failed', { status: response.status });
+        outcomes.push(...failed(`HTTP ${response.status}`));
+        continue;
+      }
+      const tickets = ((await response.json()) as { data?: unknown }).data;
+      outcomes.push(...batch.map((_, offset): ExpoPushOutcome => {
+        const ticket = Array.isArray(tickets) ? tickets[offset] as { status?: string; details?: { error?: string }; message?: string } | undefined : undefined;
+        if (ticket?.status === 'ok') return { status: 'ok' };
+        return { status: 'error', error: ticket?.details?.error ?? ticket?.message ?? 'NoTicket' };
+      }));
+    } catch (error) {
+      logger.warn('Expo push request failed', { error: String(error) });
+      outcomes.push(...failed('RequestFailed'));
+    }
+  }
+  return outcomes;
+}
+
 /**
  * Sends each rider a push for new service alerts on the lines they saved with alerts on, "Peak
  * times" ones only during weekday rush hours. Each alert reaches a rider once (users/{uid}/
@@ -87,7 +140,9 @@ export async function sendSavedRouteAlerts(now = new Date()): Promise<{ sent: nu
     return alertsByRoute.get(key)!;
   };
 
-  const messages: { to: string[]; title: string; body: string; data: Record<string, string>; sound: 'default' }[] = [];
+  const messages: ExpoPushMessage[] = [];
+  // Each alert's "already sent" mark, with the messages that carry it to the rider's devices.
+  const deliveries: { uid: string; sentRef: FirebaseFirestore.DocumentReference; messages: number[] }[] = [];
   const pushTokensByUser = new Map<string, Promise<string[]>>();
   for (const doc of saved.docs) {
     const route = doc.data() as SavedRouteDoc;
@@ -101,11 +156,11 @@ export async function sendSavedRouteAlerts(now = new Date()): Promise<{ sent: nu
     await Promise.all(alerts.map((alert) => inbox.doc(sentKey(route, alert)).create({ ...alertInboxEntry(route, alert, now), sentAt: FieldValue.serverTimestamp() }).catch(() => undefined)));
     if (!wantsAlertsNow(route.alerts, now, route.alertHours)) continue;
     if (!pushTokensByUser.has(uid)) {
-      pushTokensByUser.set(uid, firestore.collection('users').doc(uid).get().then((user) => {
+      pushTokensByUser.set(uid, firestore.collection('users').doc(uid).get().then(async (user) => {
         // Settings' "Allow notifications" or "Service alerts" is off on the rider's phone.
         if (user.data()?.routeAlertsPaused === true) return [];
         const tokens = user.data()?.pushTokens;
-        return Array.isArray(tokens) ? tokens.filter((token): token is string => typeof token === 'string') : [];
+        return ownedPushTokens(firestore, uid, tokens);
       }));
     }
     const tokens = await pushTokensByUser.get(uid)!;
@@ -115,22 +170,36 @@ export async function sendSavedRouteAlerts(now = new Date()): Promise<{ sent: nu
       // create() fails if it exists: that alert already went to this rider.
       const fresh = await sentRef.create({ sentAt: FieldValue.serverTimestamp(), expiresAt: Timestamp.fromMillis(now.getTime() + SENT_ALERT_TTL_MS) }).then(() => true, () => false);
       if (!fresh) continue;
-      messages.push({ to: tokens, ...alertMessage(route, alert), data: { agencyId: route.agencyId, routeId: route.routeId }, sound: 'default' });
+      // One message per device, so each of Expo's tickets answers for exactly one token.
+      const first = messages.length;
+      for (const token of tokens) messages.push(alertPushMessage(token, route, alert));
+      deliveries.push({ uid, sentRef, messages: tokens.map((_, offset) => first + offset) });
     }
   }
 
-  for (let index = 0; index < messages.length; index += EXPO_BATCH) {
-    const batch = messages.slice(index, index + EXPO_BATCH);
-    try {
-      const response = await fetch(EXPO_PUSH_URL, {
-        method: 'POST',
-        headers: { accept: 'application/json', 'content-type': 'application/json' },
-        body: JSON.stringify(batch),
-      });
-      if (!response.ok) logger.warn('Expo push request failed', { status: response.status });
-    } catch (error) {
-      logger.warn('Expo push request failed', { error: String(error) });
-    }
+  const outcomes = await sendExpoPushes(messages);
+  const failures = new Map<string, number>();
+  for (const outcome of outcomes) if (outcome.status === 'error') failures.set(outcome.error, (failures.get(outcome.error) ?? 0) + 1);
+  if (failures.size > 0) {
+    // InvalidCredentials means Expo has no FCM key for the Android app: no Android push can arrive.
+    logger.warn('Some alert pushes failed', { event: 'route_alert_push_failed', errors: Object.fromEntries(failures) });
   }
-  return { sent: messages.length };
+
+  const goneTokens = new Map<string, Set<string>>();
+  let delivered = 0;
+  for (const delivery of deliveries) {
+    const results = delivery.messages.map((index) => outcomes[index]!);
+    for (const [offset, result] of results.entries()) {
+      if (result.status === 'error' && result.error === 'DeviceNotRegistered') {
+        const token = messages[delivery.messages[offset]!]!.to;
+        goneTokens.set(delivery.uid, (goneTokens.get(delivery.uid) ?? new Set()).add(token));
+      }
+    }
+    if (results.some((result) => result.status === 'ok')) delivered += 1;
+    // Reached none of the rider's devices: unmark it, so the next run tries again.
+    else await delivery.sentRef.delete().catch(() => undefined);
+  }
+  // An uninstalled app's token never works again; drop it from the account.
+  await Promise.all([...goneTokens].map(([uid, tokens]) => firestore.collection('users').doc(uid).update({ pushTokens: FieldValue.arrayRemove(...tokens) }).catch(() => undefined)));
+  return { sent: delivered };
 }

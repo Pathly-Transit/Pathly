@@ -1,4 +1,4 @@
-import { formatTripClock, lineBadge, type Itinerary, type TransitStep } from './tripPlanning';
+import { formatTripClock, lineInText, type Itinerary, type TransitStep } from './tripPlanning';
 
 /**
  * What the backend's live check (firebase/functions/src/tripLive.ts) found about a leg, as short
@@ -48,7 +48,7 @@ export function itineraryNote(itinerary: Itinerary): TripLegNote | null {
   const found = legs.flatMap((step, index) => legNotes(step).map((note) => ({ note, step, index })));
   const [worst] = found.sort((a, b) => TONE_RANK[a.note.tone] - TONE_RANK[b.note.tone] || a.index - b.index);
   if (!worst || (worst.note.tone === 'live' && worst.index > 0)) return null;
-  const line = lineBadge(worst.step);
+  const line = lineInText(worst.step);
   const { note, step } = worst;
   const delay = step.live?.delaySeconds ?? 0;
   const text = {

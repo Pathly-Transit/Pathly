@@ -1,13 +1,15 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { legNotes } from '../data/tripLive';
+import { entranceInstruction, legEntrances, type StationEntrance } from '../data/stationEntrances';
 import { legDepartureOptions, quickDepartureOptions, retimeItinerary, type DepartureChoices, type LegDepartureOption } from '../data/tripDepartures';
 
 import {
   badgeMode,
   fareLabel,
   formatTripClock,
+  legHeadsign,
   lineBadge,
   tripMinutes,
   type FareType,
@@ -20,10 +22,69 @@ import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useUserPreferences } from '../data/userPreferences';
 import { useClock } from '../hooks/useClock';
 import { useTheme } from '../theme/AppSettings';
-import { SharedTripDetailView, tripDetailMapPadding, type TripDetailDeparture, type TripDetailLeg, type TripDetailModel, type TripDetailWalk } from './SharedTripDetailView';
+import { SharedTripDetailView, tripDetailMapPadding, type TripDetailDeparture, type TripDetailEntrance, type TripDetailLeg, type TripDetailModel, type TripDetailWalk } from './SharedTripDetailView';
 import { TripMap } from './TripMap';
 import { legLineKey, useTripVehicles } from '../hooks/useTripVehicles';
-import type { TripVehicle } from '../data/tripMap';
+import type { TripMapProgress, TripVehicle } from '../data/tripMap';
+import { useAuth } from '../auth/AuthContext';
+import { normalizeBeanAvatar } from '../avatars/beanAvatar';
+import type { RideFix } from '../data/rideDetection';
+import { withOwnAvatar, type RideTracking } from '../data/rideTracking';
+import { useOnBoardVehicle } from '../hooks/useTripRide';
+import { ActiveTripNotices } from './ActiveTripNotices';
+import { useAutoStartFollow } from '../hooks/useAutoStartFollow';
+
+/**
+ * A trip under way, as Trip Details follows it: the map keeps the rider and their next point in
+ * view (until they pan; the location button resumes it), done parts of the route go gray, and the
+ * page says what needs saying above the steps (hurry up, a shared ride).
+ */
+export type LiveTripFollow = {
+  /** navigationMapProgress for the trip's cursor: the route's done, current, and upcoming parts. */
+  progress: TripMapProgress;
+  /** The rider's last on-route fix, which the camera follows; null until one is accepted. */
+  followLocation: LatLng | null;
+  /** The rider's dot, drawn faded when stale. */
+  userLocation: LatLng | null;
+  userLocationStale: boolean;
+  hurry: { title: string; body: string } | null;
+  ride?: RideTracking;
+  rideFix: RideFix | null;
+  /** The ride the rider is on or waiting for, for ride reports. */
+  currentRoute?: { agencyId: string; routeId: string; boardStopId: string };
+  /** Admin only: the trip's checkpoint stepper (TripDemoControls). */
+  adminPanel?: ReactNode;
+  /** The trip started itself because the rider was already on their way (useAutoStartFollow). */
+  startedAutomatically?: boolean;
+};
+
+/** The map's follow mode for a live trip page: on from the start, off when the rider pans. */
+export function useLiveFollow(live: boolean) {
+  const [following, setFollowing] = useState(true);
+  const [centerRequest, setCenterRequest] = useState(0);
+  return {
+    following: live && following,
+    setFollowing,
+    resume: () => {
+      setFollowing(true);
+      setCenterRequest((count) => count + 1);
+    },
+    centerRequest,
+  };
+}
+
+/** The trip's vehicles, the one the rider is on carrying their own Pathling, and which one that is. */
+export function useLiveVehicles<T extends TripVehicle>(vehicles: readonly T[], live: LiveTripFollow | null | undefined) {
+  const onBoard = useOnBoardVehicle(live ? vehicles : NO_VEHICLES, live?.rideFix ?? null);
+  const { avatar } = useAuth();
+  const ridingTripId = live?.ride?.ridingTripId ?? null;
+  const shown = useMemo(
+    () => (live ? vehicles.map((vehicle) => (vehicle.tripId === onBoard || vehicle.tripId === ridingTripId ? withOwnAvatar(vehicle, normalizeBeanAvatar(avatar ?? null)) : vehicle)) : vehicles),
+    [avatar, live, onBoard, ridingTripId, vehicles],
+  );
+  return { shown, reportTripId: live ? ridingTripId ?? onBoard : null };
+}
+const NO_VEHICLES: readonly TripVehicle[] = [];
 
 type PlannedTripDetailViewProps = {
   destination: string;
@@ -44,6 +105,17 @@ type PlannedTripDetailViewProps = {
   origin: string;
   /** The rider's real position, for the map's location button; null when unknown. */
   riderLocation?: Coordinates | null;
+  /** The trip is under way (isActive): the page follows it. */
+  live?: LiveTripFollow | null;
+  /** The save-destination button (default on); off when the destination isn't a saveable place. */
+  showFavorite?: boolean;
+  /**
+   * Before GO: the rider's real GPS evidence, and what to do once it shows they're already taking
+   * this trip (walking its first walk away from the start, or on one of its vehicles). Unset, the
+   * trip only starts with GO.
+   */
+  followFix?: RideFix | null;
+  onAutoStart?: (itinerary: Itinerary) => void;
 };
 
 const METERS_PER_MILE = 1609.344;
@@ -60,6 +132,10 @@ function walkRow(step: WalkStep): TripDetailWalk {
   return { minutes: tripMinutes(step.durationSeconds), distance: formatWalkDistance(step.distanceMeters), toName: step.toName };
 }
 
+function entranceRow(entrance: StationEntrance, use: 'enter' | 'exit'): TripDetailEntrance {
+  return { text: entranceInstruction(entrance, use), point: { lat: entrance.lat, lng: entrance.lon } };
+}
+
 function departureRow(option: LegDepartureOption): TripDetailDeparture {
   return { key: option.departs, time: formatTripClock(option.departs), arriveTime: formatTripClock(option.arrives), selected: option.selected, reachable: option.reachable };
 }
@@ -74,11 +150,12 @@ export function toTripDetailModel(itinerary: Itinerary, origin: string, destinat
   let previous: TransitStep | null = null;
   let walkAfter: TripDetailWalk | undefined;
 
-  for (const step of itinerary.steps) {
+  for (const [stepIndex, step] of itinerary.steps.entries()) {
     if (step.kind === 'walk') {
       pendingWalk = step;
       continue;
     }
+    const { enter, exit } = legEntrances(itinerary.steps, stepIndex);
     const walkBefore = pendingWalk ? walkRow(pendingWalk) : undefined;
     const waitSeconds = previous
       ? (Date.parse(step.from.time) - Date.parse(previous.to.time)) / 1000 - (pendingWalk?.durationSeconds ?? 0)
@@ -92,8 +169,8 @@ export function toTripDetailModel(itinerary: Itinerary, origin: string, destinat
       color: step.line.color ?? primary,
       ...(step.line.textColor ? { textColor: step.line.textColor } : {}),
       mode: badgeMode(step),
-      direction: step.headsign ? `Toward ${step.headsign}` : step.line.name,
-      ...(step.headsign ? { headsign: step.headsign } : {}),
+      direction: legHeadsign(step) ? `Toward ${legHeadsign(step)}` : step.line.name,
+      ...(legHeadsign(step) ? { headsign: legHeadsign(step) } : {}),
       stopCount: step.stopCount,
       ...(step.stops && step.stops.length > 0 ? { stops: step.stops.map((stop) => ({ name: stop.name, time: formatTripClock(stop.time), point: stop.location })) } : {}),
       durationMinutes: tripMinutes(step.durationSeconds),
@@ -108,6 +185,8 @@ export function toTripDetailModel(itinerary: Itinerary, origin: string, destinat
       ...(notes.length > 0 ? { notes } : {}),
       ...(step.live?.status === 'tracked' ? { live: true } : {}),
       ...(step.alerts && step.alerts.length > 0 ? { alerts: step.alerts } : {}),
+      ...(enter ? { enter: entranceRow(enter, 'enter') } : {}),
+      ...(exit ? { exit: entranceRow(exit, 'exit') } : {}),
     });
     pendingWalk = null;
     previous = step;
@@ -158,7 +237,7 @@ function withoutStaleLive(model: TripDetailModel, liveFresh: boolean): TripDetai
   return liveFresh ? model : { ...model, legs: model.legs.map(({ live: _live, ...leg }) => leg) };
 }
 
-export function PlannedTripDetailView({ destination, destinationAddress, destinationLines, isActive, liveFresh = true, isFavorite, itinerary: planned, onBack, onEnd, onStart, onToggleFavorite, origin, riderLocation }: PlannedTripDetailViewProps) {
+export function PlannedTripDetailView({ destination, destinationAddress, destinationLines, followFix = null, isActive, liveFresh = true, isFavorite, itinerary: planned, live = null, onAutoStart, onBack, onEnd, onStart, onToggleFavorite, origin, riderLocation, showFavorite = true }: PlannedTripDetailViewProps) {
   const insets = useSafeAreaInsets();
   const { preferences } = useUserPreferences();
   const { colors } = useTheme();
@@ -167,47 +246,70 @@ export function PlannedTripDetailView({ destination, destinationAddress, destina
   // The location button: each press centers the map on the rider, until they drag it.
   const [centerRequest, setCenterRequest] = useState(0);
   const [centered, setCentered] = useState(false);
+  // Under way, the map follows the rider from the start.
+  const follow = useLiveFollow(live != null);
   // The rides' live vehicles on the map, so the rider can watch theirs come in.
   const { vehicles, approachLines } = useTripVehicles(planned, colors.primary);
-  const userLocation = riderLocation ? { lat: riderLocation.latitude, lng: riderLocation.longitude } : null;
-  // Departures the rider picked from the legs' boxes; the trip's times follow them.
+  const { shown: shownVehicles, reportTripId } = useLiveVehicles(vehicles, live);
+  const userLocation = live ? live.userLocation : riderLocation ? { lat: riderLocation.latitude, lng: riderLocation.longitude } : null;
+  // Departures the rider picked from the legs' boxes; the trip's times follow them. A trip under
+  // way keeps the departures it started with.
   const [choices, setChoices] = useState<DepartureChoices>(new Map());
   // Which departures can still be made moves with the (admin-mockable) clock.
   const now = useClock(30_000);
-  const itinerary = useMemo(() => retimeItinerary(planned, choices, now), [choices, now, planned]);
-  const departures = useMemo(() => legDepartureOptions(planned, choices, now), [choices, now, planned]);
+  const itinerary = useMemo(() => (isActive ? planned : retimeItinerary(planned, choices, now)), [choices, isActive, now, planned]);
+  const departures = useMemo(() => (isActive ? [] : legDepartureOptions(planned, choices, now)), [choices, isActive, now, planned]);
+  // Already on the way: the trip starts following by itself, the departure picked included.
+  useAutoStartFollow({ enabled: !isActive && onAutoStart != null, fix: followFix, itinerary, onDetected: () => onAutoStart?.(itinerary), vehicles });
   return (
     <SharedTripDetailView
       interactiveMap={true}
       actionLabel={isActive ? 'End current trip' : `Start trip to ${destination}`}
-      backLabel="Back to route results"
+      backLabel={isActive ? 'Back to Home; the trip will stay active' : 'Back to route results'}
+      beforeSteps={live ? <>{live.adminPanel}<ActiveTripNotices hurry={live.hurry} reportRoute={live.currentRoute} reportTripId={reportTripId} ride={live.ride} rideFix={live.rideFix} startedAutomatically={live.startedAutomatically} /></> : undefined}
       isFavorite={isFavorite}
-      locationSelected={centered}
+      locationSelected={live ? follow.following : centered}
       map={(
         <TripMap
-          centerOnUserRequest={centerRequest}
+          centerOnUserRequest={live ? follow.centerRequest : centerRequest}
           focusStop={focusStop}
+          {...(live ? {
+            followLocation: live.followLocation,
+            followUser: follow.following,
+            navigationProgress: live.progress,
+            onFollowModeChange: follow.setFollowing,
+            userLocationStale: live.userLocationStale,
+          } : {})}
           interactive={true}
           itinerary={itinerary}
-          onUserPan={() => setCentered(false)}
+          onUserPan={() => (live ? follow.setFollowing(false) : setCentered(false))}
           padding={tripDetailMapPadding(insets.top)}
           testID="search-trip-route-map"
           userLocation={userLocation}
           approachLines={approachLines}
-          vehicles={vehicles}
+          vehicles={shownVehicles}
         />
       )}
       model={withMapLive(withoutStaleLive({ ...toTripDetailModel(itinerary, origin, destination, isActive, colors.primary, departures, preferences.travel.fareType), ...(destinationAddress ? { destinationAddress } : {}), ...(destinationLines?.length ? { destinationLines } : {}) }, liveFresh), itinerary, vehicles, now)}
       onAction={isActive ? onEnd : () => onStart(itinerary)}
       onBack={onBack}
       onCenterOnLocation={() => {
+        if (live) {
+          follow.resume();
+          return;
+        }
         setCenterRequest((count) => count + 1);
         setCentered(true);
       }}
-      onSelectDeparture={(legIndex, departs) => setChoices((current) => new Map(current).set(legIndex, departs))}
-      onFocusStop={(stop) => setFocusStop((current) => ({ point: stop.point, key: (current?.key ?? 0) + 1 }))}
+      onSelectDeparture={isActive ? undefined : (legIndex, departs) => setChoices((current) => new Map(current).set(legIndex, departs))}
+      onFocusStop={(stop) => {
+        // A stop picked from the list is looked at, so the map stops following until Locate.
+        if (live) follow.setFollowing(false);
+        setFocusStop((current) => ({ point: stop.point, key: (current?.key ?? 0) + 1 }));
+      }}
       onToggleFavorite={onToggleFavorite}
-      rootTestID={`search-trip-detail-${itinerary.id}`}
+      rootTestID={isActive ? 'active-trip-detail' : `search-trip-detail-${itinerary.id}`}
+      showFavorite={showFavorite}
       showServiceAlerts={false}
       testPrefix="search-trip"
     />

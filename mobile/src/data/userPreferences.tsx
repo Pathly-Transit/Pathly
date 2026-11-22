@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { useAuth } from '../auth/AuthContext';
 import type { TransitMode } from '../components/RouteBadge';
@@ -115,19 +115,32 @@ export function applyPreferencesPatch(current: UserPreferences, patch: Preferenc
   };
 }
 
-type PreferencesValue = { preferences: UserPreferences; updatePreferences: (patch: PreferencesPatch) => void };
+type PreferencesValue = {
+  preferences: UserPreferences;
+  updatePreferences: (patch: PreferencesPatch) => void;
+  /** Same optimistic change, with an awaitable, serialized device write for truthful feedback. */
+  savePreferences: (patch: PreferencesPatch) => Promise<void>;
+};
 
-const PreferencesContext = createContext<PreferencesValue>({ preferences: DEFAULT_PREFERENCES, updatePreferences: () => undefined });
+const PreferencesContext = createContext<PreferencesValue>({ preferences: DEFAULT_PREFERENCES, updatePreferences: () => undefined, savePreferences: async () => { throw new Error('Sign in to save preferences'); } });
 
 /** Loads the signed-in rider's preferences and saves every change on the device. */
 export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const uid = user?.uid ?? null;
   const [loaded, setLoaded] = useState<{ uid: string | null; preferences: UserPreferences }>({ uid: null, preferences: DEFAULT_PREFERENCES });
+  const latest = useRef(loaded);
+  const writes = useRef(new Map<string, Promise<void>>());
+  const ownerScope = useMemo(() => ({ uid }), [uid]);
+  const activeScope = useRef<typeof ownerScope | null>(ownerScope);
   const uidRef = useRef(uid);
-  useEffect(() => {
+  const ownerGeneration = useRef(0);
+  useLayoutEffect(() => {
     uidRef.current = uid;
-  }, [uid]);
+    activeScope.current = ownerScope;
+    ownerGeneration.current += 1;
+    return () => { uidRef.current = null; activeScope.current = null; ownerGeneration.current += 1; };
+  }, [ownerScope, uid]);
 
   useEffect(() => {
     if (!uid) return undefined;
@@ -136,7 +149,10 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
       .then((text) => {
         if (cancelled || !text) return;
         // A change made while loading wins over the saved entry.
-        setLoaded((current) => (current.uid === uid ? current : { uid, preferences: parsePreferences(text) }));
+        if (latest.current.uid === uid) return;
+        const next = { uid, preferences: parsePreferences(text) };
+        latest.current = next;
+        setLoaded(next);
       })
       .catch(() => undefined);
     return () => {
@@ -146,17 +162,27 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
 
   const preferences = loaded.uid === uid ? loaded.preferences : DEFAULT_PREFERENCES;
 
-  const updatePreferences = useCallback((patch: PreferencesPatch) => {
-    const owner = uidRef.current;
-    if (!owner) return;
-    setLoaded((current) => {
-      const next = applyPreferencesPatch(current.uid === owner ? current.preferences : DEFAULT_PREFERENCES, patch);
-      AsyncStorage.setItem(preferencesKey(owner), JSON.stringify(next)).catch(() => undefined);
-      return { uid: owner, preferences: next };
+  const savePreferences = useCallback((patch: PreferencesPatch): Promise<void> => {
+    const owner = uid;
+    const generation = ownerGeneration.current;
+    if (!owner) return Promise.reject(new Error('Sign in to save preferences'));
+    if (uidRef.current !== owner || activeScope.current !== ownerScope) return Promise.reject(new Error('Account changed before preferences were saved'));
+    const next = { uid: owner, preferences: applyPreferencesPatch(latest.current.uid === owner ? latest.current.preferences : DEFAULT_PREFERENCES, patch) };
+    latest.current = next;
+    setLoaded(next);
+    const write = (writes.current.get(owner) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+      if (uidRef.current !== owner || ownerGeneration.current !== generation) throw new Error('Account changed before preferences were saved');
+      await AsyncStorage.setItem(preferencesKey(owner), JSON.stringify(next.preferences));
+      if (uidRef.current !== owner || ownerGeneration.current !== generation) throw new Error('Account changed while preferences were saved');
     });
-  }, []);
+    writes.current.set(owner, write);
+    const clear = () => { if (writes.current.get(owner) === write) writes.current.delete(owner); };
+    void write.then(clear, clear);
+    return write;
+  }, [ownerScope, uid]);
 
-  const value = useMemo(() => ({ preferences, updatePreferences }), [preferences, updatePreferences]);
+  const updatePreferences = useCallback((patch: PreferencesPatch) => { void savePreferences(patch).catch(() => undefined); }, [savePreferences]);
+  const value = useMemo(() => ({ preferences, updatePreferences, savePreferences }), [preferences, updatePreferences, savePreferences]);
   return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;
 }
 

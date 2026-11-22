@@ -6,6 +6,8 @@ const test = require('node:test');
 const { consumeTokenBucket, resetCallableSecurityForTests, setSharedRateLimitConsumerForTests } = require('../lib/callableSecurity');
 const { planTrip, requiredPlanTripRequest, setTransitPlannerForTests, setTripAlertsLookupForTests, setTripLiveLookupForTests } = require('../lib');
 const { SERVICE_AREA_BOUNDS } = require('../lib/serviceArea');
+const { resetGtfsSnapshotStateForTests, setGtfsSnapshotBucketForTests } = require('../lib/gtfsSnapshots');
+const { resetGtfsStaticDataForTests } = require('../lib/gtfsStaticData');
 
 const STONY_BROOK = { lat: 40.9126, lng: -73.1234 };
 const PENN = { lat: 40.7506, lng: -73.9935 };

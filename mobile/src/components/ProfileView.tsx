@@ -20,7 +20,7 @@ import { OfficialMapsSettings } from './OfficialMapsSettings';
 import { PressableScale } from './PressableScale';
 import { Toast, type ToastMessage } from './Toast';
 import { SavedPlaceBadge } from './SavedPlaceBadge';
-import { savedLocationIcon, savedPlaceLines } from './SavedPlacesStrip';
+import { savedLocationIcon, savedPlaceLines } from './FavoritesStrip';
 import { AccessibilitySettings, AccountSettings, contactSupport, FaqSettings, InboxSettings, LegalSettings, NotificationSettings, PrivacySettings, TravelSettings } from './SettingsPages';
 import { Card, ChoiceRow, createStyles, Header } from './SettingsKit';
 import { BeanAvatarEditor } from '../avatars/BeanAvatarEditor';
@@ -33,7 +33,7 @@ type ProfileViewProps = {
   onOpenAdminTools?: () => void;
   /** Opens straight to a settings page (back from choosing a place to save). */
   initialRoute?: 'places';
-  /** The signed-in rider's saved places, managed under Saved places. */
+  /** The signed-in rider's favorite places, managed under Settings -> Favorites. */
   savedPlaces?: {
     locations: readonly SavedLocation[];
     onAdd: (label?: 'Home' | 'Work') => void;
@@ -44,7 +44,7 @@ type ProfileViewProps = {
 type SavedPlacesSettingsProps = NonNullable<ProfileViewProps['savedPlaces']>;
 
 /**
- * Settings -> Saved places: Home and Work first (or a row to set each), then the places in no list,
+ * Settings -> Favorites: Home and Work first (or a row to set each), then the places in no list,
  * then each list under its name, then Add.
  */
 function SavedPlacesSettings({ locations, onAdd, onEdit }: SavedPlacesSettingsProps) {

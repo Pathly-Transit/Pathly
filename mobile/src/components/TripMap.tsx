@@ -250,8 +250,9 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
               color={completed || leg.walk ? colors.mutedInk : themedRouteColor(leg.color ?? colors.primary, isDark)}
               coordinates={leg.path.map(toPoint)}
               dotted={leg.walk}
-              id={`trip-leg-${index}`}
-              key={`leg-${index}`}
+              id={`trip-leg-${index}-${leg.walk ? 'walk' : 'ride'}`}
+              // Redrawn when a piece turns from walk to ride (a moved trip re-splits its route).
+              key={`leg-${index}-${leg.walk ? 'walk' : 'ride'}`}
               opacity={completed ? COMPLETED_OPACITY : 1}
               testID={progressState ? `${testID}-progress-${progressState}-${index}` : leg.walk ? `trip-map-walk-${index}` : `trip-map-transit-${index}`}
               width={completed ? COMPLETED_WIDTH : current ? CURRENT_WIDTH : leg.walk ? WALK_WIDTH : TRANSIT_WIDTH}

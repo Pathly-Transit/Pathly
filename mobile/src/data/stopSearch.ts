@@ -41,6 +41,7 @@ const nearPoint = (near?: { latitude: number; longitude: number } | null) => (ne
  * agency is left to the route badges beside it, which already show whose lines stop there.
  */
 export function stopKindLabel(mode: StopSuggestion['mode'], agencyLabel: string): string {
+  if (agencyLabel === 'PATH') return 'PATH station';
   if (mode === 'subway') return 'Subway station';
   if (mode === 'bus') return 'Bus stop';
   if (mode === 'ferry') return 'Ferry landing';
@@ -69,19 +70,21 @@ const TRANSIT_KINDS: ReadonlySet<PlaceKind | undefined> = new Set(['subway', 'ra
 export const isTransitPlace = (place: SearchPlace) => TRANSIT_KINDS.has(place.kind);
 
 /**
- * Google's own station suggestions with their lines from Pathly's stops: each gets the routes and
- * agency of the matching stop, and keeps Google's id and address (it's still resolved through Google).
+ * Google's own station suggestions with their lines from Pathly's stops: each gets the routes,
+ * agency and name of the matching stop, and keeps Google's id and address (it's still resolved
+ * through Google). The name is Pathly's because Google shows whichever of a station's names the
+ * query matched, even in another language: "nwk wtc" finds "World Trade Center (estação PATH)".
  */
-export async function addStationLines(places: readonly SearchPlace[], near?: { latitude: number; longitude: number } | null): Promise<Map<string, Pick<SearchPlace, 'routes' | 'agency'>>> {
+export async function addStationLines(places: readonly SearchPlace[], near?: { latitude: number; longitude: number } | null): Promise<Map<string, Pick<SearchPlace, 'routes' | 'agency'> & { title?: string }>> {
   const stations = places.filter((place) => isTransitPlace(place) && !place.routes?.length).slice(0, 8);
   if (stations.length === 0) return new Map();
   const { data } = await searchTransitStopsCallable({
     stations: stations.map((place) => ({ name: place.title, kind: place.kind as StationLookup['kind'] })),
     ...nearPoint(near),
   });
-  const lines = new Map<string, Pick<SearchPlace, 'routes' | 'agency'>>();
+  const lines = new Map<string, Pick<SearchPlace, 'routes' | 'agency'> & { title?: string }>();
   (data.stations ?? []).forEach((stop, index) => {
-    if (stop) lines.set(stations[index]!.id, { routes: stop.routes, agency: stop.agencyLabel });
+    if (stop) lines.set(stations[index]!.id, { routes: stop.routes, agency: stop.agencyLabel, ...(stop.name ? { title: stop.name } : {}) });
   });
   return lines;
 }

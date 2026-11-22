@@ -1,14 +1,20 @@
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { SvgXml } from 'react-native-svg';
 
 import { useRouteColor } from '../data/routeColors';
 import { useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
 import { fontFamilies } from '../theme/typography';
+import { PATH_MARK } from './agencyLogoSvgs';
 
 export type TransitMode = 'subway' | 'bus' | 'rail' | 'ferry';
 
+/** PATH, by Pathly's name for it or Google's ("Port Authority Trans-Hudson"). */
+export const isPath = (agency: string) => /^path$|port authority trans[\s-]*hudson/i.test(agency.trim());
+
 export function transitModeForAgency(agency: string): TransitMode {
-  if (agency === 'MTA Subway') return 'subway';
+  // PATH rides like the subway.
+  if (agency === 'MTA Subway' || isPath(agency)) return 'subway';
   if (agency === 'LIRR' || /metro[\s-]*north|\bmnr\b/i.test(agency)) return 'rail';
   if (agency === 'NYC Ferry' || agency === 'Staten Island Ferry') return 'ferry';
   return 'bus';
@@ -55,6 +61,8 @@ const MAX_ROUTE_CODE = 7;
 export function badgeLabel(route: { agency: string; shortName: string }): string {
   // Select Bus Service is signed the MTA's way: `M15+`, not `M15-SBS`.
   if (/-SBS$/i.test(route.shortName)) return `${route.shortName.replace(/-SBS$/i, '')}+`;
+  // PATH's line codes (NWK-WTC, JSQ-HOB-33) are what its signs say; shortened they'd name nothing.
+  if (isPath(route.agency)) return route.shortName;
   const name = route.shortName.replace(/\s+(Branch|Line|Service)$/i, '').trim();
   if (route.agency === 'LIRR' && LIRR_BRANCH_CODES[name]) return LIRR_BRANCH_CODES[name];
   if (/metro[\s-]*north|\bmnr\b/i.test(route.agency) && METRO_NORTH_BRANCH_CODES[name]) return METRO_NORTH_BRANCH_CODES[name];
@@ -94,6 +102,18 @@ type RouteBadgeProps = {
   testID?: string;
 };
 
+const [, , PATH_MARK_WIDTH, PATH_MARK_HEIGHT] = (/viewBox="([^"]+)"/.exec(PATH_MARK)?.[1] ?? '0 0 108 75').split(' ').map(Number) as [number, number, number, number];
+
+/**
+ * PATH's P (the two arrows of its logo) `height` tall, all in `color`. A night or weekend line
+ * that shares another's color (JSQ-HOB-33 is as orange as JSQ-33) is told apart by where it goes
+ * ("33rd Street via Hoboken"), the way its signs and riders tell it apart, not by its P.
+ */
+export function PathMark({ color, height }: { color: string; height: number }) {
+  const width = Math.round((height * PATH_MARK_WIDTH) / PATH_MARK_HEIGHT);
+  return <SvgXml height={height} width={width} xml={PATH_MARK.replace(/#0095D3/g, color)} />;
+}
+
 /** Whether a `#RRGGBB` color is light enough that white text on it is hard to read. */
 function isLightColor(color: string): boolean {
   const hex = /^#([0-9a-f]{6})$/i.exec(color)?.[1];
@@ -126,6 +146,18 @@ export function RouteBadge({
       <Text style={[styles.alertMark, { fontSize: metrics.alertDot - 5 }]}>!</Text>
     </View>
   ) : null;
+
+  // PATH's lines are signed with its P, in the line's color. Riders name a PATH train by where it
+  // goes, which the text beside the badge says, so the badge reads only "PATH train".
+  if (isPath(agency)) {
+    const width = Math.round((metrics.height * PATH_MARK_WIDTH) / PATH_MARK_HEIGHT);
+    return (
+      <View accessibilityLabel={`PATH train${alertLabel}`} accessible={true} style={[styles.badge, { width, height: metrics.height }, style]} testID={testID}>
+        <PathMark color={routeColor} height={metrics.height} />
+        {alertDot}
+      </View>
+    );
+  }
 
   if (expressLine) {
     // A square turned 45° fills the same box as the line's circle; the letter stays upright.

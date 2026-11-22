@@ -10,7 +10,8 @@ import type { Coordinates } from '../hooks/useCurrentLocation';
 import { useClock } from '../hooks/useClock';
 import { useTripVehicles } from '../hooks/useTripVehicles';
 import { useTheme } from '../theme/AppSettings';
-import { toTripDetailModel, withMapLive } from './PlannedTripDetailView';
+import { ActiveTripNotices } from './ActiveTripNotices';
+import { toTripDetailModel, useLiveFollow, useLiveVehicles, withMapLive, type LiveTripFollow } from './PlannedTripDetailView';
 import { SharedTripDetailView, tripDetailMapPadding } from './SharedTripDetailView';
 import { TripMap } from './TripMap';
 import { VehicleSheet } from './VehicleSheet';
@@ -32,6 +33,8 @@ type RideGuideViewProps = {
   live?: RideGuideLiveTrip | null;
   /** The rider's real position, for the map's location button; null when unknown. */
   riderLocation?: Coordinates | null;
+  /** While `live`: how the page follows the trip (the map, hurry up, a shared ride). */
+  follow?: LiveTripFollow | null;
 };
 
 /** Before boarding, the trip can still move to a later departure; after, it stays on the one taken. */
@@ -56,7 +59,7 @@ function sameRide(left: Itinerary, right: Itinerary): boolean {
  * that one ride. Opening it starts the trip, so this page is the navigation too, and END ends it. Its last stop is where the rider gets off, changed right in
  * the ride's card; a new stop or departure moves the live trip with it.
  */
-export function RideGuideView({ live = null, onBack, onEnd, onStart, request, riderLocation }: RideGuideViewProps) {
+export function RideGuideView({ follow: followTrip = null, live = null, onBack, onEnd, onStart, request, riderLocation }: RideGuideViewProps) {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const { preferences } = useUserPreferences();
@@ -80,6 +83,10 @@ export function RideGuideView({ live = null, onBack, onEnd, onStart, request, ri
   const itinerary = useMemo(() => (planned ? retimeItinerary(planned, choices, now) : null), [choices, now, planned]);
   const departures = useMemo(() => (planned ? legDepartureOptions(planned, choices, now) : []), [choices, now, planned]);
   const { vehicles, approachLines } = useTripVehicles(itinerary, colors.primary);
+  // Once the ride is under way the map follows the rider, as Trip Details does.
+  const following = live ? followTrip : null;
+  const follow = useLiveFollow(following != null);
+  const { shown: shownVehicles, reportTripId } = useLiveVehicles(vehicles, following);
   const alight = request.stops[alightIndex] ?? request.stops.at(-1)!;
 
   // GO already happened on Route View: the trip starts as this page opens.
@@ -98,7 +105,7 @@ export function RideGuideView({ live = null, onBack, onEnd, onStart, request, ri
 
   const ride = rideOf(itinerary)!;
   const stopTimes = rideStopTimes(request, ride.from.time);
-  const userLocation = riderLocation ? { lat: riderLocation.latitude, lng: riderLocation.longitude } : null;
+  const userLocation = following ? following.userLocation : riderLocation ? { lat: riderLocation.latitude, lng: riderLocation.longitude } : null;
   const model = withMapLive({
     ...toTripDetailModel(itinerary, request.stops[0]!.name, alight.name, false, colors.primary, departures, preferences.travel.fareType),
     // No fare is known for a ride picked this way; the page doesn't guess one.
@@ -119,32 +126,47 @@ export function RideGuideView({ live = null, onBack, onEnd, onStart, request, ri
         choices: stopTimes.map(({ arrives, index, stop }) => ({ index, name: stop.name, time: formatTripClock(arrives), selected: index === alightIndex })),
         onPick: setAlightIndex,
       }}
+      beforeSteps={following ? <>{following.adminPanel}<ActiveTripNotices hurry={following.hurry} reportRoute={following.currentRoute} reportTripId={reportTripId} ride={following.ride} rideFix={following.rideFix} /></> : undefined}
       interactiveMap={true}
       isFavorite={false}
-      locationSelected={centered}
+      locationSelected={following ? follow.following : centered}
       map={(
         <TripMap
           approachLines={approachLines}
-          centerOnUserRequest={centerRequest}
+          centerOnUserRequest={following ? follow.centerRequest : centerRequest}
           focusStop={focusStop}
+          {...(following ? {
+            followLocation: following.followLocation,
+            followUser: follow.following,
+            navigationProgress: following.progress,
+            onFollowModeChange: follow.setFollowing,
+            userLocationStale: following.userLocationStale,
+          } : {})}
           interactive={true}
           itinerary={itinerary}
-          onUserPan={() => setCentered(false)}
+          onUserPan={() => (following ? follow.setFollowing(false) : setCentered(false))}
           onVehiclePress={setVehicleId}
           padding={tripDetailMapPadding(insets.top, false)}
           testID="ride-guide-map"
           userLocation={userLocation}
-          vehicles={vehicles}
+          vehicles={shownVehicles}
         />
       )}
       model={model}
       onAction={live ? onEnd : () => onStart(itinerary, alight.name)}
       onBack={onBack}
       onCenterOnLocation={() => {
+        if (following) {
+          follow.resume();
+          return;
+        }
         setCenterRequest((count) => count + 1);
         setCentered(true);
       }}
-      onFocusStop={(stop) => setFocusStop((current) => ({ point: stop.point, key: (current?.key ?? 0) + 1 }))}
+      onFocusStop={(stop) => {
+        if (following) follow.setFollowing(false);
+        setFocusStop((current) => ({ point: stop.point, key: (current?.key ?? 0) + 1 }));
+      }}
       onSelectDeparture={(legIndex, departs) => setChoices((current) => new Map(current).set(legIndex, departs))}
       onToggleFavorite={() => undefined}
       rootTestID={`ride-guide-${request.routeId}`}

@@ -1,4 +1,5 @@
 import { AGENCY_CONFIGS, type AgencyId } from './gtfsAgencies';
+import { fetchFeedEntities } from './gtfsRealtime';
 import { logUpstreamRequest } from './upstreamUsage';
 import { readLastRefreshOutcome, readSnapshotSummary, type GtfsRefreshOutcome, type GtfsSnapshotSummary } from './gtfsSnapshots';
 

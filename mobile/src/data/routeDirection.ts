@@ -21,6 +21,24 @@ export function riderNearStop(rider: { latitude: number; longitude: number }, st
   return distanceMeters({ lat: rider.latitude, lon: rider.longitude }, stop) <= RIDER_NEAR_STOP_METERS;
 }
 
+/**
+ * The least span (degrees, ~1.3 km) the route map frames a stop with the rider or a vehicle at.
+ * Closer than that, a fit would zoom to street level, where the line's shape (drawn between a
+ * handful of points) visibly cuts across the streets it runs under.
+ */
+export const MIN_FIT_SPAN = 0.012;
+
+/** `points`, plus two corners around their middle when they're closer together than MIN_FIT_SPAN. */
+export function withMinimumFitSpan(points: readonly { lat: number; lng: number }[]): { lat: number; lng: number }[] {
+  if (points.length === 0) return [];
+  const lats = points.map((point) => point.lat);
+  const lngs = points.map((point) => point.lng);
+  const [minLat, maxLat, minLng, maxLng] = [Math.min(...lats), Math.max(...lats), Math.min(...lngs), Math.max(...lngs)];
+  if (maxLat - minLat >= MIN_FIT_SPAN || maxLng - minLng >= MIN_FIT_SPAN) return [...points];
+  const [lat, lng, half] = [(minLat + maxLat) / 2, (minLng + maxLng) / 2, MIN_FIT_SPAN / 2];
+  return [...points, { lat: lat - half, lng: lng - half }, { lat: lat + half, lng: lng + half }];
+}
+
 /** Compass bearing from `a` to `b`, in degrees clockwise from north (0–360). */
 export function bearingDegrees(a: LatLon, b: LatLon): number {
   const x = (b.lon - a.lon) * Math.cos(((a.lat + b.lat) / 2) * (Math.PI / 180));
@@ -100,6 +118,65 @@ export function splitPathAtStop(path: readonly LatLon[], stops: readonly LatLon[
   if (cut.t === 0) return { behind: before, ahead: [cut.point, ...after] };
   if (cut.t === 1) return { behind: [...before, cut.point], ahead: after };
   return { behind: [...before, cut.point], ahead: [cut.point, ...after] };
+}
+
+/** A stop farther than this from the drawn line keeps its own spot: the line likely isn't its track. */
+const STOP_SNAP_MAX_METERS = 150;
+
+/**
+ * Where each stop's dot goes: the nearest spot on the drawn line. A stop's own coordinates are its
+ * platform or curb, often meters off the track's shape, so zoomed in the dot sat beside the line
+ * instead of on it. Stops are in travel order, so each is searched from the previous stop's spot on,
+ * which keeps a line that passes the same place twice (a loop) on the right pass.
+ */
+export function snapStopsToPath<T extends LatLon>(path: readonly LatLon[] | undefined, stops: readonly T[]): LatLon[] {
+  if (!path || path.length < 2) return stops.map((stop) => ({ lat: stop.lat, lon: stop.lon }));
+  let from = 0;
+  return stops.map((stop) => {
+    const projection = projectOnPath(path, stop, from);
+    if (projection.distance > STOP_SNAP_MAX_METERS) {
+      // Out of order or off this stretch: try the whole line, without moving the search on.
+      const anywhere = projectOnPath(path, stop);
+      if (anywhere.distance > STOP_SNAP_MAX_METERS) return { lat: stop.lat, lon: stop.lon };
+      return anywhere.point;
+    }
+    from = projection.segment;
+    return projection.point;
+  });
+}
+
+/** A rider this close to the stop (straight line) is already there: no street walk is drawn. */
+const AT_STOP_METERS = 150;
+/** A street walk shorter than this is only a jog along the nearest street, not a real walk. */
+const SHORT_WALK_METERS = 150;
+
+/**
+ * The street walk to draw, or null when the rider is already at the stop: routing there only finds
+ * a jog along the nearest street, which read as a walk away from the stop. The thin join
+ * (walkConnectors) still links the rider's dot to the stop's.
+ */
+export function streetWalkToDraw(walk: readonly LatLon[] | null | undefined, from: LatLon | null | undefined, stop: LatLon | null | undefined): readonly LatLon[] | null {
+  if (!walk || walk.length < 2) return null;
+  if (from && stop && distanceMeters(from, stop) <= AT_STOP_METERS) return null;
+  let length = 0;
+  for (let index = 1; index < walk.length; index += 1) length += distanceMeters(walk[index - 1]!, walk[index]!);
+  if (length < SHORT_WALK_METERS) return null;
+  return walk;
+}
+
+/**
+ * The short joins drawn (thinner than the walk) from the rider's dot to where the street walk starts,
+ * and from where it ends to the stop's dot. Routing starts and ends on the nearest street, and the
+ * stop's dot sits on the line (snapStopsToPath), so the walk alone stops short of both dots. With no
+ * street walk, one join runs straight from the rider to the stop.
+ */
+export function walkConnectors(walk: readonly LatLon[] | null | undefined, from: LatLon | null | undefined, to: LatLon | null | undefined): LatLon[][] {
+  if (!walk || walk.length < 2) return from && to ? [[from, to]] : [];
+  const joins: LatLon[][] = [];
+  // Under a meter apart already: nothing to join.
+  if (from && distanceMeters(from, walk[0]!) > 1) joins.push([from, walk[0]!]);
+  if (to && distanceMeters(walk[walk.length - 1]!, to) > 1) joins.push([walk[walk.length - 1]!, to]);
+  return joins;
 }
 
 // The arrow is drawn at a fixed size on screen (DirectionArrow.tsx), so where it can go is worked

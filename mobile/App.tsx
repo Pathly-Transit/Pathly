@@ -14,17 +14,24 @@ import { needsEmailConfirmation } from './src/auth/authService';
 import { AuthScreen } from './src/components/AuthScreen';
 import { HomeScreen } from './src/components/HomeScreen';
 import { LoadingScreen } from './src/components/LoadingScreen';
+import { OnboardingScreen } from './src/components/OnboardingScreen';
 import { VerifyEmailScreen } from './src/components/VerifyEmailScreen';
 import { UserPreferencesProvider } from './src/data/userPreferences';
+import { useOnboarding } from './src/hooks/useOnboarding';
 import { prewarmLocation } from './src/hooks/useCurrentLocation';
 import { DebugProvider } from './src/debug/DebugContext';
 import { AppSettingsProvider } from './src/theme/AppSettings';
 
 function AppContent() {
   const { initializing, user } = useAuth();
+  const onboarding = useOnboarding(user && !needsEmailConfirmation(user) ? user : null);
   if (initializing) return <LoadingScreen />;
   if (!user) return <AuthScreen />;
-  return needsEmailConfirmation(user) ? <VerifyEmailScreen /> : <HomeScreen />;
+  if (needsEmailConfirmation(user)) return <VerifyEmailScreen />;
+  // A new account's first page, once: its usual places, then the app.
+  if (onboarding.state === 'loading') return <LoadingScreen />;
+  if (onboarding.state === 'pending') return <OnboardingScreen onDone={onboarding.finish} />;
+  return <HomeScreen />;
 }
 
 export default function App() {

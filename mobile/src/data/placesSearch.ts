@@ -80,6 +80,9 @@ export function addressAfterName(title: string, address: string): string {
 
 const PLACES_BASE_URL = 'https://places.googleapis.com/v1';
 const DETAILS_FIELD_MASK = 'id,displayName,formattedAddress,location';
+// Pathly is in English. Without a language, Google names some places in another one
+// ("World Trade Center (estação PATH)").
+const LANGUAGE = 'en';
 
 export class PlacesRequestError extends Error {
   constructor(readonly status: number) {
@@ -153,6 +156,7 @@ async function searchNearestPlaces(input: string, origin: { latitude: number; lo
     headers: headers(getPlacesApiKey(), NEARBY_FIELD_MASK),
     body: JSON.stringify({
       textQuery: input,
+      languageCode: LANGUAGE,
       pageSize: NEARBY_RESULTS,
       rankPreference: 'DISTANCE',
       locationBias: { circle: { center: { latitude: origin.latitude, longitude: origin.longitude }, radius: NEARBY_RADIUS_METERS } },
@@ -201,6 +205,7 @@ async function requestSuggestions({ input, sessionToken, signal, origin }: Autoc
     body: JSON.stringify({
       input,
       sessionToken,
+      languageCode: LANGUAGE,
       ...(origin ? { origin: { latitude: origin.latitude, longitude: origin.longitude } } : {}),
       includedRegionCodes: ['us'],
       locationRestriction: {
@@ -244,7 +249,7 @@ type PlaceDetailsOptions = {
 
 /** Resolves a suggestion to its display name, address, and coordinates; ends the billing session. */
 export async function fetchPlaceDetails({ placeId, sessionToken, signal }: PlaceDetailsOptions): Promise<SearchPlace> {
-  const url = `${PLACES_BASE_URL}/places/${encodeURIComponent(placeId)}?sessionToken=${encodeURIComponent(sessionToken)}`;
+  const url = `${PLACES_BASE_URL}/places/${encodeURIComponent(placeId)}?sessionToken=${encodeURIComponent(sessionToken)}&languageCode=${LANGUAGE}`;
   const response = await fetch(url, { headers: headers(getPlacesApiKey(), DETAILS_FIELD_MASK), signal });
   if (!response.ok) throw new PlacesRequestError(response.status);
 

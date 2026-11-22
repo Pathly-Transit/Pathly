@@ -30,6 +30,7 @@ import {
 } from '../data/navigationStorage';
 import {
   planTripForResume,
+  recordTripRestoreDiagnostic,
   type Itinerary,
   type ResumePlanRequest,
   type TransitStep,
@@ -108,12 +109,12 @@ function freezeSelectedItinerary(itinerary: Itinerary): Itinerary {
 }
 
 function lineSummaries(itinerary: Itinerary): PersistedLineSummaryV1[] {
-  return itinerary.steps.filter((step): step is TransitStep & { tripId: string } => step.kind === 'transit' && typeof step.tripId === 'string').map((step) => ({
+  return itinerary.steps.filter((step): step is TransitStep => step.kind === 'transit').map((step) => ({
     mode: step.mode,
     name: step.line.name,
     ...(step.line.shortName ? { shortName: step.line.shortName } : {}),
     ...(step.line.color ? { color: step.line.color } : {}),
-    tripId: step.tripId,
+    ...(step.tripId ? { tripId: step.tripId } : {}),
   }));
 }
 
@@ -354,12 +355,14 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
   }, []);
 
   const recover = useCallback(async (resume: ActiveTripResumeV1, recents: RecentTripV1[]): Promise<boolean> => {
+    const generation = generationRef.current;
+    const isCurrent = () => generationRef.current === generation && stateRef.current.uid === resume.uid;
     const result = resume.rideSnapshot
       ? { ok: true as const, itinerary: resume.rideSnapshot.itinerary }
-      : await planTripForResume(resume.request, resume.selection);
-    // An auth change can finish while the network request is in flight. Never publish the prior
-    // account's runtime into the new account's hook instance.
-    if (stateRef.current.uid !== resume.uid) return false;
+      : await planTripForResume(resume.request, resume.selection, { isCurrent });
+    // UID alone can match again after A -> B -> A. Only the owning mounted account epoch may
+    // publish a runtime or migrate its saved metadata after a pending network/storage request.
+    if (!isCurrent()) return false;
     if (!result.ok) {
       commit({
         uid: resume.uid,
@@ -376,6 +379,7 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
     }
     const active = runtimeFromResume(resume, result.itinerary);
     if (!active) {
+      recordTripRestoreDiagnostic({ category: 'progress-anchor-mismatch' });
       commit({
         uid: resume.uid,
         status: 'recovery',
@@ -394,7 +398,7 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
       try {
         let migrated = false;
         const document = await updateNavigationDocument(resume.uid, (stored) => {
-          if (stored.active?.sessionId !== resume.sessionId) return stored;
+          if (!isCurrent() || stored.active?.sessionId !== resume.sessionId) return stored;
           migrated = true;
           return {
             ...stored,
@@ -403,13 +407,14 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
             active: { ...resumeRecord(active, resume.request, Boolean(resume.rideSnapshot)), lines: stored.active.lines },
           };
         });
-        if (stateRef.current.uid !== resume.uid) return false;
+        if (!isCurrent()) return false;
         if (!migrated) {
           commit({ ...initialState(resume.uid), status: 'idle', recents: document.recents });
           return false;
         }
         recoveredRecents = document.recents;
       } catch {
+        if (!isCurrent()) return false;
         commit({
           uid: resume.uid,
           status: 'recovery',
@@ -456,6 +461,7 @@ export function useActiveTrip(uid: string | undefined): ActiveTripCoordinator {
     });
     return () => {
       cancelled = true;
+      generationRef.current += 1;
     };
   }, [commit, normalizedUid, recover]);
 

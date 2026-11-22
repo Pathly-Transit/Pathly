@@ -49,25 +49,27 @@ function headsigns(route: DiscoveredRoute): string {
 export function StopRoutesSheet({ onClose, onOpenRoute, stop }: StopRoutesSheetProps) {
   const styles = useThemedStyles(createStyles);
   const { colors } = useTheme();
-  const [state, setState] = useState<Status>({ status: 'loading' });
+  // The answer, with the request it answers: a new stop (or a retry) shows loading until its own arrives.
+  const [answer, setAnswer] = useState<{ key: string; status: Status } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const lat = stop?.coordinate.latitude;
   const lon = stop?.coordinate.longitude;
   const kind = stop?.kind;
   const stopName = stop?.name ?? '';
+  const requestKey = `${attempt}|${lat}|${lon}|${kind}|${stopName}`;
+  const state: Status = answer?.key === requestKey ? answer.status : { status: 'loading' };
   useEffect(() => {
     if (lat === undefined || lon === undefined || !kind) return undefined;
     let current = true;
-    setState({ status: 'loading' });
     fetchRoutesAtStop({ latitude: lat, longitude: lon }, stopName).then(
       // A station lists its own kind of line (a subway station its trains, not the buses outside).
-      (routes) => current && setState({ status: 'loaded', routes: routes.filter((route) => transitModeForAgency(route.agencyDisplayName) === kind).sort((a, b) => a.shortName.localeCompare(b.shortName, undefined, { numeric: true })) }),
-      () => current && setState({ status: 'failed' }),
+      (routes) => current && setAnswer({ key: requestKey, status: { status: 'loaded', routes: routes.filter((route) => transitModeForAgency(route.agencyDisplayName) === kind).sort((a, b) => a.shortName.localeCompare(b.shortName, undefined, { numeric: true })) } }),
+      () => current && setAnswer({ key: requestKey, status: { status: 'failed' } }),
     );
     return () => {
       current = false;
     };
-  }, [attempt, kind, lat, lon, stopName]);
+  }, [kind, lat, lon, requestKey, stopName]);
 
   const name = stop ? stopDisplayName(stop.name) : '';
   return (
@@ -84,7 +86,7 @@ export function StopRoutesSheet({ onClose, onOpenRoute, stop }: StopRoutesSheetP
             <View accessibilityLabel="Finding the lines here" style={styles.message}><ActivityIndicator color={colors.primary} /></View>
           ) : state.status === 'failed' ? (
             <View style={styles.message}>
-              <Text style={styles.messageText}>Couldn't load the lines here.</Text>
+              <Text style={styles.messageText}>Couldnâ€™t load the lines here.</Text>
               <PressableScale accessibilityRole="button" onPress={() => setAttempt((count) => count + 1)} style={styles.retry} testID="stop-routes-retry">
                 <Text style={styles.retryText}>Try again</Text>
               </PressableScale>

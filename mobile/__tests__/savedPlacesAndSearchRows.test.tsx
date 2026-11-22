@@ -2,7 +2,7 @@ import { fireEvent, render } from '@testing-library/react-native';
 
 import { subwayExpressLine } from '../src/components/RouteBadge';
 import { SavePlaceSheet } from '../src/components/SavePlaceSheet';
-import { savedLocationIcon, savedPlaceLines } from '../src/components/SavedPlacesStrip';
+import { savedLocationIcon, savedPlaceLines } from '../src/components/FavoritesStrip';
 import { addressAfterName } from '../src/data/placesSearch';
 import { findLabeledLocation, placeToLocation, sortSavedLocations, type SavedLocation } from '../src/data/userData';
 import { AppSettingsProvider } from '../src/theme/AppSettings';

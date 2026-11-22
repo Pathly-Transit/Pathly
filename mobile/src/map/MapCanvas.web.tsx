@@ -259,6 +259,12 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       if (!map) return null;
       return { center: pointOf(map.getCenter()), zoom: fromMapLibreZoom(map.getZoom()), bearing: map.getBearing(), pitch: map.getPitch() };
     },
+    async pointForCoordinate(point) {
+      if (!map) return null;
+      const { x, y } = map.project(lngLatOf(point));
+      const box = map.getContainer().getBoundingClientRect();
+      return { x: box.left + x, y: box.top + y };
+    },
   }), [map]);
 
   const context = useMemo(() => (map ? { map, styleKey, tapTargets } : null), [map, styleKey, tapTargets]);
@@ -267,7 +273,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
       {context ? <MapContext.Provider value={context}>{children}</MapContext.Provider> : null}
       {/* The map's credit, in the app's own button style (MapLibre's is turned off above). */}
-      <MapCredit />
+      <MapCredit bottomInset={padding?.bottom ?? 0} />
     </View>
   );
 });

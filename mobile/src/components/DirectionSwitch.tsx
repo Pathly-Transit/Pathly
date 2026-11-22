@@ -20,6 +20,8 @@ type DirectionSwitchProps = {
   /** Each side's destination, shown on it. */
   labels: readonly [string, string];
   onChange: (index: number) => void;
+  /** The chosen side's text, when the screen already picked one for this line color. */
+  textColor?: string;
 };
 
 /** Dark text on light line colors (the N/Q/R's yellow), white on the rest. */
@@ -35,7 +37,7 @@ function textOn(color: string, light: string, dark: string): string {
  * A line's two directions as one wide oval: each half names a destination, and the knob, in the
  * line's color, glides under the chosen one. Tap a side or swipe across the switch.
  */
-export function DirectionSwitch({ activeIndex, color, labels, onChange }: DirectionSwitchProps) {
+export function DirectionSwitch({ activeIndex, color, labels, onChange, textColor }: DirectionSwitchProps) {
   const styles = useThemedStyles(createStyles);
   const { colors } = useTheme();
   const { reducedMotionActive } = useAppSettings();
@@ -72,7 +74,7 @@ export function DirectionSwitch({ activeIndex, color, labels, onChange }: Direct
   }, [activeIndex, half, onChange, position]);
 
   const translateX = position.interpolate({ inputRange: [0, 1], outputRange: [0, half], extrapolate: 'clamp' });
-  const selectedText = textOn(color, colors.white, '#111111');
+  const selectedText = textColor ?? textOn(color, colors.white, '#111111');
 
   return (
     <View

@@ -31,7 +31,6 @@ export function ResumeTripCard({ destination, instruction, onResume }: ResumeTri
         <Text numberOfLines={1} style={styles.destination}>{destination}</Text>
         {instruction ? <Text numberOfLines={1} style={styles.instruction}>{instruction}</Text> : null}
       </View>
-      <View style={styles.resumePill}><Text style={styles.resumeText}>Resume</Text></View>
     </PressableScale>
   );
 }
@@ -56,9 +55,6 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   },
   icon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19, backgroundColor: colors.primary },
   copy: { flex: 1, minWidth: 0 },
-  label: { color: colors.primary, ...typography.label },
   destination: { marginTop: 1, color: colors.ink, ...typography.bodyStrong, fontSize: 15 },
   instruction: { color: colors.mutedInk, ...typography.metadata },
-  resumePill: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.blueSoft },
-  resumeText: { color: colors.primary, ...typography.bodyStrong, fontSize: 13 },
 });

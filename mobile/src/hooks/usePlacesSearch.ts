@@ -23,7 +23,7 @@ type SettledResult = {
 const NO_SUGGESTIONS: readonly SearchPlace[] = [];
 
 type SettledStops = { query: string; stops: readonly SearchPlace[] };
-type SettledLines = { forSuggestions: readonly SearchPlace[]; lines: Map<string, Pick<SearchPlace, 'routes' | 'agency'>> };
+type SettledLines = { forSuggestions: readonly SearchPlace[]; lines: Map<string, Pick<SearchPlace, 'routes' | 'agency'> & { title?: string }> };
 
 /**
  * Debounced suggestions for `query`: Google's places in Google's order, then Pathly's own transit

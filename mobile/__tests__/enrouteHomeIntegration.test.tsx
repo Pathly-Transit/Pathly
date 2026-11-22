@@ -1,8 +1,9 @@
-import { fireEvent, render, waitFor, type RenderResult } from '@testing-library/react-native';
+import { fireEvent, render, waitFor, within, type RenderResult } from '@testing-library/react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { httpsCallable } from 'firebase/functions';
 import * as Location from 'expo-location';
 import mockSafeAreaContext from 'react-native-safe-area-context/jest/mock';
+import { StyleSheet } from 'react-native';
 
 import App from '../App';
 import { createTripSelectionIdentity, normalizeItinerary } from '../src/data/enrouteNavigation';
@@ -168,7 +169,7 @@ async function startTrip(screen: RenderResult, itinerary: Itinerary) {
   fireEvent.press(screen.getByTestId(`search-result-view-${itinerary.id}`));
   await screen.findByTestId(`search-trip-detail-${itinerary.id}`);
   fireEvent.press(screen.getByTestId('search-trip-go'));
-  await screen.findByTestId('enroute-navigation-view');
+  await screen.findByTestId('active-trip-detail');
 }
 
 async function currentDocument() {
@@ -195,8 +196,14 @@ describe('Home active-trip MVP integration', () => {
     jest.useRealTimers();
   });
 
-  it('opens dedicated navigation, preserves it behind Back, and ends it into a fresh Recent search', async () => {
+  it('follows the trip on Trip Details after GO, keeps it behind Back, and ends it into a fresh Recent search', async () => {
     const screen = await renderHome();
+    const layoutUnderSearch = (height: number) => fireEvent(screen.getByTestId('home-under-search'), 'layout', {
+      nativeEvent: { layout: { x: 16, y: 76, width: 320, height } },
+    });
+    const layersTop = () => StyleSheet.flatten(screen.getByTestId('line-layers-button').props.style).top;
+    layoutUnderSearch(46);
+    const startingLayersTop = layersTop();
     await openResults(screen);
     fireEvent.press(screen.getByTestId(`search-result-view-${railTrip.id}`));
     await screen.findByTestId(`search-trip-detail-${railTrip.id}`);
@@ -212,7 +219,7 @@ describe('Home active-trip MVP integration', () => {
     );
     const exactSelection = createTripSelectionIdentity(exactRetimed);
     fireEvent.press(screen.getByTestId('search-trip-go'));
-    await screen.findByTestId('enroute-navigation-view');
+    await screen.findByTestId('active-trip-detail');
 
     const startedDocument = await currentDocument();
     expect(startedDocument.active?.selection).toEqual(exactSelection);
@@ -221,37 +228,42 @@ describe('Home active-trip MVP integration', () => {
       .not.toBe(createTripSelectionIdentity(plannedRailTrip).departureTime);
     expect(startedDocument.active?.selection.fingerprint).toBe(exactSelection.fingerprint);
 
-    expect(screen.getByTestId('enroute-guidance')).toBeTruthy();
-    expect(screen.getByTestId('enroute-end')).toBeTruthy();
+    // GO keeps the rider on Trip Details: the same trip, now with END, and its departure fixed.
+    expect(screen.getByTestId('search-trip-end')).toBeTruthy();
+    expect(screen.queryByTestId('search-trip-go')).toBeNull();
     expect(screen.queryByTestId('route-results-view')).toBeNull();
-    expect(screen.queryByTestId('search-trip-leave-time')).toBeNull();
-    expect(screen.queryByTestId('search-trip-stops-toggle-0')).toBeNull();
+    expect(screen.getByTestId('search-trip-leave-time')).toBeTruthy();
+    expect(screen.queryByTestId(`search-trip-departure-0-${alternateFirstDeparture}`)).toBeNull();
 
-    fireEvent.press(screen.getByTestId('enroute-back'));
-    const resume = await screen.findByTestId('resume-active-trip');
-    expect(screen.queryByTestId('enroute-navigation-view')).toBeNull();
+    fireEvent.press(screen.getByTestId('search-trip-back'));
+    const row = await screen.findByTestId('home-under-search');
+    const resume = await within(row).findByTestId('resume-active-trip');
+    expect(within(resume).queryByText('Resume')).toBeNull();
+    layoutUnderSearch(68);
+    expect(layersTop()).toBe(startingLayersTop);
+    expect(screen.queryByTestId('active-trip-detail')).toBeNull();
     expect((await currentDocument()).active?.selection.itineraryId).toBe(railTrip.id);
 
     fireEvent.press(resume);
-    await screen.findByTestId('enroute-navigation-view');
-    fireEvent.press(screen.getByTestId('enroute-end'));
-    expect(screen.getByTestId('enroute-end-confirm')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('enroute-end-confirm-cancel'));
-    expect(screen.getByTestId('enroute-navigation-view')).toBeTruthy();
+    await screen.findByTestId('active-trip-detail');
+    fireEvent.press(screen.getByTestId('search-trip-end'));
+    expect(screen.getByTestId('search-trip-end-confirm')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('search-trip-end-confirm-cancel'));
+    expect(screen.getByTestId('active-trip-detail')).toBeTruthy();
     expect((await currentDocument()).active).not.toBeNull();
 
-    fireEvent.press(screen.getByTestId('enroute-end'));
-    fireEvent.press(screen.getByTestId('enroute-end-confirm-confirm'));
+    fireEvent.press(screen.getByTestId('search-trip-end'));
+    fireEvent.press(screen.getByTestId('search-trip-end-confirm-confirm'));
     await screen.findByTestId('tab-nearby');
     expect((await currentDocument()).active).toBeNull();
-    expect(screen.queryByTestId('enroute-navigation-view')).toBeNull();
+    expect(screen.queryByTestId('active-trip-detail')).toBeNull();
   });
 
   it('does not replace the active trip until replacement is confirmed', async () => {
     const screen = await renderHome();
     await openResults(screen);
     await startTrip(screen, railTrip);
-    fireEvent.press(screen.getByTestId('enroute-back'));
+    fireEvent.press(screen.getByTestId('search-trip-back'));
 
     await openResults(screen, 'times');
     fireEvent.press(screen.getByTestId(`search-result-view-${busTrip.id}`));
@@ -267,7 +279,7 @@ describe('Home active-trip MVP integration', () => {
     fireEvent.press(screen.getByTestId('search-trip-go'));
     await screen.findByTestId('replace-active-trip-confirm');
     fireEvent.press(screen.getByTestId('replace-active-trip-confirm-confirm'));
-    await screen.findByTestId('enroute-navigation-view');
+    await screen.findByTestId('active-trip-detail');
 
     document = await currentDocument();
     expect(document.active?.selection.itineraryId).toBe(busTrip.id);
@@ -285,7 +297,7 @@ describe('Home active-trip MVP integration', () => {
 
     const restored = render(<App />);
     expect(restored.getByTestId('loading-screen')).toBeTruthy();
-    await restored.findByTestId('enroute-navigation-view');
+    await restored.findByTestId('active-trip-detail');
     expect(restored.queryByTestId('route-results-view')).toBeNull();
     restored.unmount();
 
@@ -333,7 +345,7 @@ describe('Home active-trip MVP integration', () => {
     expect(plan.checkpoints.some((checkpoint) => checkpoint.phase === 'transferring')).toBe(true);
     expect(plan.checkpoints.some((checkpoint) => checkpoint.stepIndex === finalStepIndex && checkpoint.kind === 'walk')).toBe(true);
     expect(plan.checkpoints[destinationIndex]?.stepIndex).toBe(finalStepIndex);
-    expect(screen.getByTestId('enroute-demo-controls')).toBeTruthy();
+    expect(screen.getByTestId('trip-demo-controls')).toBeTruthy();
     let lastOrdinal = (await currentDocument()).active?.cursor.checkpointOrdinal ?? 0;
     let checkedBackwardMove = false;
 
@@ -341,7 +353,7 @@ describe('Home active-trip MVP integration', () => {
     // a very close walking marker, but it must reach/past each ordinal and never move backward.
     for (let index = 1; index < destinationIndex; index += 1) {
       const checkpoint = plan.checkpoints[index]!;
-      fireEvent.press(screen.getByTestId(`enroute-demo-checkpoint-${index}`));
+      fireEvent.press(screen.getByTestId(`trip-demo-checkpoint-${index}`));
       await waitFor(async () => {
         const raw = await AsyncStorage.getItem(DEBUG_STORAGE_KEY);
         expect(JSON.parse(raw ?? '{}').mockLocation?.label).toBe(checkpoint.label);
@@ -356,7 +368,7 @@ describe('Home active-trip MVP integration', () => {
       if (index === transferIndex) {
         // The transfer platform's alight/board points can be co-located. A deliberate move back
         // both proves monotonicity and gives the next forward checkpoint a fresh location event.
-        fireEvent.press(screen.getByTestId('enroute-demo-checkpoint-0'));
+        fireEvent.press(screen.getByTestId('trip-demo-checkpoint-0'));
         await waitFor(async () => {
           const raw = await AsyncStorage.getItem(DEBUG_STORAGE_KEY);
           expect(JSON.parse(raw ?? '{}').mockLocation?.label).toBe(plan.checkpoints[0]?.label);
@@ -367,7 +379,7 @@ describe('Home active-trip MVP integration', () => {
     }
     expect(checkedBackwardMove).toBe(true);
 
-    fireEvent.press(screen.getByTestId(`enroute-demo-checkpoint-${destinationIndex}`));
+    fireEvent.press(screen.getByTestId(`trip-demo-checkpoint-${destinationIndex}`));
     expect(await screen.findByTestId('trip-arrived')).toBeTruthy();
     const completed = await currentDocument();
     expect(completed.active).toBeNull();

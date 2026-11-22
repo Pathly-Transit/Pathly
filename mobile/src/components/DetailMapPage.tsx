@@ -51,6 +51,8 @@ type DetailMapPageProps = {
   mapOverlay?: ReactNode;
   mapHeight: number;
   mapTestID: string;
+  /** Each change scrolls the sheet back to rest, so the map shows what was just asked for on it. */
+  revealMapRequest?: number;
   scrollTestID: string;
   /** Fades in a bar behind fixed controls once the sheet reaches the top. */
   showHeader?: boolean;
@@ -81,6 +83,7 @@ export function DetailMapPage({
   mapOverlay,
   mapHeight: requestedMapHeight,
   mapTestID,
+  revealMapRequest = 0,
   scrollTestID,
   showHeader = true,
   testID,
@@ -113,11 +116,23 @@ export function DetailMapPage({
     scrollOffset.current = event.nativeEvent.contentOffset.y;
   };
   // Expanded = the sheet's top edge just below the status bar, as on the home screen.
+  // A sheet that fits its content scrolls less than that, so expanding stops at its end.
+  const scrollSize = useRef({ content: 0, viewport: 0 });
+  const maxScroll = () => {
+    const { content, viewport } = scrollSize.current;
+    return content > 0 && viewport > 0 ? Math.max(0, content - viewport) : Infinity;
+  };
   const toggleExpanded = () => {
-    const target = scrollOffset.current <= SHEET_AT_REST_TOLERANCE ? Math.max(0, mapHeight - insets.top) : 0;
+    const target = scrollOffset.current <= SHEET_AT_REST_TOLERANCE ? Math.min(maxScroll(), Math.max(0, mapHeight - insets.top)) : 0;
     scrollOffset.current = target;
     scrollRef.current?.scrollTo({ y: target, animated: !reducedMotionActive });
   };
+  useEffect(() => {
+    if (revealMapRequest === 0) return;
+    scrollOffset.current = 0;
+    scrollRef.current?.scrollTo({ y: 0, animated: !reducedMotionActive });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the request only
+  }, [revealMapRequest]);
   const restingTop = mapHeight - ACTION_HEIGHT - ACTION_GAP - thumb.mapBottomClearance;
   // With the controls gone (scrolled away with the map), the action takes their row.
   const stickyTop = Math.min(restingTop, insets.top + 8 + (controlsScrollWithMap ? 0 : controlsHeight + 12));
@@ -151,6 +166,12 @@ export function DetailMapPage({
           <Animated.ScrollView
             bounces={false}
             contentContainerStyle={interactiveMap && !stickyMap ? styles.passThrough : undefined}
+            onContentSizeChange={(_, contentHeight) => {
+              scrollSize.current.content = contentHeight;
+            }}
+            onLayout={({ nativeEvent }) => {
+              scrollSize.current.viewport = nativeEvent.layout.height;
+            }}
             onMomentumScrollEnd={recordScrollEnd}
             onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
               useNativeDriver: Platform.OS !== 'web',

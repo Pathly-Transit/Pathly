@@ -19,6 +19,7 @@ import { FitText } from './FitText';
 import { Icon } from './Icon';
 import { LIVE_SIGNAL_WIDTH, LiveSignal } from './LiveSignal';
 import { PressableScale } from './PressableScale';
+import { isPath, PathMark } from './RouteBadge';
 import { afterClick } from './afterClick';
 import { useSkeletonPulse } from './Skeleton';
 import { usesWebMouseDrag } from './webMouseDrag';
@@ -33,6 +34,8 @@ type TransitCardProps = {
 };
 
 const CARD_HORIZONTAL_MARGIN = 8;
+/** The card is a fixed 104 tall, so the big time can only grow this much with the phone's text size. */
+const MAX_TIME_FONT_SCALE = 1.3;
 // How far a touch/mouse-down has to travel before it's treated as a swipe instead of a tap.
 const SWIPE_THRESHOLD = 24;
 /**
@@ -67,9 +70,16 @@ function PageBody({ index, item, route, styles }: {
   return (
     <>
       <View style={styles.copy}>
-        <FitText style={styles.routeName} testID={`transit-${route.id}-title`}>
-          {route.shortName || route.routeName}
-        </FitText>
+        {isPath(route.agency) ? (
+          // PATH's lines are signed with its P; white on the line's color, like the other cards' names.
+          <View accessibilityLabel={`PATH ${route.routeName}`} accessible={true} style={styles.pathMark} testID={`transit-${route.id}-title`}>
+            <PathMark color="#FFFFFF" height={29} />
+          </View>
+        ) : (
+          <FitText style={styles.routeName} testID={`transit-${route.id}-title`}>
+            {route.shortName || route.routeName}
+          </FitText>
+        )}
         <FitText style={styles.direction}>{directionDestination(item.direction)}</FitText>
         <Text numberOfLines={1} style={styles.stopName}>{item.stopName}</Text>
       </View>
@@ -82,12 +92,19 @@ function PageBody({ index, item, route, styles }: {
         <View style={[styles.timing, !item.live && styles.scheduledTiming]}>
           <View style={styles.timeRow}>
             {item.live ? <View style={styles.signalSpacer} /> : null}
-            <Text style={styles.minutes} testID={`transit-${route.id}-arrival-${index}`}>
+            <Text
+              adjustsFontSizeToFit={true}
+              maxFontSizeMultiplier={MAX_TIME_FONT_SCALE}
+              minimumFontScale={0.6}
+              numberOfLines={1}
+              style={styles.minutes}
+              testID={`transit-${route.id}-arrival-${index}`}
+            >
               {departureDisplay(item.minutes).value}
             </Text>
             {item.live ? <LiveSignal style={styles.signal} /> : null}
           </View>
-          <Text style={styles.minuteUnit}>{departureDisplay(item.minutes).unit}</Text>
+          <Text maxFontSizeMultiplier={MAX_TIME_FONT_SCALE} numberOfLines={1} style={styles.minuteUnit}>{departureDisplay(item.minutes).unit}</Text>
         </View>
       )}
     </>
@@ -247,6 +264,7 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   },
   copy: { minWidth: 0, flex: 1 },
   routeName: { color: colors.white, ...typography.displayTime },
+  pathMark: { alignSelf: 'flex-start', height: 29, justifyContent: 'center' },
   direction: {
     marginTop: 3,
     color: colors.white,
@@ -287,11 +305,14 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   signalSpacer: { width: LIVE_SIGNAL_WIDTH },
   signal: { marginLeft: 2, marginTop: 1 },
   savedBadge: { position: 'absolute', top: 6, right: 8 },
+  // iOS clips the top of glyphs whose line is shorter than the font, so the line gets room to draw
+  // and the negative margin keeps the layout as tight as before.
   minutes: {
+    marginVertical: -4,
     color: colors.white,
     ...typography.displayTime,
     fontSize: 35,
-    lineHeight: 34,
+    lineHeight: 42,
   },
   minuteUnit: {
     marginTop: -1,

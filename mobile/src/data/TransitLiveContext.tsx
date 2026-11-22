@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 
 import { useAppActive } from '../hooks/useAppActive';
 import type { Coordinates } from '../hooks/useCurrentLocation';
+import { auth } from '../lib/firebase';
 import { LIVE_CACHE_KEY, readCache, writeCache } from './deviceCache';
 import { fetchNearestRouteStop, type NearestRouteStop } from './nearestRouteStop';
 import { routes, type LiveSource, type RouteDetail } from './transit';
@@ -36,10 +37,14 @@ const TransitLiveContext = createContext<ReadonlyMap<string, RouteLiveStatus>>(n
  */
 async function loadRoute(route: RouteDetail, at: Coordinates): Promise<RouteLiveStatus> {
   const source = route.liveSource!;
+  const owner = auth?.currentUser?.uid ?? null;
+  const current = () => (auth?.currentUser?.uid ?? null) === owner;
   try {
     const data = await fetchRouteLiveData(source, at);
+    if (!current()) return { status: 'error' };
     if (data.nearestStop !== undefined) return { status: 'loaded', data, nearestStop: data.nearestStop };
     const nearestStop = await fetchNearestRouteStop(source, at);
+    if (!current()) return { status: 'error' };
     // Each direction overrides independently — they're never assumed to share a station.
     const effectiveSource: LiveSource = {
       ...source,
@@ -170,8 +175,10 @@ export function TransitLiveProvider({
   // agency's cards. The backend resolves each route's nearest stop in the same call. Without
   // batching (an older backend), each route gets its own request instead.
   const fetchRoutes = useCallback((routesToFetch: readonly RouteDetail[], at: Coordinates) => {
+    const owner = auth?.currentUser?.uid ?? null;
+    const current = () => mounted.current && (auth?.currentUser?.uid ?? null) === owner;
     const apply = (route: RouteDetail, result: RouteLiveStatus) => {
-      if (!mounted.current) return;
+      if (!current()) return;
       setLiveStatus((current) => {
         // A route that has loaded before keeps its last good value through one failed poll.
         if (result.status === 'error' && current.get(route.id)?.status === 'loaded') return current;
@@ -207,6 +214,7 @@ export function TransitLiveProvider({
       const chunkAt = pointFor(chunk[0]!);
       void fetchRoutesLiveData(chunk.map((route) => route.liveSource!), chunkAt).then(
         (results) => chunk.forEach((route, index) => {
+          if (!current()) return;
           const data = results[index];
           if (!data) apply(route, { status: 'error' });
           // A backend answering without in-call nearest stops: that route takes the per-route path.
@@ -214,6 +222,7 @@ export function TransitLiveProvider({
           else apply(route, { status: 'loaded', data, nearestStop: data.nearestStop });
         }),
         (error: unknown) => {
+          if (!current()) return;
           if (error instanceof BatchUnavailableError) {
             batchUnavailable.current = true;
             fetchEach(chunk);

@@ -22,7 +22,7 @@ import { DetailMapPage } from './DetailMapPage';
 import { Icon } from './Icon';
 import { LiveSignal } from './LiveSignal';
 import { MapBackdrop } from './MapBackdrop';
-import { RouteBadge, type TransitMode } from './RouteBadge';
+import { RouteBadge, transitModeForAgency, type TransitMode } from './RouteBadge';
 import { DestinationPin, orientLegs, routeFocus, RouteLines, type MapLeg } from './RouteMapOverlay';
 import { MAP_CONTROL_SIZE, MapControlButton } from './MapControlButton';
 import { mapPageMapHeight } from './mapSheetLayout';
@@ -31,11 +31,36 @@ import { TripNotePill } from './TripNotePill';
 import { radii } from '../theme/shape';
 
 
+/** Agencies by the short names riders use; Google sends their full names ("MTA New York City Transit"). */
+const AGENCY_SHORT_NAMES: readonly [RegExp, string][] = [
+  [/long island rail/i, 'LIRR'],
+  [/metro[\s-]*north/i, 'Metro-North'],
+  [/^path$|port authority trans[\s-]*hudson/i, 'PATH'],
+  [/nassau inter[\s-]*county|^nice\b/i, 'NICE'],
+  [/suffolk/i, 'Suffolk Transit'],
+  [/staten island ferry/i, 'Staten Island Ferry'],
+  [/nyc ferry/i, 'NYC Ferry'],
+  [/nj\s*transit/i, 'NJ Transit'],
+  [/\bmta\b|new york city transit/i, 'MTA'],
+];
+const MODE_WORDS: Record<TransitMode, string> = { subway: 'Subway', rail: 'Train', bus: 'Bus', ferry: 'Ferry' };
+
+/** A leg's agency and kind of vehicle, for its pill: "LIRR Train", "MTA Subway", "PATH Train", "NICE Bus". */
+export function legKindLabel(agency: string, mode: TransitMode): string {
+  const name = AGENCY_SHORT_NAMES.find(([pattern]) => pattern.test(agency.trim()))?.[1] ?? agency.trim();
+  // PATH rides like the subway, but riders call it a train.
+  const word = name === 'PATH' ? 'Train' : MODE_WORDS[mode];
+  if (!name) return word;
+  return new RegExp(`\\b${word}$`, 'i').test(name) ? name : `${name} ${word}`;
+}
+
 /** Walking before a leg (or, on the model, after the last one). */
 export type TripDetailWalk = { minutes: number; distance: string; toName: string };
 
 /** A stop the leg passes without the rider getting off. */
 export type TripDetailStop = { name: string; time: string; point: { lat: number; lng: number } };
+/** Where to go into or out of a station ("Exit by the stair at the NE corner"), shown on the map when pressed. */
+export type TripDetailEntrance = { text: string; point: { lat: number; lng: number } };
 
 /** One departure in a leg's departure box. `key` identifies it to `onSelectDeparture`. */
 export type TripDetailDeparture = { key: string; time: string; arriveTime: string; selected: boolean; reachable: boolean };
@@ -76,6 +101,9 @@ export type TripDetailLeg = {
   live?: boolean;
   /** The line's service alerts (delays, detours, planned work), shown under the ride. */
   alerts?: readonly ServiceAlert[];
+  /** The way into the boarding station and out of the alighting one, for subway and PATH (planned trips). */
+  enter?: TripDetailEntrance;
+  exit?: TripDetailEntrance;
 };
 
 export type TripDetailModel = {
@@ -181,6 +209,28 @@ function Rail({ color, dot, from = true, to = true }: { color: string; dot?: 'te
   );
 }
 
+/** A way into or out of a station, under its stop: pressed, the map shows it. */
+function EntranceRow({ color, entrance, onFocusStop, rail, testID }: { color: string; entrance: TripDetailEntrance; onFocusStop?: (stop: TripDetailStop) => void; rail: ReactNode; testID: string }) {
+  const styles = useThemedStyles(createStyles);
+  return (
+    <View style={styles.timelineRow}>
+      {rail}
+      <PressableScale
+        accessibilityHint={onFocusStop ? 'Shows it on the map' : undefined}
+        accessibilityLabel={entrance.text}
+        accessibilityRole={onFocusStop ? 'button' : undefined}
+        disabled={!onFocusStop}
+        onPress={() => onFocusStop?.({ name: entrance.text, time: '', point: entrance.point })}
+        style={styles.entranceRow}
+        testID={testID}
+      >
+        <View style={[styles.entranceMark, { backgroundColor: color }]}><Icon color="#FFFFFF" name="arrowRight" size={11} /></View>
+        <Text style={styles.entranceText}>{entrance.text}</Text>
+      </PressableScale>
+    </View>
+  );
+}
+
 function DepartureChip({ color, departure, live = false, onPress, testID, textColor }: { color: string; departure: TripDetailDeparture; live?: boolean; onPress?: () => void; testID: string; textColor?: string }) {
   const styles = useThemedStyles(createStyles);
   const { colors } = useTheme();
@@ -241,6 +291,9 @@ function LegAlerts({ alerts, expanded, onToggle, testID }: { alerts: readonly Se
 const LEAVE_WITHIN_HORIZON_MIN = 90;
 /** Just below the top row of map buttons (its 8 pt top padding, a button, then a gap). */
 const TOP_ROW_BOTTOM = 8 + MAP_CONTROL_SIZE + 12;
+// GO's touch area reaches past its edge, and a press survives the finger drifting this far.
+const ACTION_HIT_SLOP = { top: 12, right: 12, bottom: 12, left: 12 };
+const ACTION_PRESS_RETENTION = { top: 40, right: 40, bottom: 40, left: 40 };
 
 /**
  * Room the trip map keeps clear when it frames the trip, so no stop hides under the page's own
@@ -445,9 +498,11 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
     }} selected={locationSelected ?? isLocationCentered} testID={`${testPrefix}-location`} />
   );
 
-  // GO (or END) rides the sheet's top edge and scrolls away with it.
+  // GO (or END) rides the sheet's top edge and scrolls away with it. It sits on a scrolling sheet
+  // over a draggable map, so a tap that wobbles a little still counts: a wider touch area, a press
+  // that holds while the finger drifts, and no press-in delay.
   const action = (
-    <PressableScale accessibilityLabel={actionLabel} accessibilityRole="button" onPress={isEndAction ? () => setConfirmingEnd(true) : onAction} style={[styles.goButton, isEndAction && styles.endTripAction]} testID={isEndAction ? `${testPrefix}-end` : `${testPrefix}-go`}>
+    <PressableScale accessibilityLabel={actionLabel} accessibilityRole="button" hitSlop={ACTION_HIT_SLOP} pressRetentionOffset={ACTION_PRESS_RETENTION} unstable_pressDelay={0} onPress={isEndAction ? () => setConfirmingEnd(true) : onAction} style={[styles.goButton, isEndAction && styles.endTripAction]} testID={isEndAction ? `${testPrefix}-end` : `${testPrefix}-go`}>
       <Icon color={colors.onPrimary} name={isEndAction ? 'stop' : 'go'} size={20} />
       <Text style={styles.goButtonText}>{isEndAction ? 'END' : 'GO'}</Text>
     </PressableScale>
@@ -568,7 +623,12 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
                   <RouteBadge agency={leg.agency} alert={!!leg.alerts?.length} color={tint(leg.color)} mode={leg.mode} shortName={leg.shortName} size="large" textColor={leg.textColor} />
                   <View style={styles.routeCopy}>
                     <Text style={styles.stepAction}>{leg.routeName}</Text>
-                    <Text numberOfLines={2} style={styles.headerDirection}>{leg.headsign ? `Toward ${leg.headsign}` : leg.direction}</Text>
+                    <View style={styles.directionRow}>
+                      <View style={styles.agencyPill} testID={`${testPrefix}-agency-${index}`}>
+                        <Text numberOfLines={1} style={styles.agencyPillText}>{legKindLabel(leg.agency, leg.mode ?? transitModeForAgency(leg.agency))}</Text>
+                      </View>
+                      <Text numberOfLines={2} style={[styles.headerDirection, styles.directionText]}>{leg.headsign ? `Toward ${leg.headsign}` : leg.direction}</Text>
+                    </View>
                   </View>
                   <Text style={styles.segmentDuration}>{duration.visible}</Text>
                 </View>
@@ -655,6 +715,7 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
                     <Rail color={tint(leg.color)} dot="terminal" from={false} />
                     <View style={styles.stopRow}><Text style={styles.stopName}>{leg.startName}</Text><View style={styles.stopTimeLive}><Text style={styles.stopTime}>{leg.startTime}</Text>{leg.live ? <LiveSignal color={colors.green} style={styles.stopTimeSignal} /> : null}</View></View>
                   </View>
+                  {leg.enter ? <EntranceRow color={tint(leg.color)} entrance={leg.enter} onFocusStop={onFocusStop} rail={<Rail color={tint(leg.color)} />} testID={`${testPrefix}-enter-${index}`} /> : null}
                   {stops ? (
                     <>
                       <View style={styles.timelineRow}>
@@ -766,6 +827,7 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
                       <View style={styles.stopRow}><Text style={styles.stopName}>{leg.endName}</Text><Text style={styles.stopTime}>{leg.endTime}</Text></View>
                     </View>
                   )}
+                  {leg.exit ? <EntranceRow color={tint(leg.color)} entrance={leg.exit} onFocusStop={onFocusStop} rail={<Rail color={tint(leg.color)} from={false} to={false} />} testID={`${testPrefix}-exit-${index}`} /> : null}
                 </View>
               </View>
             </View>
@@ -804,7 +866,14 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
 
 const createStyles = (colors: Palette) => StyleSheet.create({
   headerDirection: { marginTop: 2, color: colors.ink, ...typography.metadata, fontSize: 12 },
+  directionRow: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  directionText: { marginTop: 0, flexShrink: 1 },
+  agencyPill: { flexShrink: 0, paddingHorizontal: 7, paddingVertical: 2, borderRadius: radii.pill, backgroundColor: colors.background },
+  agencyPillText: { color: colors.ink, fontFamily: fontFamilies.bold, fontSize: 11 },
   timelineRow: { flexDirection: 'row', alignItems: 'stretch' },
+  entranceRow: { minWidth: 0, flex: 1, minHeight: 30, flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 10, paddingBottom: 4 },
+  entranceMark: { width: 16, height: 16, alignItems: 'center', justifyContent: 'center', borderRadius: 3 },
+  entranceText: { minWidth: 0, flex: 1, color: colors.mutedInk, ...typography.metadata, fontSize: 13 },
   rail: { width: 22, alignItems: 'center', justifyContent: 'center' },
   railLine: { position: 'absolute', left: 9, width: 4 },
   railTop: { top: 0, bottom: '50%' },

@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, Text, View, type GestureResponderEvent, type Sc
 
 import { useViewportSize } from '../hooks/useViewportSize';
 import { addressAfterName } from '../data/placesSearch';
-import { findLabeledLocation, savedPlaceName, sortSavedLocations, type Location, type SavedLocation } from '../data/userData';
+import { savedPlaceName, sortSavedLocations, type Location, type SavedLocation } from '../data/userData';
 import { useTheme, useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
 import { typography } from '../theme/typography';
@@ -61,15 +61,15 @@ type StripCard = {
   muted?: boolean;
 };
 
-type SavedPlacesStripProps = {
+type FavoritesStripProps = {
   places: readonly SavedLocation[];
   onSelect: (place: SavedLocation) => void;
-  /** When set, the row offers Set home and Set work until they're saved, and Add at the end. */
-  onAdd?: (label?: 'Home' | 'Work') => void;
+  /** When set, the row ends with Add (only once there's a favorite in it). */
+  onAdd?: () => void;
 };
 
-/** Saved places in a row the rider swipes through, one tap from a trip, as in Google Maps. */
-export function SavedPlacesStrip({ onAdd, onSelect, places }: SavedPlacesStripProps) {
+/** Favorites in a row the rider swipes through, one tap from a trip, as in Google Maps. */
+export function FavoritesStrip({ onAdd, onSelect, places }: FavoritesStripProps) {
   const styles = useThemedStyles(createStyles);
   const { colors } = useTheme();
   const { width } = useViewportSize();
@@ -92,26 +92,15 @@ export function SavedPlacesStrip({ onAdd, onSelect, places }: SavedPlacesStripPr
       testID: `search-saved-place-${place.id}`,
     };
   });
-  if (onAdd) {
-    const missing = (['Home', 'Work'] as const).filter((label) => !findLabeledLocation(places, label));
-    cards.push(...missing.map((label): StripCard => ({
-      key: `set-${label}`,
-      icon: label === 'Home' ? 'home' : 'work',
-      title: label,
-      subtitle: 'Set location',
-      label: `Set ${label.toLowerCase()}`,
-      hint: `Searches for your ${label.toLowerCase()} address to save it`,
-      onPress: () => onAdd(label),
-      testID: `search-set-${label.toLowerCase()}`,
-      muted: true,
-    })));
+  // Add ends the row once there are favorites; with none, there's no row to remind anyone.
+  if (onAdd && cards.length > 0) {
     cards.push({
       key: 'add',
       icon: 'add',
       title: 'Add',
-      subtitle: 'Save a place',
+      subtitle: 'New favorite',
       label: 'Add a favorite',
-      hint: 'Searches for a place to save',
+      hint: 'Searches for a place to add to Favorites',
       onPress: () => onAdd(),
       testID: 'search-add-saved-place',
       muted: true,
