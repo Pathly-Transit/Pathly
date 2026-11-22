@@ -105,6 +105,9 @@ export type RoutePrediction = {
   delayMinutes?: number | null;
   /** Where this trip ends, when known: some of a direction's trips stop short of its usual terminal. */
   headsign?: string | null;
+  /** Exact producer/timetable identity retained for Route View GO; absent means schedule-only. */
+  tripId?: string; serviceDate?: string; startTime?: string; stopId?: string; stopSequence?: number; directionId?: number;
+  departureTime?: string;
 };
 
 /**

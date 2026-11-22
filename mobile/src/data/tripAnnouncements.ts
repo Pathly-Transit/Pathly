@@ -39,12 +39,18 @@ export function announcementFor(previous: NavigationGuidance | null, next: Navig
 }
 
 /** The trip notification: the step now as its title, then what's next, stops left, and arrival. */
-export function tripNotificationContent(guidance: NavigationGuidance): { title: string; body: string } {
+export function tripNotificationContent(guidance: NavigationGuidance, now = Date.now()): { title: string; body: string } {
   const parts: string[] = [];
   if (guidance.phase === 'arrived') return { title: guidance.currentAction, body: 'Trip complete' };
   if (stopIsNext(guidance)) parts.push(getReady(guidance).replace(' Get ready to get off.', ''));
   else if (guidance.nextAction) parts.push(`Next: ${guidance.nextAction}`);
   if (guidance.phase === 'riding' && guidance.remainingStops !== null && !stopIsNext(guidance)) parts.push(`${stopsLabel(guidance.remainingStops)} left`);
-  parts.push(`Arrive ${formatTripClock(guidance.arrivalTime)}`);
+  const timing = guidance.timing;
+  const expired = timing?.expiresAt != null && timing.expiresAt <= now;
+  if (timing && (timing.arrivalTime === null || expired || timing.confidence === 'unavailable' || timing.confidence === 'stale')) parts.push('Arrival updating');
+  else {
+    const label = timing?.confidence === 'scheduled' ? 'Scheduled arrival' : timing?.confidence === 'estimated' ? 'Expected arrival' : 'Arrive';
+    parts.push(`${label} ${formatTripClock(timing?.arrivalTime ?? guidance.arrivalTime)}`);
+  }
   return { title: guidance.currentAction, body: parts.map((part) => part.replace(/\.$/, '')).join('. ') };
 }

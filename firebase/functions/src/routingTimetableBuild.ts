@@ -67,7 +67,7 @@ class NumberList<T extends Int32Array | Uint32Array | Uint8Array> {
   }
 }
 
-type BuiltTrip = { tripId: string; serviceId: string; headsign: string; shapeKey: string | null; arr: number[]; dep: number[] };
+type BuiltTrip = { tripId: string; serviceId: string; headsign: string; shapeKey: string | null; arr: number[]; dep: number[]; sequences: number[] };
 
 /** Fills times the feed leaves blank: arrival from departure and back, others spread evenly between known ones. */
 function completeTimes(arr: number[], dep: number[]): boolean {
@@ -197,6 +197,8 @@ export class RoutingTimetableBuilder {
   private readonly tripHeadsign = new NumberList(Int32Array);
   private readonly profileArr = new NumberList(Int32Array);
   private readonly profileDep = new NumberList(Int32Array);
+  private readonly tripSequenceStart = new NumberList(Uint32Array);
+  private readonly tripStopSequence = new NumberList(Int32Array);
 
   constructor(
     private readonly agencyId: AgencyId,
@@ -300,7 +302,7 @@ export class RoutingTimetableBuilder {
       if (!group) groups.set(key, (group = { direction, stops, flags, trips: [] }));
       const lastStop = this.staticData.stopsById.get(stops.at(-1)!);
       const lastName = (lastStop?.parentStation ? this.staticData.stopsById.get(lastStop.parentStation)?.name : undefined) ?? lastStop?.name ?? '';
-      group.trips.push({ tripId, serviceId: trip.serviceId, headsign: trip.headsign || lastName, shapeKey: this.shapeKeyFor(tripId, trip.shapeId), arr, dep });
+      group.trips.push({ tripId, serviceId: trip.serviceId, headsign: trip.headsign || lastName, shapeKey: this.shapeKeyFor(tripId, trip.shapeId), arr, dep, sequences: kept.map((row) => Number.isSafeInteger(row[4]) && row[4] >= 0 ? row[4] : -1) });
     }
 
     const route = this.route(routeId);
@@ -341,6 +343,8 @@ export class RoutingTimetableBuilder {
         for (const offset of depOffsets) this.profileDep.push(offset);
       }
       this.tripIds.push(trip.tripId);
+      this.tripSequenceStart.push(this.tripStopSequence.length);
+      for (const sequence of trip.sequences) this.tripStopSequence.push(sequence);
       this.tripStart.push(start);
       this.tripProfile.push(profile);
       this.tripService.push(this.service(trip.serviceId));
@@ -482,6 +486,8 @@ export class RoutingTimetableBuilder {
       tripHeadsign: this.tripHeadsign.toArray(),
       profileArr: this.profileArr.toArray(),
       profileDep: this.profileDep.toArray(),
+      tripSequenceStart: new Uint32Array([...this.tripSequenceStart.toArray(), this.tripStopSequence.length]),
+      tripStopSequence: this.tripStopSequence.toArray(),
     };
     return encodeRoutingTimetable(timetable);
   }

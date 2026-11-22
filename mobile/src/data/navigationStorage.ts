@@ -9,6 +9,8 @@ import type {
 } from './enrouteNavigation';
 import type { ResumePlanRequest, TripMode } from './tripPlanning';
 import { parseRideSnapshot, type RideSnapshotV1 } from './rideSnapshot';
+import { parseTripRunRef } from './tripRunRef';
+import { parseNativeSnapshot, type NativeSnapshotV1 } from './nativeSnapshot';
 
 export type { RideSnapshotV1 } from './rideSnapshot';
 
@@ -51,6 +53,8 @@ export type ActiveTripResumeV1 = {
   lines: PersistedLineSummaryV1[];
   /** Selected local Ride Guide itinerary only; planned trips continue provider-light recovery. */
   rideSnapshot?: RideSnapshotV1;
+  /** Active-only Pathly-native selected itinerary; never copied into recent history. */
+  nativeSnapshot?: NativeSnapshotV1;
 };
 
 export type RecentTripV1 = {
@@ -112,7 +116,10 @@ function isSelection(value: unknown): value is TripSelectionIdentity {
     && isIsoTime(value.arrivalTime)
     && isString(value.fingerprint)
     && (value.tripIds === undefined
-      || (Array.isArray(value.tripIds) && value.tripIds.every((tripId) => tripId === null || isString(tripId))));
+      || (Array.isArray(value.tripIds) && value.tripIds.every((tripId) => tripId === null || isString(tripId))))
+    && (value.native === undefined || (isRecord(value.native) && value.native.version === 1 && isString(value.native.fingerprint)
+      && Array.isArray(value.native.runRefs) && value.native.runRefs.length > 0 && value.native.runRefs.length <= 12
+      && value.native.runRefs.every((ref) => parseTripRunRef(ref) !== null)));
   if (!common || value.version === 1) return common;
   return Array.isArray(value.walks)
     && value.walks.every((walk) => isRecord(walk)
@@ -151,8 +158,9 @@ function isResumeRequest(value: unknown): value is ResumePlanRequest {
     && isIsoTime(value.time.at)
     && (value.preference === 'fastest' || value.preference === 'transfers')
     && (value.lessWalking === undefined || value.lessWalking === true)
+    && (value.ferry === undefined || value.ferry === false)
     && Array.isArray(value.modes)
-    && value.modes.length > 0
+    && (value.modes.length > 0 || value.ferry !== false)
     && value.modes.every((mode) => typeof mode === 'string' && tripModes.has(mode));
 }
 
@@ -181,6 +189,13 @@ function parseActive(value: unknown, uid: string): ActiveTripResumeV1 | null {
     || !Array.isArray(value.lines)
     || !value.lines.every(isLine)) return null;
   if (!sameEndpoint(value.origin, value.request.origin) || !sameEndpoint(value.destination, value.request.destination)) return null;
+  if (value.nativeSnapshot !== undefined) {
+    if (value.rideSnapshot !== undefined) return null;
+    const nativeSnapshot = parseNativeSnapshot(value.nativeSnapshot, {
+      origin: value.origin, destination: value.destination, request: value.request, selection: value.selection,
+    });
+    return nativeSnapshot ? { ...value, nativeSnapshot } as ActiveTripResumeV1 : null;
+  }
   if (value.rideSnapshot === undefined) return value as ActiveTripResumeV1;
   const rideSnapshot = parseRideSnapshot(value.rideSnapshot, {
     origin: value.origin, destination: value.destination, request: value.request, selection: value.selection,

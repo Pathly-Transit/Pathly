@@ -126,6 +126,21 @@ it('accepts optional trip-id evidence only when every entry is a string or null'
   expect((await readNavigationDocument('alice', NOW)).active).toBeNull();
 });
 
+it('persists ferry-only navigation and the independent ferry exclusion', async () => {
+  const ferryOnly = active('alice');
+  ferryOnly.request = { ...ferryOnly.request, modes: [] };
+  expect((await updateNavigationDocument('alice', (current) => ({ ...current, active: ferryOnly }), NOW)).active?.sessionId).toBe(ferryOnly.sessionId);
+  expect((await readNavigationDocument('alice', NOW)).active?.request.modes).toEqual([]);
+
+  const landOnly = active('alice');
+  landOnly.request = { ...landOnly.request, ferry: false };
+  await updateNavigationDocument('alice', (current) => ({ ...current, active: landOnly }), NOW);
+  expect((await readNavigationDocument('alice', NOW)).active?.request.ferry).toBe(false);
+
+  await updateNavigationDocument('alice', (current) => ({ ...current, active: { ...landOnly, request: { ...landOnly.request, modes: [] } } }), NOW);
+  expect((await readNavigationDocument('alice', NOW)).active).toBeNull();
+});
+
 it('accepts version-2 bounded walk evidence and rejects malformed evidence', async () => {
   const previous = active('alice').selection;
   const modern = active('alice', {

@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 
 import { simplifyPath } from './gtfsGeometry';
 import type { StationEntrance } from './stationEntrances';
+import type { TripRunRef } from './tripLiveTypes';
 
 /**
  * The trip-planning request and itinerary formats the app reads (mirrored in
@@ -15,6 +16,12 @@ export type LatLng = { lat: number; lng: number };
 
 /** A place given by coordinates; an older app can send only a Google place id (resolved in index.ts). */
 export type TripEndpoint = { placeId?: string; lat?: number; lng?: number; label: string };
+export type TripRecoveryRequest = {
+  excludedRuns: TripRunRef[];
+  preferredRoute?: { agencyId: TripRunRef['agencyId']; routeId: string };
+  /** Current onboard run, ending at the recovery origin; preserves its canonical transfer rules. */
+  incomingRun?: TripRunRef;
+};
 export type PlanTripRequest = {
   origin: TripEndpoint;
   destination: TripEndpoint;
@@ -27,6 +34,8 @@ export type PlanTripRequest = {
   lessWalking?: boolean;
   /** Also offer walking the whole way when it takes at most this many minutes (walkOnlyItinerary). */
   walkOnlyMaxMinutes?: number;
+  /** Explicit triggered recovery; never supplied for routine ETA observations. */
+  recovery?: TripRecoveryRequest;
 };
 
 export type TripStop = { name: string; location: LatLng; time: string };
@@ -46,6 +55,9 @@ export type TransitStep = {
   stops?: TripStop[];
   /** The scheduled trip's GTFS trip_id (shown by the admin ID overlay). */
   tripId?: string;
+  runRef?: TripRunRef;
+  /** Additional change time after any emitted walking steps; zero when their duration includes it. */
+  minimumTransferSeconds?: number;
   /**
    * Scheduled departures of the same line between the same two stops around this one (this one
    * included), so the rider can pick another. `stopTimes` follow `stops` when that trip calls at
@@ -73,7 +85,7 @@ export type LegAlert = { id: string; header: string; description: string | null;
 export type LegLive = { status: 'tracked' | 'cancelled' | 'skips-stop'; departs?: string; arrives?: string; delaySeconds?: number };
 /** `spareSeconds`: time left over after the walk between the legs; negative when already missed. */
 export type LegConnection = { status: 'tight' | 'missed'; spareSeconds: number };
-export type TripDeparture = { departs: string; arrives: string; stopTimes?: string[] };
+export type TripDeparture = { departs: string; arrives: string; stopTimes?: string[]; runRef?: TripRunRef };
 export type TripStep = WalkStep | TransitStep;
 /** One part of a fare: a ride, what it adds, and why ("Free transfer within 2 hours"). */
 export type FareLine = { label: string; text: string; note?: string };

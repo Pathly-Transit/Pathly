@@ -1,4 +1,5 @@
 import type { Itinerary, TransitStep, TripDeparture, TripStep } from './tripPlanning';
+import { rideRunSeedKey, sameTripRunRef, tripRunRefKey } from './tripRunRef';
 
 /**
  * Picking another departure for a leg of a planned trip (the departure box on each leg). The
@@ -9,6 +10,9 @@ import type { Itinerary, TransitStep, TripDeparture, TripStep } from './tripPlan
 
 /** A rider's picks: transit leg index (0-based, transit legs only) -> the chosen `departs`. */
 export type DepartureChoices = ReadonlyMap<number, string>;
+
+/** Native options distinguish two runs even when their departure clocks are identical. */
+export const departureChoiceKey = (option: TripDeparture): string => option.runSeed ? rideRunSeedKey(option.runSeed) : option.runRef ? tripRunRefKey(option.runRef) : option.departs;
 
 /** A departure as the leg's box offers it. */
 export type LegDepartureOption = TripDeparture & { selected: boolean; reachable: boolean };
@@ -21,14 +25,15 @@ const TRANSFER_BUFFER_MS = 60_000;
 const ms = (iso: string) => Date.parse(iso);
 
 function plannedDeparture(step: TransitStep): TripDeparture {
-  return { departs: step.from.time, arrives: step.to.time, ...(step.stops ? { stopTimes: step.stops.map((stop) => stop.time) } : {}) };
+  return { departs: step.from.time, arrives: step.to.time, ...(step.stops ? { stopTimes: step.stops.map((stop) => stop.time) } : {}), ...(step.runRef ? { runRef: step.runRef } : {}), ...(step.runSeed ? { runSeed: step.runSeed } : {}) };
 }
 
 /** Every departure the leg could take, the planned one included, in time order. */
 function departuresOf(step: TransitStep): TripDeparture[] {
   const listed = step.departures ?? [];
   const planned = plannedDeparture(step);
-  const all = listed.some((option) => Math.abs(ms(option.departs) - ms(planned.departs)) < SAME_DEPARTURE_MS) ? listed : [...listed, planned];
+  const all = listed.some((option) => step.runSeed ? option.runSeed && rideRunSeedKey(option.runSeed) === rideRunSeedKey(step.runSeed)
+    : step.runRef ? sameTripRunRef(option.runRef, step.runRef) : Math.abs(ms(option.departs) - ms(planned.departs)) < SAME_DEPARTURE_MS) ? listed : [...listed, planned];
   return [...all].sort((a, b) => ms(a.departs) - ms(b.departs));
 }
 
@@ -36,10 +41,13 @@ function retimeStep(step: TransitStep, option: TripDeparture): TransitStep {
   const shift = ms(option.departs) - ms(step.from.time);
   // Another departure has no known run ID: keeping the original would identify the wrong
   // vehicle and reject an exact fresh match. Equivalent timezone spellings keep that ID.
-  const { live: _live, connection: _connection, tripId, ...rest } = step;
+  const { live: _live, connection: _connection, tripId, runRef, runSeed, ...rest } = step;
+  const sameSeed = !option.runSeed || Boolean(runSeed && rideRunSeedKey(option.runSeed) === rideRunSeedKey(runSeed));
   return {
     ...rest,
-    ...(shift === 0 && tripId !== undefined ? { tripId } : {}),
+    ...(option.runRef ? { tripId: option.runRef.tripId, runRef: option.runRef }
+      : shift === 0 && sameSeed ? { ...(tripId !== undefined ? { tripId } : {}), ...(runRef ? { runRef } : {}) } : {}),
+    ...(option.runSeed ? { runSeed: option.runSeed } : shift === 0 && runSeed ? { runSeed } : {}),
     from: { ...step.from, time: option.departs },
     to: { ...step.to, time: option.arrives },
     durationSeconds: Math.max(0, (ms(option.arrives) - ms(option.departs)) / 1000),
@@ -92,7 +100,7 @@ function retime(itinerary: Itinerary, choices: DepartureChoices, nowMs: number):
     earliest.push(canMake);
     const options = departuresOf(step);
     const chosen = choices.get(index);
-    const picked = chosen !== undefined ? options.find((option) => option.departs === chosen && ms(option.departs) >= canMake) : undefined;
+    const picked = chosen !== undefined ? options.find((option) => (departureChoiceKey(option) === chosen || option.departs === chosen) && ms(option.departs) >= canMake) : undefined;
     let option = picked;
     if (!option) {
       const planned = plannedDeparture(step);
@@ -108,7 +116,9 @@ function retime(itinerary: Itinerary, choices: DepartureChoices, nowMs: number):
           ? firstMakeable(canMake + (walkMs > 0 ? 0 : TRANSFER_BUFFER_MS)) ?? firstMakeable(canMake) ?? planned
           : ms(planned.departs) >= canMake ? planned : firstMakeable(canMake) ?? planned;
     }
-    const kept = option.departs === step.from.time && option.arrives === step.to.time;
+    const kept = option.departs === step.from.time && option.arrives === step.to.time
+      && (!option.runRef || sameTripRunRef(option.runRef, step.runRef))
+      && (!option.runSeed || (step.runSeed && rideRunSeedKey(option.runSeed) === rideRunSeedKey(step.runSeed)));
     // After a moved leg, the planned connection into this one no longer holds either way.
     const retimed = !kept ? retimeStep(step, option) : shifted && step.connection ? withoutConnection(step) : step;
     if (!kept) shifted = true;
@@ -146,10 +156,12 @@ export function legDepartureOptions(itinerary: Itinerary, choices: DepartureChoi
   const updated = retimed.steps.filter((step): step is TransitStep => step.kind === 'transit');
   return original.map((step, index) => {
     if (!step.departures || step.departures.length < 2) return [];
-    const taken = ms(updated[index]!.from.time);
+    const selected = updated[index]!;
+    const taken = ms(selected.from.time);
     return departuresOf(step).map((option) => ({
       ...option,
-      selected: Math.abs(ms(option.departs) - taken) < SAME_DEPARTURE_MS,
+      selected: selected.runSeed ? Boolean(option.runSeed && rideRunSeedKey(option.runSeed) === rideRunSeedKey(selected.runSeed))
+        : selected.runRef ? sameTripRunRef(option.runRef, selected.runRef) : Math.abs(ms(option.departs) - taken) < SAME_DEPARTURE_MS,
       reachable: ms(option.departs) >= (earliest[index] ?? 0),
     }));
   });

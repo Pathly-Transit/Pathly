@@ -410,7 +410,6 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
   const [openSheet, setOpenSheet] = useState<{ kind: 'alerts' | 'outlook'; index: number } | null>(null);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
   const [vehicleScreenPoint, setVehicleScreenPoint] = useState<VehicleScreenPoint | null>(null);
-  const [revealMapRequest, setRevealMapRequest] = useState(0);
   const [transfersSheet, setTransfersSheet] = useState<{ stop: LiveStop; transfers: readonly (StationTransfer | LineTransfer)[] } | null>(null);
   const liveStatus = useTransitLive(route.id);
   const debug = useDebug();
@@ -794,7 +793,7 @@ export function RouteDetailView({ alerts, exploreFrom, initialDirectionIndex, is
       handle={{ accessibilityHint: 'Expands or collapses the route details.', accessibilityLabel: 'Route details handle', testID: 'route-sheet-handle' }}
       map={map}
       mapButtons={liveMap ? locateButton : undefined}
-      revealMapRequest={revealMapRequest}
+      revealMapRequest={0}
       // With GO riding the sheet's edge, Locate moves up under the save and alerts buttons, clear of it.
       mapButtonsTop={goAction ? 8 + MAP_CONTROL_SIZE + 10 + (alerts ? MAP_CONTROL_SIZE + 10 : 0) + 2 : undefined}
       // Ignores touches, so the badge never blocks panning the live map under it.

@@ -113,6 +113,7 @@ export type TripDetailLeg = {
 
 export type TripDetailModel = {
   arriveTime: string;
+  arrivalLabel?: string;
   contextLabel: string;
   destination: string;
   /** The destination's address, for the closing card (a searched place's subtitle). */
@@ -597,7 +598,7 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
       <View style={styles.timeCard}>
         <View><Text style={styles.timeLabel}>Leave</Text><Text style={styles.timeValue} testID={`${testPrefix}-leave-time`}>{model.leaveTime}</Text></View>
         <Icon color={colors.border} name="forward" size={22} />
-        <View style={styles.arriveTime}><Text style={styles.timeLabel}>Arrive</Text><Text style={styles.timeValue} testID={`${testPrefix}-arrive-time`}>{model.arriveTime}</Text></View>
+        <View style={styles.arriveTime}><Text style={styles.timeLabel}>{model.arrivalLabel ?? 'Arrive'}</Text><Text style={styles.timeValue} testID={`${testPrefix}-arrive-time`}>{model.arriveTime}</Text></View>
       </View>
 
       {showServiceAlerts ? (
@@ -609,6 +610,7 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
         </PressableScale>
       ) : null}
       {showServiceAlerts && alertsOpen ? <Text style={styles.alertBody}>No active service advisories affect this trip.</Text> : null}
+      {model.detailNote ? <Text style={styles.detailNote}>{model.detailNote}</Text> : null}
       {beforeSteps}
 
       <View style={styles.steps}>
@@ -880,7 +882,7 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
             ) : model.destinationAddress ? <Text numberOfLines={2} style={styles.headerDirection}>{model.destinationAddress}</Text> : null}
           </View>
           <View style={styles.arrivalTime}>
-            <Text style={styles.arrivalLabel}>Arrive</Text>
+            <Text style={styles.arrivalLabel}>{model.arrivalLabel ?? 'Arrive'}</Text>
             <Text style={styles.segmentDuration}>{model.arriveTime}</Text>
           </View>
         </PressableScale>

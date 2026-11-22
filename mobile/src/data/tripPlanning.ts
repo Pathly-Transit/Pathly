@@ -13,8 +13,10 @@ import {
   type TripEndpointReference,
   type TripSelectionIdentity,
 } from './enrouteNavigation';
-import { retimeItinerary } from './tripDepartures';
+import { departureChoiceKey, retimeItinerary } from './tripDepartures';
+import { parseTripRunRef } from './tripRunRef';
 import { recordRequest } from '../debug/requestLog';
+import type { ResolveRideGuideRunRequest, TripRunRef } from './tripLiveTypes';
 
 /** Mirrors firebase/functions/src/tripPlanning.ts — the itinerary shape planTrip returns. */
 export type LatLng = { lat: number; lng: number };
@@ -37,6 +39,12 @@ export type TransitStep = {
   stops?: TripStop[];
   /** The scheduled trip's GTFS trip_id (admin ID overlay). */
   tripId?: string;
+  /** Selected native timetable run, including its service day and exact stop visits. */
+  runRef?: TripRunRef;
+  /** Exact unverified Route View choice, resolved before starting this one-line ride. */
+  runSeed?: ResolveRideGuideRunRequest;
+  /** Required change margin after any emitted transfer walking steps (native planner). */
+  minimumTransferSeconds?: number;
   /** The same line's scheduled departures between the same two stops, this one included (tripDepartures.ts). */
   departures?: TripDeparture[];
   /** The leg's GTFS line, direction and boarding stop (backend tripPlanner.ts), for its live vehicles. */
@@ -52,11 +60,12 @@ export type TransitStep = {
   alerts?: readonly ServiceAlert[];
 };
 /** 'tracked': live times, `delaySeconds` against the plan (late when positive). */
-export type LegLive = { status: 'tracked' | 'cancelled' | 'skips-stop'; departs?: string; arrives?: string; delaySeconds?: number };
+export type LegLive = { status: 'tracked' | 'cancelled' | 'skips-stop'; departs?: string; arrives?: string; delaySeconds?: number;
+  departureDelaySeconds?: number; arrivalDelaySeconds?: number; delayAt?: 'departure' | 'arrival' };
 /** `spareSeconds`: time left after the walk between the legs; negative when already missed. */
 export type LegConnection = { status: 'tight' | 'missed'; spareSeconds: number };
 /** `stopTimes` follow the leg's `stops` when that trip calls at the same stops in between. */
-export type TripDeparture = { departs: string; arrives: string; stopTimes?: string[] };
+export type TripDeparture = { departs: string; arrives: string; stopTimes?: string[]; runRef?: TripRunRef; runSeed?: ResolveRideGuideRunRequest };
 export type TripStep = WalkStep | TransitStep;
 /**
  * `reduced`: the 65+/disability/Medicare fare, when the published rules price every step.
@@ -94,7 +103,11 @@ type PlanTripRequest = {
   lessWalking?: boolean;
   /** Also plan walking the whole way, when it takes at most this many minutes. */
   walkOnlyMaxMinutes?: number;
+  recovery?: TripRecoveryRequest;
 };
+
+export type TripRecoveryRequest = { excludedRuns: TripRunRef[]; preferredRoute?: { agencyId: string; routeId: string }; incomingRun?: TripRunRef };
+export type TripRecoveryCoverage = { state: 'complete' | 'partial'; scope?: 'candidate-routes'; reasons: string[]; updatedRuns: number };
 
 export const CURRENT_LOCATION_LABEL = 'Current location';
 export const TRIP_TIME_ZONE = 'America/New_York';
@@ -102,7 +115,7 @@ export const TRIP_TIME_ZONE = 'America/New_York';
 /** Why there are no itineraries to show (besides loading). */
 export type TripPlanProblem = 'no-origin' | 'needs-place' | 'out-of-area' | 'unavailable';
 export type TripPlanResult =
-  | { ok: true; itineraries: Itinerary[]; fetchedAt: number; resumeRequest: ResumePlanRequest }
+  | { ok: true; itineraries: Itinerary[]; fetchedAt: number; resumeRequest: ResumePlanRequest; recoveryCoverage?: TripRecoveryCoverage }
   /** `field`: which endpoint needs choosing from search (for 'needs-place'). */
   | { ok: false; problem: TripPlanProblem; field?: 'origin' | 'destination' };
 
@@ -118,6 +131,8 @@ export type ResumePlanRequest = {
   time: { mode: 'depart' | 'arrive'; at: string };
   preference: 'fastest' | 'transfers';
   modes: TripMode[];
+  /** The Ferry switch is independent of the three land-transit modes. */
+  ferry?: false;
   /** Planned asking for less walking, so a resumed trip is looked for among the same results. */
   lessWalking?: true;
 };
@@ -321,7 +336,7 @@ export function summarizeItineraries({ itineraries }: { itineraries: Itinerary[]
 
 /** As long as the function may run (index.ts): a server that has just started loads every timetable first. */
 const PLAN_TRIP_TIMEOUT_MS = 300_000;
-const planTripCallable = callable<PlanTripRequest, { itineraries: Itinerary[] }>('planTrip', summarizeItineraries, PLAN_TRIP_TIMEOUT_MS);
+const planTripCallable = callable<PlanTripRequest, { itineraries: Itinerary[]; recoveryCoverage?: TripRecoveryCoverage }>('planTrip', summarizeItineraries, PLAN_TRIP_TIMEOUT_MS);
 
 const CACHE_MS = 2 * ONE_MINUTE_MS;
 const cache = new Map<string, { result: TripPlanResult; at: number }>();
@@ -349,7 +364,7 @@ export type PlanTripOptions = {
  * coordinates of a place it found.
  */
 export function createResumePlanRequest(
-  { endpoints, location, time, preference, modes, lessWalking = false, now = new Date(appNow()) }: PlanTripOptions,
+  { endpoints, location, time, preference, modes, ferry = true, lessWalking = false, now = new Date(appNow()) }: PlanTripOptions,
   savedAt = Date.now(),
 ): ResumePlanRequest | null {
   const origin = endpointFor(endpoints.origin, endpoints.originPlace, location);
@@ -367,6 +382,7 @@ export function createResumePlanRequest(
       : { mode: time.mode, at: tripTimeAt(time, now).at },
     preference: preference === 'transfers' ? 'transfers' : 'fastest',
     modes: [...modes],
+    ...(ferry ? {} : { ferry: false as const }),
     ...(asksLessWalking(preference, lessWalking) ? { lessWalking: true as const } : {}),
   };
 }
@@ -406,7 +422,7 @@ export async function planTrip({ endpoints, location, time, preference, modes, f
   };
   // Coordinate retention is based on when the device actually saved it, not the admin's mock
   // planning clock (which can deliberately be months in the past or future).
-  const resumeRequest = createResumePlanRequest({ endpoints, location, time, preference, modes, lessWalking, now }, Date.now());
+  const resumeRequest = createResumePlanRequest({ endpoints, location, time, preference, modes, ferry, lessWalking, now }, Date.now());
   if (!resumeRequest) return { ok: false, problem: 'needs-place' };
   const key = JSON.stringify({ ...request, minute: time.mode === 'now' ? Math.floor(now.getTime() / ONE_MINUTE_MS) : undefined });
   const cached = cache.get(key);
@@ -455,7 +471,16 @@ function exactResumeCandidate(itineraries: readonly Itinerary[], selection: Trip
   for (const itinerary of itineraries) {
     // Retiming never changes an itinerary id. Searching an unrelated route's departure product
     // cannot match, and used to exhaust the shared budget before reaching the selected route.
-    if (itinerary.id !== selection.itineraryId) continue;
+    if (itinerary.id !== selection.itineraryId && !selection.native) continue;
+    if (selection.native) {
+      const refs = itinerary.steps.filter((step): step is TransitStep => step.kind === 'transit').map((step) => parseTripRunRef(step.runRef));
+      if (refs.length !== selection.native.runRefs.length || refs.some((ref, index) => {
+        const selected = selection.native!.runRefs[index]!;
+        return !ref || ref.agencyId !== selected.agencyId || ref.routeId !== selected.routeId
+          || ref.boardStopId !== selected.boardStopId || ref.alightStopId !== selected.alightStopId
+          || ref.boardOccurrence !== selected.boardOccurrence || ref.alightOccurrence !== selected.alightOccurrence;
+      })) continue;
+    }
     matchingIds += 1;
     if (sameTripSelection(createTripSelectionIdentity(itinerary), selection)) return answer(itinerary);
 
@@ -470,7 +495,8 @@ function exactResumeCandidate(itineraries: readonly Itinerary[], selection: Trip
         return sameTripSelection(createTripSelectionIdentity(variant), selection) ? variant : null;
       }
       const leg = legs[legIndex]!;
-      const departures = [...new Set([leg.from.time, ...(leg.departures ?? []).map((departure) => departure.departs)])];
+      const departures = [...new Set([leg.runRef ? departureChoiceKey({ departs: leg.from.time, arrives: leg.to.time, runRef: leg.runRef }) : leg.from.time,
+        ...(leg.departures ?? []).map(departureChoiceKey)])];
       for (const departs of departures) {
         const found = visit(legIndex + 1, new Map(choices).set(legIndex, departs));
         if (found) return found;
@@ -499,6 +525,7 @@ export async function planTripForResume(request: ResumePlanRequest, selection: T
       destination: requestEndpoint(request.destination),
       preference: request.preference,
       modes: [...request.modes],
+      ...(request.ferry === false ? { ferry: false as const } : {}),
       ...(request.lessWalking ? { lessWalking: true } : {}),
       // A walk-only trip resumes too: it's planned again only to be matched exactly.
       ...(request.lessWalking ? {} : { walkOnlyMaxMinutes: MAX_WALK_ONLY_MINUTES }),
@@ -535,6 +562,22 @@ export async function planTripForResume(request: ResumePlanRequest, selection: T
     if (current()) recordTripRestoreDiagnostic({ category: 'provider-unavailable', attempts, ...(typeof code === 'string' && /^[a-z/-]{1,64}$/.test(code) ? { code } : {}) }, startedAt);
     return { ok: false, problem: 'unavailable' };
   }
+}
+
+/** Fresh onward planning at an explicit instant; never substitutes a route during exact resume. */
+export async function planTripAlternativesForRecovery(request: ResumePlanRequest, origin: TripEndpointReference, notBefore: string,
+  recovery?: TripRecoveryRequest): Promise<{
+  itineraries: Itinerary[]; fetchedAt: number; resumeRequest: ResumePlanRequest; recoveryCoverage?: TripRecoveryCoverage;
+}> {
+  if (!Number.isFinite(Date.parse(notBefore))) throw new Error('Invalid recovery departure');
+  const resumeRequest: ResumePlanRequest = { ...request, origin, time: { mode: 'depart', at: notBefore } };
+  const { data } = await planTripCallable({
+    origin: requestEndpoint(origin), destination: requestEndpoint(request.destination), time: resumeRequest.time,
+    preference: request.preference, modes: [...request.modes], ...(request.ferry === false ? { ferry: false as const } : {}),
+    ...(request.lessWalking ? { lessWalking: true } : { walkOnlyMaxMinutes: MAX_WALK_ONLY_MINUTES }),
+    ...(recovery ? { recovery } : {}),
+  });
+  return { itineraries: data.itineraries, fetchedAt: Date.now(), resumeRequest, ...(data.recoveryCoverage ? { recoveryCoverage: data.recoveryCoverage } : {}) };
 }
 
 /** Test isolation only. */

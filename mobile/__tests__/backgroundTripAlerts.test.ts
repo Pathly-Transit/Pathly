@@ -1,6 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { advanceTripAlerts, BACKGROUND_TRIP_MAX_AGE_MS, parseTripAlertState, tripAlertState, type TripAlertState } from '../src/background/tripAlertState';
+import { advanceTripAlerts, BACKGROUND_TRIP_MAX_AGE_MS, parseBackgroundLiveStatus, parseTripAlertState, tripAlertState, type TripAlertState } from '../src/background/tripAlertState';
+import type { TripLiveResponse, TripRunRef } from '../src/data/tripLiveTypes';
+import { tripRunRefKey } from '../src/data/tripRunRef';
 import { claimTripApproach, deliverTripApproach, queueTripAlertWork, readTripAlertState, TRIP_ALERT_STATE_KEY, writeTripAlertState } from '../src/background/tripAlertStorage';
 import { initialNavigationCursor, normalizeItinerary, type ActiveTripRuntime, type NavigationFix } from '../src/data/enrouteNavigation';
 import type { Itinerary, LatLng, TransitStep } from '../src/data/tripPlanning';
@@ -45,6 +47,10 @@ const pair = (point: LatLng, timestamp: number) => [fix(point, timestamp), fix(p
 const initial = (itinerary = multi) => tripAlertState(runtime(itinerary), null, NOW);
 const move = (state: TripAlertState, point: LatLng, timestamp: number) => advanceTripAlerts(state, pair(point, timestamp), timestamp + 1);
 const serialize = (state: TripAlertState) => JSON.stringify(state);
+const RUN_REF: TripRunRef = { version: 1, agencyId: 'lirr', routeId: '1', tripId: 'selected', serviceDate: '20261121', scheduleVersion: 'test',
+  startTime: '10:00:00', boardStopId: 'a', alightStopId: 'b', boardOccurrence: 0, alightOccurrence: 0, boardStopSequence: 1, alightStopSequence: 2 };
+const liveStatus = (): TripLiveResponse => ({ version: 1, fetchedAt: NOW, legs: [{ legKey: '1', runRef: RUN_REF, state: 'fresh', status: 'predicted',
+  observedAt: NOW, expiresAt: NOW + 90_000, departs: at(5), arrives: at(25) }] });
 
 beforeEach(async () => {
   jest.spyOn(Date, 'now').mockReturnValue(NOW);
@@ -63,6 +69,37 @@ it('persists only operational anchors and whitelisted metadata, never provider p
   expect(serialize(state)).not.toContain('providerResponse');
   expect(state).not.toHaveProperty('itinerary');
   expect(parseTripAlertState(serialize(state), NOW)).not.toBeNull();
+});
+
+it('retains only bounded live fields and ages cached observations without renewing source expiry', () => {
+  const response = liveStatus();
+  response.legs[0]!.arrivalInferred = true;
+  (response as unknown as { routeGeometry: string }).routeGeometry = 'discard-me';
+  (response.legs[0] as unknown as { providerResponse: string }).providerResponse = 'discard-me';
+  const parsed = parseBackgroundLiveStatus(response, NOW + 91_000)!;
+  expect(parsed.legs[0]).toMatchObject({ state: 'stale', observedAt: NOW, expiresAt: NOW + 90_000 });
+  expect(parsed.legs[0]?.arrivalInferred).toBe(true);
+  expect(JSON.stringify(parsed)).not.toContain('discard-me');
+  expect(parseBackgroundLiveStatus({ ...response, fetchedAt: NOW + 30_001 }, NOW)).toBeNull();
+  const forged = liveStatus();
+  forged.legs[0]!.expiresAt = NOW + 90_001;
+  expect(parseBackgroundLiveStatus(forged, NOW)?.legs).toEqual([]);
+  const duplicated = liveStatus();
+  duplicated.legs.push({ ...duplicated.legs[0]! });
+  expect(parseBackgroundLiveStatus(duplicated, NOW)?.legs).toEqual([]);
+});
+
+it('preserves the same-session poll throttle on resync and clears it with a replacement owner', () => {
+  const live = runtime(single);
+  const previous = parseTripAlertState(serialize({ ...tripAlertState(live, null, NOW), liveStatus: liveStatus(), lastStatusAttemptAt: NOW, lastProgressContent: 'accepted' }), NOW)!;
+  const synced = tripAlertState(live, previous, NOW + 1000);
+  expect(synced.lastStatusAttemptAt).toBe(NOW);
+  expect(synced.liveStatus?.legs[0]?.expiresAt).toBe(NOW + 90_000);
+  expect(synced.lastProgressContent).toBe('accepted');
+  const replaced = tripAlertState({ ...live, sessionId: 'replacement' }, previous, NOW + 1000);
+  expect(replaced.lastStatusAttemptAt).toBeUndefined();
+  expect(replaced.liveStatus).toBeUndefined();
+  expect(replaced.lastProgressContent).toBeUndefined();
 });
 
 it('needs two fresh real fixes and retains the first confirmation across same-owner sync', () => {
@@ -103,6 +140,51 @@ it('clears the old ledger/evidence on account, session, or selected departure re
     expect(state.latestFixes).toEqual([]);
     expect(state.evidence).toBeNull();
   }
+});
+
+function nativeMulti(): Itinerary {
+  return { ...multi, steps: multi.steps.map((step) => step.kind === 'transit'
+    ? { ...step, runRef: { ...RUN_REF, tripId: step.line.name, boardStopId: `${step.line.name}-board`, alightStopId: `${step.line.name}-alight` } } : step) };
+}
+
+it('keeps an already scheduled onboard approach warning when only the remaining native route changes', () => {
+  const selected = nativeMulti();
+  const live = runtime(selected);
+  const reached = live.plan.checkpoints.find((point) => point.stepIndex === 1 && point.kind === 'transit-stop')!;
+  live.cursor = { checkpointOrdinal: reached.ordinal, stepIndex: 1, phase: 'riding', lastAdvancedAt: NOW, nextStopIndex: 1 };
+  const previous = parseTripAlertState(serialize({ ...tripAlertState(live, null, NOW), alertedSteps: [1, 3] }), NOW)!;
+  const rerouted = runtime({ ...selected, id: 'new-onward-route', steps: selected.steps.map((step, index) => index === 3 && step.kind === 'transit'
+    ? { ...step, runRef: { ...step.runRef!, tripId: 'new-onward-service' } } : step) });
+  rerouted.cursor = { ...live.cursor };
+  const state = tripAlertState(rerouted, previous, NOW + 1000);
+  expect(state.plan.selection.fingerprint).not.toBe(previous.plan.selection.fingerprint);
+  expect(state.alertedSteps).toEqual([1]);
+  expect(state.plan.segments.find((segment) => segment.stepIndex === 1)?.runKey).toBe(tripRunRefKey((selected.steps[1] as TransitStep).runRef!));
+  expect(parseTripAlertState(serialize(state), NOW + 1000)?.alertedSteps).toEqual([1]);
+  expect(move(state, p(0.01), NOW + 2000).approachStep).toBeNull();
+});
+
+it.each([
+  ['service', { tripId: 'another-service' }], ['service date', { serviceDate: '20261122' }],
+  ['stop sequence', { alightStopSequence: 3 }], ['stop visit', { alightOccurrence: 1 }],
+] as const)('does not carry an old approach claim into a different current %s', (_name, changed) => {
+  const selected = nativeMulti();
+  const previous = { ...tripAlertState(runtime(selected), null, NOW), alertedSteps: [1] };
+  const changedRun = runtime({ ...selected, id: 'changed-current-run', steps: selected.steps.map((step, index) => index === 1 && step.kind === 'transit'
+    ? { ...step, runRef: { ...step.runRef!, ...changed } } : step) });
+  expect(tripAlertState(changedRun, previous, NOW + 1000).alertedSteps).toEqual([]);
+});
+
+it('never remaps a native claim across owners or from a legacy plan without an exact run key', () => {
+  const selected = nativeMulti();
+  const live = runtime(selected);
+  const previous = { ...tripAlertState(live, null, NOW), alertedSteps: [1] };
+  const rerouted = runtime({ ...selected, id: 'new-tail' });
+  expect(tripAlertState({ ...rerouted, uid: 'other-account' }, previous, NOW + 1000).alertedSteps).toEqual([]);
+  expect(tripAlertState({ ...rerouted, sessionId: 'other-session' }, previous, NOW + 1000).alertedSteps).toEqual([]);
+  const legacy = { ...previous, plan: { ...previous.plan, segments: previous.plan.segments.map(({ runKey: _key, ...segment }) => segment) } };
+  expect(tripAlertState(live, legacy, NOW + 1000).alertedSteps).toEqual([1]);
+  expect(tripAlertState(rerouted, legacy, NOW + 1000).alertedSteps).toEqual([]);
 });
 
 it.each([
@@ -198,6 +280,8 @@ it('rejects corrupt or oversized state rather than trusting fields used by navig
     (s) => { s.plan.checkpoints[0].kind = 'walk'; }, (s) => { s.plan.checkpoints[0].pathIndex = 999; },
     (s) => { s.plan.segments[0].path = []; }, (s) => { s.plan.segments[0].endCheckpointOrdinal = 999; },
     (s) => { s.plan.segments[0].path.push(p(0.003, 0.002)); }, (s) => { s.plan.segments[0].knownStopCount = 50; },
+    (s) => { s.plan.segments[0].runKey = 'not-an-exact-run-key'; },
+    (s) => { s.plan.segments[0].runKey = 'x'.repeat(8193); },
     (s) => { s.latestFixes = [fix(p(0.01), NOW + 60_000)]; },
     (s) => { s.alertedSteps = [0, 0]; }, (s) => { s.alertedSteps = [99]; },
     (s) => { s.expiresAt = NOW + BACKGROUND_TRIP_MAX_AGE_MS + 1; },

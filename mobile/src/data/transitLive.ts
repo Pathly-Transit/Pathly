@@ -36,6 +36,8 @@ export type DirectionPrediction = {
   delayMinutes?: number | null;
   /** Where this trip ends (its headsign or last stop); absent from functions deployed before it was added. */
   headsign?: string | null;
+  tripId?: string; serviceDate?: string; startTime?: string; stopId?: string; stopSequence?: number; directionId?: number;
+  departureTime?: string;
 };
 
 type StopPredictions = {
