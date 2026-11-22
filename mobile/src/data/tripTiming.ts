@@ -91,9 +91,10 @@ function shiftStep(step: TransitStep, timing: TripLegTiming): TransitStep {
   const status = boardOnlySkip ? undefined : timing.status;
   const departureDelaySeconds = Math.round((start - from) / 1000);
   const arrivalDelaySeconds = Math.round((end - to) / 1000);
-  const delayAt = timing.boarded || (Math.abs(departureDelaySeconds) < 60 && Math.abs(arrivalDelaySeconds) >= 60) ? 'arrival' : 'departure';
+  const delayAt: 'arrival' | 'departure' = timing.boarded || (Math.abs(departureDelaySeconds) < 60 && Math.abs(arrivalDelaySeconds) >= 60) ? 'arrival' : 'departure';
   const live = fresh && status === 'predicted' && timing.observation?.departs && timing.observation.arrives
     && !timing.observation.departureNoData && !timing.observation.arrivalNoData
+    && !timing.observation.departureInferred && !timing.observation.arrivalInferred
     ? { status: 'tracked' as const, departs: timing.departs, arrives: timing.arrives, departureDelaySeconds, arrivalDelaySeconds, delayAt,
       delaySeconds: delayAt === 'arrival' ? arrivalDelaySeconds : departureDelaySeconds }
     : fresh && (status === 'cancelled' || status === 'skips-stop') ? { status } : undefined;
@@ -115,7 +116,8 @@ export function projectTripTiming(itinerary: Itinerary, response: TripLiveRespon
   let blocked = false;
   for (const [stepIndex, step] of itinerary.steps.entries()) {
     if (step.kind !== 'transit') continue;
-    const completed = Boolean(cursor && (stepIndex < cursor.stepIndex || cursor.phase === 'arrived'));
+    const completed = Boolean(cursor && (stepIndex < cursor.stepIndex || cursor.phase === 'arrived'
+      || (stepIndex === cursor.stepIndex && (cursor.phase === 'walking' || cursor.phase === 'transferring'))));
     const boarded = Boolean(cursor && stepIndex === cursor.stepIndex && cursor.phase === 'riding');
     const observation = completed ? null : observationFor(step, stepIndex, response, now);
     const fresh = observation?.state === 'fresh';
@@ -127,7 +129,7 @@ export function projectTripTiming(itinerary: Itinerary, response: TripLiveRespon
       if (observation.arrives && !observation.arrivalNoData) arrives = observation.arrives;
       else if (observation.departs && !observation.arrivalNoData) arrives = new Date(at(departs) + step.durationSeconds * 1000).toISOString();
       confidence = observation.arrives && !observation.arrivalNoData
-        ? observation.departs && !observation.departureNoData ? 'live' : 'estimated' : 'estimated';
+        ? observation.departs && !observation.departureNoData && !observation.departureInferred && !observation.arrivalInferred ? 'live' : 'estimated' : 'estimated';
       if (observation.arrivalNoData) confidence = 'unavailable';
       if (at(arrives) < at(departs)) { departs = step.from.time; arrives = step.to.time; confidence = 'unavailable'; }
     }
@@ -150,7 +152,8 @@ export function projectTripTiming(itinerary: Itinerary, response: TripLiveRespon
     const nextStep = itinerary.steps[after.stepIndex] as TransitStep;
     const buffer = finite(options.transferBufferSeconds) && options.transferBufferSeconds >= 0 ? options.transferBufferSeconds
       : finite(nextStep.minimumTransferSeconds) && nextStep.minimumTransferSeconds >= 0 ? nextStep.minimumTransferSeconds : 0;
-    const onCurrentWalk = cursor && cursor.stepIndex > before.stepIndex && cursor.stepIndex < after.stepIndex;
+    const onCurrentWalk = cursor && (cursor.phase === 'walking' || cursor.phase === 'transferring')
+      && cursor.stepIndex >= before.stepIndex && cursor.stepIndex < after.stepIndex;
     const remaining = finite(options.remainingWalkSeconds) && options.remainingWalkSeconds >= 0 ? options.remainingWalkSeconds : walkSeconds;
     const readyAt = onCurrentWalk ? now + remaining * 1000 : before.completed && cursor?.stepIndex === after.stepIndex ? now : at(before.arrives) + walkSeconds * 1000;
     const unknown = before.confidence === 'unavailable' || before.confidence === 'stale' || after.confidence === 'unavailable'
@@ -158,7 +161,8 @@ export function projectTripTiming(itinerary: Itinerary, response: TripLiveRespon
     const rawSpare = Math.round((at(after.departs) - readyAt) / 1000);
     const spare = rawSpare - buffer;
     const confidence: TripTimingConfidence = unknown ? 'unavailable'
-      : before.state === 'fresh' && after.state === 'fresh' && before.observation?.arrives && after.observation?.departs && !onCurrentWalk ? 'live'
+      : before.state === 'fresh' && after.state === 'fresh' && before.observation?.arrives && after.observation?.departs
+        && !before.observation.arrivalInferred && !after.observation.departureInferred && !onCurrentWalk ? 'live'
         : before.confidence === 'scheduled' && after.confidence === 'scheduled' ? 'scheduled' : 'estimated';
     const status = unknown ? 'unknown' : spare < 0 ? 'missed' : spare < 120 ? 'tight' : 'feasible';
     connections.push({ fromStepIndex: before.stepIndex, toStepIndex: after.stepIndex, status, spareSeconds: unknown ? null : spare, confidence });
@@ -193,7 +197,7 @@ export function projectTripTiming(itinerary: Itinerary, response: TripLiveRespon
       : pending.length > 0 && pending.every((leg) => leg.confidence === 'live') ? 'live'
       : hasLive || pending.some((leg) => leg.confidence === 'estimated') ? 'estimated' : 'scheduled';
   // Passing a planned arrival is not evidence of arrival or a missed vehicle. Stop presenting it as a current ETA.
-  const arrivalTime = blocked || brokenConnection || unavailable || stale || (at(projectedArrival) < now && cursor?.phase !== 'arrived') ? null : projectedArrival;
+  const arrivalTime = blocked || brokenConnection || unavailable || stale || (cursor && at(projectedArrival) < now && cursor.phase !== 'arrived') ? null : projectedArrival;
   const observations = pending.filter((leg) => leg.observedAt !== null);
   const observedAt = observations.length ? Math.min(...observations.map((leg) => leg.observedAt!)) : null;
   const expiries = pending.filter((leg) => leg.expiresAt !== null);

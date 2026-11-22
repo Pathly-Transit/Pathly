@@ -7,7 +7,9 @@ import { completeNavigationSession, readNavigationDocument, resetNavigationStora
 import { departureChoiceKey, legDepartureOptions, retimeItinerary } from '../src/data/tripDepartures';
 import { planTripForResume, type Itinerary, type ResumePlanRequest, type TransitStep } from '../src/data/tripPlanning';
 import { parseTripRunRef } from '../src/data/tripRunRef';
-import { ETA_NOW, etaAt, nativeJourney, nativeRun } from './fixtures/nativeJourney';
+import { ETA_NOW, etaAt, nativeJourney, nativeRun, nativeObservation, nativeResponse } from './fixtures/nativeJourney';
+import { createActiveTripRuntime } from '../src/hooks/useActiveTrip';
+import { projectTripTiming } from '../src/data/tripTiming';
 
 const requestFor = (trip: Itinerary): ResumePlanRequest => ({
   origin: { kind: 'coordinate', label: 'Start', point: { lat: 40.799, lng: -73.1 }, savedAt: ETA_NOW },
@@ -95,6 +97,24 @@ it('persists only the selected native baseline and strips mutable live/departure
   expect(sameTripSelection(contextFor(trip).selection, createTripSelectionIdentity(parsed!.itinerary))).toBe(true);
 });
 
+it('roundtrips an independently identified later native journey and its bounded published fare', () => {
+  const trip = nativeJourney();
+  const shift = (time: string) => new Date(Date.parse(time) + 15 * 60_000).toISOString();
+  trip.id = 'next-reachable-bus';
+  trip.departureTime = shift(trip.departureTime);
+  trip.arrivalTime = shift(trip.arrivalTime);
+  trip.steps = trip.steps.map((step) => step.kind === 'walk' ? step : { ...step, tripId: `${step.tripId}-next`, runRef: { ...step.runRef!, tripId: `${step.tripId}-next` },
+    from: { ...step.from, time: shift(step.from.time) }, to: { ...step.to, time: shift(step.to.time) } });
+  trip.fare = { text: '$3.00', cents: 300, currency: 'USD', estimated: false, lines: [{ label: 'Bus', text: '$3.00' }], reduced: { text: '$1.50', cents: 150 } };
+  const context = contextFor(trip);
+  const runtime = createActiveTripRuntime({ itinerary: trip, origin: context.origin, destination: context.destination }, 'alice', ETA_NOW);
+  const snapshot = parseNativeSnapshot({ version: 1, kind: 'native', itinerary: runtime.itinerary }, { ...context, selection: runtime.selection });
+  expect(runtime.selection.native).toBeDefined();
+  expect(snapshot?.itinerary.fare).toEqual(trip.fare);
+  expect(snapshot?.itinerary.id).toBe(trip.id);
+});
+
+
 it('rejects legacy conversion, corrupt run proof, and a snapshot for different endpoint coordinates', () => {
   const trip = nativeJourney();
   const value = { version: 1, kind: 'native', itinerary: trip };
@@ -107,6 +127,42 @@ it('rejects legacy conversion, corrupt run proof, and a snapshot for different e
   const wrongEndpoint = contextFor(trip);
   wrongEndpoint.destination = { kind: 'coordinate', label: 'Other', point: { lat: 41, lng: -73 }, savedAt: ETA_NOW };
   expect(parseNativeSnapshot(value, wrongEndpoint)).toBeNull();
+});
+
+it('roundtrips strict native live-recovery schedules with an overlapping but live-rescued transfer', () => {
+  const trip = nativeJourney();
+  trip.id = 'recovery:session:live-rescued';
+  const second = trip.steps[3] as TransitStep;
+  second.from.time = etaAt(15);
+  second.to.time = etaAt(30);
+  second.runRef = { ...second.runRef!, tripId: 'delayed-earlier-run' };
+  second.tripId = second.runRef.tripId;
+  trip.arrivalTime = etaAt(33);
+  trip.durationSeconds = 25 * 60;
+  const parsed = parseNativeSnapshot({ version: 1, kind: 'native', itinerary: trip }, contextFor(trip));
+  expect(parsed).not.toBeNull();
+  expect((parsed!.itinerary.steps[3] as TransitStep).from.time).toBe(etaAt(15));
+  const live = nativeResponse([nativeObservation(1, {}, trip), nativeObservation(3, { departs: etaAt(30), arrives: etaAt(45) }, trip)]);
+  expect(projectTripTiming(parsed!.itinerary, live, ETA_NOW)).toMatchObject({ arrivalTime: etaAt(48), confidence: 'live', infeasible: false });
+  // The overlap relaxation cannot be used for arbitrary normal/legacy snapshots.
+  const normal = { ...trip, id: 'normal-static-plan' };
+  expect(parseNativeSnapshot({ version: 1, kind: 'native', itinerary: normal }, contextFor(normal))).toBeNull();
+});
+
+it('keeps a past-scheduled delayed run with a future live departure without double-counting the delay', () => {
+  const trip = nativeJourney();
+  trip.id = 'recovery:session:delayed-original';
+  const snapshot = parseNativeSnapshot({ version: 1, kind: 'native', itinerary: trip }, contextFor(trip))!;
+  const now = ETA_NOW + 12 * 60_000;
+  const response = { version: 1 as const, fetchedAt: now, legs: [
+    nativeObservation(1, { departs: etaAt(15), arrives: etaAt(25), observedAt: now, expiresAt: now + 90_000 }, trip),
+    nativeObservation(3, { departs: etaAt(35), arrives: etaAt(50), observedAt: now, expiresAt: now + 90_000 }, trip),
+  ] };
+  const projected = projectTripTiming(snapshot.itinerary, response, now);
+  expect(projected.arrivalTime).toBe(etaAt(53));
+  expect(projected.projectedItinerary.departureTime).toBe(etaAt(13));
+  expect(snapshot.itinerary.departureTime).toBe(etaAt(8));
+  expect((snapshot.itinerary.steps[1] as TransitStep).from.time).toBe(etaAt(10));
 });
 
 it('keeps active native snapshots account-local and excludes their geometry from recent history', async () => {

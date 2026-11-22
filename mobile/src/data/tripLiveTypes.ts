@@ -51,8 +51,13 @@ export type TripLegObservation = {
   /** Explicit NO_DATA is retained even when the other endpoint has a usable prediction. */
   departureNoData?: boolean;
   arrivalNoData?: boolean;
+  departureInferred?: boolean;
+  arrivalInferred?: boolean;
   boardSkipped?: boolean;
   alightSkipped?: boolean;
+  /** Exact-run physical vehicle evidence; predicted event times alone never set this. */
+  boardPassed?: boolean;
+  vehicleLocation?: { lat: number; lng: number; capturedAt: number };
   reason?: TripLiveReason;
 };
 

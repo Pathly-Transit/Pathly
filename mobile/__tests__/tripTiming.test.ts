@@ -31,11 +31,12 @@ it('keeps a delayed original service catchable rather than rolling to another ru
 
 it('does not turn missing feeds or the passage of a timetable into a departed bus', () => {
   const trip = nativeJourney();
-  const projection = projectTripTiming(trip, null, ETA_NOW + 60 * 60_000);
+  const projection = projectTripTiming(trip, null, ETA_NOW + 60 * 60_000, { cursor: initialNavigationCursor(normalizeItinerary(trip), ETA_NOW) });
   expect(projection.arrivalTime).toBeNull();
   expect(projection.confidence).toBe('unavailable');
   expect(projection.infeasible).toBe(false);
   expect(projectTripTiming(trip, null, ETA_NOW).confidence).toBe('scheduled');
+  expect(projectTripTiming(trip, null, ETA_NOW + 60 * 60_000).arrivalTime).toBe(trip.arrivalTime);
 });
 
 it('expires source observations even if the network response was just fetched', () => {
@@ -60,6 +61,13 @@ it('does not promote an explicit arrival NO_DATA to a live destination ETA', () 
   const projection = projectTripTiming(nativeJourney(), nativeResponse([nativeObservation(3, { arrivalNoData: true })]), ETA_NOW);
   expect(projection.arrivalTime).toBeNull();
   expect(projection.confidence).toBe('unavailable');
+  expect((projection.projectedItinerary.steps[3] as TransitStep).live).toBeUndefined();
+});
+
+it('labels inferred endpoint predictions as estimated and never adds a green live signal', () => {
+  const trip = nativeJourney();
+  const projection = projectTripTiming(trip, nativeResponse([nativeObservation(1), nativeObservation(3, { arrivalInferred: true })]), ETA_NOW);
+  expect(projection.confidence).toBe('estimated');
   expect((projection.projectedItinerary.steps[3] as TransitStep).live).toBeUndefined();
 });
 

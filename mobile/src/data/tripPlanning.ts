@@ -101,7 +101,11 @@ type PlanTripRequest = {
   lessWalking?: boolean;
   /** Also plan walking the whole way, when it takes at most this many minutes. */
   walkOnlyMaxMinutes?: number;
+  recovery?: TripRecoveryRequest;
 };
+
+export type TripRecoveryRequest = { excludedRuns: TripRunRef[]; preferredRoute?: { agencyId: string; routeId: string } };
+export type TripRecoveryCoverage = { state: 'complete' | 'partial'; scope?: 'candidate-routes'; reasons: string[]; updatedRuns: number };
 
 export const CURRENT_LOCATION_LABEL = 'Current location';
 export const TRIP_TIME_ZONE = 'America/New_York';
@@ -109,7 +113,7 @@ export const TRIP_TIME_ZONE = 'America/New_York';
 /** Why there are no itineraries to show (besides loading). */
 export type TripPlanProblem = 'no-origin' | 'needs-place' | 'out-of-area' | 'unavailable';
 export type TripPlanResult =
-  | { ok: true; itineraries: Itinerary[]; fetchedAt: number; resumeRequest: ResumePlanRequest }
+  | { ok: true; itineraries: Itinerary[]; fetchedAt: number; resumeRequest: ResumePlanRequest; recoveryCoverage?: TripRecoveryCoverage }
   /** `field`: which endpoint needs choosing from search (for 'needs-place'). */
   | { ok: false; problem: TripPlanProblem; field?: 'origin' | 'destination' };
 
@@ -330,7 +334,7 @@ export function summarizeItineraries({ itineraries }: { itineraries: Itinerary[]
 
 /** As long as the function may run (index.ts): a server that has just started loads every timetable first. */
 const PLAN_TRIP_TIMEOUT_MS = 300_000;
-const planTripCallable = callable<PlanTripRequest, { itineraries: Itinerary[] }>('planTrip', summarizeItineraries, PLAN_TRIP_TIMEOUT_MS);
+const planTripCallable = callable<PlanTripRequest, { itineraries: Itinerary[]; recoveryCoverage?: TripRecoveryCoverage }>('planTrip', summarizeItineraries, PLAN_TRIP_TIMEOUT_MS);
 
 const CACHE_MS = 2 * ONE_MINUTE_MS;
 const cache = new Map<string, { result: TripPlanResult; at: number }>();
@@ -556,6 +560,22 @@ export async function planTripForResume(request: ResumePlanRequest, selection: T
     if (current()) recordTripRestoreDiagnostic({ category: 'provider-unavailable', attempts, ...(typeof code === 'string' && /^[a-z/-]{1,64}$/.test(code) ? { code } : {}) }, startedAt);
     return { ok: false, problem: 'unavailable' };
   }
+}
+
+/** Fresh onward planning at an explicit instant; never substitutes a route during exact resume. */
+export async function planTripAlternativesForRecovery(request: ResumePlanRequest, origin: TripEndpointReference, notBefore: string,
+  recovery?: TripRecoveryRequest): Promise<{
+  itineraries: Itinerary[]; fetchedAt: number; resumeRequest: ResumePlanRequest; recoveryCoverage?: TripRecoveryCoverage;
+}> {
+  if (!Number.isFinite(Date.parse(notBefore))) throw new Error('Invalid recovery departure');
+  const resumeRequest: ResumePlanRequest = { ...request, origin, time: { mode: 'depart', at: notBefore } };
+  const { data } = await planTripCallable({
+    origin: requestEndpoint(origin), destination: requestEndpoint(request.destination), time: resumeRequest.time,
+    preference: request.preference, modes: [...request.modes], ...(request.ferry === false ? { ferry: false as const } : {}),
+    ...(request.lessWalking ? { lessWalking: true } : { walkOnlyMaxMinutes: MAX_WALK_ONLY_MINUTES }),
+    ...(recovery ? { recovery } : {}),
+  });
+  return { itineraries: data.itineraries, fetchedAt: Date.now(), resumeRequest, ...(data.recoveryCoverage ? { recoveryCoverage: data.recoveryCoverage } : {}) };
 }
 
 /** Test isolation only. */
