@@ -100,6 +100,23 @@ function prediction(event: transit_realtime.StopTimeEvent | null | undefined, sc
   return Number.isFinite(at) ? new Date(at).toISOString() : undefined;
 }
 
+function endpointPrediction(run: ResolvedTripRun, stop: StopUpdate | undefined, use: 'board' | 'alight'): { time?: string; inferred?: boolean } {
+  if (!stop || stop.scheduleRelationship === 2) return {};
+  const ref = run.runRef;
+  const target = run.stops.find((item) => item.stopId === (use === 'board' ? ref.boardStopId : ref.alightStopId)
+    && item.occurrence === (use === 'board' ? ref.boardOccurrence : ref.alightOccurrence));
+  if (!target) return {};
+  const desiredSchedule = use === 'board' ? run.departs : run.arrives;
+  const direct = prediction(use === 'board' ? stop.departure : stop.arrival, desiredSchedule);
+  if (direct) return { time: direct };
+  const oppositeSchedule = use === 'board' ? target.arrives : target.departs;
+  const opposite = prediction(use === 'board' ? stop.arrival : stop.departure, oppositeSchedule);
+  if (!opposite) return {};
+  // Apply the other event's deviation to this event's own schedule, preserving station dwell.
+  const inferred = Date.parse(desiredSchedule) + Date.parse(opposite) - Date.parse(oppositeSchedule);
+  return Number.isFinite(inferred) && Number.isFinite(new Date(inferred).getTime()) ? { time: new Date(inferred).toISOString(), inferred: true } : {};
+}
+
 /** Pure exact-run matcher, independently testable without static data, network or Firebase. */
 export function observeSelectedRun(feeds: readonly RealtimeFeed[], run: ResolvedTripRun, legKey: string, nowMs = Date.now()): TripLegObservation {
   const ref = run.runRef;
@@ -143,8 +160,10 @@ export function observeSelectedRun(feeds: readonly RealtimeFeed[], run: Resolved
   if (boardSkipped || alightSkipped) return { ...base, status: 'skips-stop', ...(boardSkipped ? { boardSkipped: true } : {}), ...(alightSkipped ? { alightSkipped: true } : {}) };
   const departureNoData = board.stop?.scheduleRelationship === 2;
   const arrivalNoData = alight.stop?.scheduleRelationship === 2;
-  const departs = departureNoData ? undefined : prediction(board.stop?.departure ?? board.stop?.arrival, run.departs);
-  const arrives = arrivalNoData ? undefined : prediction(alight.stop?.arrival ?? alight.stop?.departure, run.arrives);
+  const departure = endpointPrediction(run, board.stop, 'board');
+  const arrival = endpointPrediction(run, alight.stop, 'alight');
+  const departs = departure.time;
+  const arrives = arrival.time;
   if (!departs && !arrives && !departureNoData && !arrivalNoData) return { ...base, status: 'unavailable', reason: freshness.state === 'stale' ? 'stale' : 'no-prediction' };
   return {
     ...base,
@@ -153,5 +172,7 @@ export function observeSelectedRun(feeds: readonly RealtimeFeed[], run: Resolved
     ...(arrives ? { arrives, arrivalDelaySeconds: Math.round((Date.parse(arrives) - Date.parse(run.arrives)) / 1000) } : {}),
     ...(departureNoData ? { departureNoData: true } : {}),
     ...(arrivalNoData ? { arrivalNoData: true } : {}),
+    ...(departure.inferred ? { departureInferred: true } : {}),
+    ...(arrival.inferred ? { arrivalInferred: true } : {}),
   };
 }

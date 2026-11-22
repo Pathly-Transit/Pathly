@@ -83,8 +83,8 @@ function appendRuns(table: RoutingTimetable, runs: readonly LiveRun[], baseTripO
       // Unknown/skipped/NO_DATA visits cannot be used as boarding or alighting evidence. Filler
       // times only keep internal arrays causal; they are never exposed as live predictions.
       out.patternFlags.push(table.patternFlags[stopBase + position]!
-        | (arr === undefined || observation.status !== 'predicted' ? NO_DROP_OFF : 0)
-        | (dep === undefined || observation.status !== 'predicted' ? NO_PICKUP : 0));
+        | (arr === undefined || observation.status !== 'predicted' || observation.arrivalInferred ? NO_DROP_OFF : 0)
+        | (dep === undefined || observation.status !== 'predicted' || observation.departureInferred ? NO_PICKUP : 0));
       const arrival = arr ?? previous;
       const departure = dep ?? arrival;
       out.profileArr.push(arrival); out.profileDep.push(departure); previous = departure;
@@ -173,7 +173,7 @@ export async function recoveryNetwork(base: TransitNetwork, days: readonly Servi
       if (summary.status === 'cancelled') { bans.add(`${trip}@${date}`); continue; }
       if (changed.length >= MAX_RUNS) { reasons.add('run-limit'); break; }
       const stops = run.stops.map((stop, position) => observeSelectedRun(oneFeed, { ...run, runRef: { ...ref, boardStopId: stop.stopId, alightStopId: stop.stopId, boardOccurrence: stop.occurrence, alightOccurrence: stop.occurrence }, departs: stop.departs, arrives: stop.arrives }, `${key}:${position}`, nowMs));
-      const usable = stops.filter((stop) => stop.status === 'predicted' && stop.departs && stop.arrives);
+      const usable = stops.filter((stop) => stop.status === 'predicted' && stop.departs && stop.arrives && !stop.departureInferred && !stop.arrivalInferred);
       if (usable.length < 2) { reasons.add('sparse-prediction'); continue; }
       if (usable.length !== stops.length) reasons.add('partial-stop-prediction');
       let previous = -Infinity;

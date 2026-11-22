@@ -72,10 +72,12 @@ it('persists only operational anchors and whitelisted metadata, never provider p
 
 it('retains only bounded live fields and ages cached observations without renewing source expiry', () => {
   const response = liveStatus();
+  response.legs[0]!.arrivalInferred = true;
   (response as unknown as { routeGeometry: string }).routeGeometry = 'discard-me';
   (response.legs[0] as unknown as { providerResponse: string }).providerResponse = 'discard-me';
   const parsed = parseBackgroundLiveStatus(response, NOW + 91_000)!;
   expect(parsed.legs[0]).toMatchObject({ state: 'stale', observedAt: NOW, expiresAt: NOW + 90_000 });
+  expect(parsed.legs[0]?.arrivalInferred).toBe(true);
   expect(JSON.stringify(parsed)).not.toContain('discard-me');
   expect(parseBackgroundLiveStatus({ ...response, fetchedAt: NOW + 30_001 }, NOW)).toBeNull();
   const forged = liveStatus();

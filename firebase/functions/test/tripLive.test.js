@@ -20,6 +20,7 @@ test('legacy preview receives only fresh selected-run facts and legacy reference
   assert.deepEqual(plannedLegLive(observation), { status: 'tracked', departs: at(4), arrives: at(34), delaySeconds: 240 });
   assert.equal(plannedLegLive({ ...observation, state: 'stale' }), undefined);
   assert.equal(plannedLegLive({ ...observation, state: 'unknown' }), undefined);
+  assert.equal(plannedLegLive({ ...observation, arrivalInferred: true }), undefined);
   assert.equal(plannedLegLive({ state: 'fresh', status: 'no-data' }), undefined);
   assert.deepEqual(plannedLegLive({ state: 'fresh', status: 'cancelled' }), { status: 'cancelled' });
   assert.equal(await liveTripStatus(REF, transit(0, 30)), undefined);
@@ -113,6 +114,21 @@ test('connections are judged after the walk between legs, with live times where 
   const cancelled = [transit(0, 20), transit(20, 40, { live: { status: 'cancelled' } })];
   addConnections(cancelled);
   assert.equal(cancelled[1].connection, undefined);
+});
+
+test('rail/platform minimum transfer time is subtracted without charging visible walk slack twice', () => {
+  const rail = [transit(0, 20), transit(22, 40, { minimumTransferSeconds: 180 })];
+  addConnections(rail);
+  assert.deepEqual(rail[1].connection, { status: 'missed', spareSeconds: -60 });
+  const boundary = [transit(0, 20), transit(23, 40, { minimumTransferSeconds: 180 })];
+  addConnections(boundary);
+  assert.deepEqual(boundary[1].connection, { status: 'tight', spareSeconds: 0 });
+  const visibleWalk = [transit(0, 20), walk(4), transit(25, 40, { minimumTransferSeconds: 0 })];
+  addConnections(visibleWalk);
+  assert.deepEqual(visibleWalk[2].connection, { status: 'tight', spareSeconds: 60 });
+  const omittedWalk = [transit(0, 20), transit(25, 40, { minimumTransferSeconds: 240 })];
+  addConnections(omittedWalk);
+  assert.deepEqual(omittedWalk[1].connection, { status: 'tight', spareSeconds: 60 });
 });
 
 test('only legs leaving soon are looked up, and a slow feed doesn\'t hold up the trip', async () => {

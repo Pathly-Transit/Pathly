@@ -92,6 +92,27 @@ test('NO_DATA overrides malformed event times without inventing zero delay for t
   assert.equal(result.status, 'no-data');
   assert.equal(result.arrivalNoData, true);
   assert.equal(result.arrives, undefined);
+  assert.equal(result.arrivalInferred, undefined);
+  assert.equal(result.departureInferred, undefined);
+});
+
+test('one-sided predictions apply event delay against their own schedule and preserve a15-minute dwell', () => {
+  const run = { ...RUN, stops: [{ ...RUN.stops[0], arrives: at(-15) }, { ...RUN.stops[1], departs: at(45) }] };
+  const item = update({ stopTimeUpdate: [{ stopId: 'A', stopSequence: 10, arrival: event(-10) }, { stopId: 'B', stopSequence: 20, departure: event(45) }] });
+  const result = observe([item], run);
+  assert.equal(result.departs, at(5));
+  assert.equal(result.departureDelaySeconds, 300);
+  assert.equal(result.departureInferred, true);
+  assert.equal(result.arrives, at(30));
+  assert.equal(result.arrivalDelaySeconds, 0, 'scheduled terminal dwell is not a false15-minute arrival delay');
+  assert.equal(result.arrivalInferred, true);
+  item.stopTimeUpdate[0].departure = event(6);
+  item.stopTimeUpdate[1].arrival = event(32);
+  const direct = observe([item], run);
+  assert.equal(direct.departs, at(6));
+  assert.equal(direct.arrives, at(32));
+  assert.equal(direct.departureInferred, undefined);
+  assert.equal(direct.arrivalInferred, undefined);
 });
 
 test('cancellation and deletion need exact dated identity but no stop prediction', () => {

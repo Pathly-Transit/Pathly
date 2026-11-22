@@ -136,6 +136,7 @@ export function plannedLegLive(observation: TripLegObservation): LegLive | undef
   if (observation.state !== 'fresh') return undefined;
   if (observation.status === 'cancelled' || observation.status === 'skips-stop') return { status: observation.status };
   if (observation.status !== 'predicted' || (!observation.departs && !observation.arrives)) return undefined;
+  if (observation.departureInferred || observation.arrivalInferred) return undefined;
   const delaySeconds = observation.departureDelaySeconds ?? observation.arrivalDelaySeconds;
   return {
     status: 'tracked',
@@ -177,7 +178,9 @@ export function addConnections(steps: readonly { kind: string }[]): void {
     if (previous && judged) {
       const arrives = Date.parse(previous.live?.arrives ?? previous.to.time);
       const departs = Date.parse(next.live?.departs ?? next.from.time);
-      const spareSeconds = Math.round((departs - arrives) / 1000 - walkSeconds);
+      const buffer = typeof next.minimumTransferSeconds === 'number' && Number.isFinite(next.minimumTransferSeconds)
+        && next.minimumTransferSeconds > 0 ? next.minimumTransferSeconds : 0;
+      const spareSeconds = Math.round((departs - arrives) / 1000 - walkSeconds - buffer);
       const connection: LegConnection | undefined = spareSeconds < 0
         ? { status: 'missed', spareSeconds }
         : spareSeconds < TIGHT_CONNECTION_SECONDS ? { status: 'tight', spareSeconds } : undefined;

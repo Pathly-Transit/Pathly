@@ -14,6 +14,7 @@ beforeEach(async () => { await AsyncStorage.clear(); });
 
 it('keeps routine delays silent and identifies a significant delay without changing the selected run', () => {
   expect(tripDisruptionFor(trip, nativeResponse([nativeObservation(1, { arrives: etaAt(25) })]), riding, ETA_NOW)).toBeNull();
+  expect(tripDisruptionFor(trip, nativeResponse([nativeObservation(1, { arrives: etaAt(40), arrivalInferred: true })]), riding, ETA_NOW)).toBeNull();
   const notice = tripDisruptionFor(trip, nativeResponse([nativeObservation(1, { arrives: etaAt(40) })]), riding, ETA_NOW, etaAt(63));
   expect(notice).toMatchObject({ kind: 'major-delay', delaySeconds: 1200 });
   expect(trip.steps[1]).toMatchObject({ tripId: 'bus-a' });

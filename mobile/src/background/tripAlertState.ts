@@ -181,7 +181,7 @@ export function parseBackgroundLiveStatus(value: unknown, now = Date.now()): Tri
       || (leg.expiresAt !== null && (!Number.isFinite(leg.expiresAt) || leg.observedAt === null || leg.expiresAt < leg.observedAt || leg.expiresAt - leg.observedAt > 90_000))
       || (leg.departs !== undefined && !time(leg.departs)) || (leg.arrives !== undefined && !time(leg.arrives))
       || (leg.departs && leg.arrives && Date.parse(leg.arrives) < Date.parse(leg.departs))
-      || [leg.departureNoData, leg.arrivalNoData, leg.boardSkipped, leg.alightSkipped].some((flag) => flag !== undefined && typeof flag !== 'boolean')) continue;
+      || [leg.departureNoData, leg.arrivalNoData, leg.boardSkipped, leg.alightSkipped, leg.departureInferred, leg.arrivalInferred].some((flag) => flag !== undefined && typeof flag !== 'boolean')) continue;
     keys.add(leg.legKey);
     const state = leg.state === 'fresh' && leg.observedAt !== null && leg.expiresAt !== null && leg.expiresAt > now
       && now - leg.observedAt <= 90_000 ? 'fresh' : leg.observedAt !== null ? 'stale' : 'unknown';
@@ -193,6 +193,8 @@ export function parseBackgroundLiveStatus(value: unknown, now = Date.now()): Tri
       ...(leg.arrivalNoData !== undefined ? { arrivalNoData: leg.arrivalNoData } : {}),
       ...(leg.boardSkipped !== undefined ? { boardSkipped: leg.boardSkipped } : {}),
       ...(leg.alightSkipped !== undefined ? { alightSkipped: leg.alightSkipped } : {}),
+      ...(leg.departureInferred !== undefined ? { departureInferred: leg.departureInferred } : {}),
+      ...(leg.arrivalInferred !== undefined ? { arrivalInferred: leg.arrivalInferred } : {}),
     });
   }
   return { version: 1, fetchedAt: response.fetchedAt, legs };

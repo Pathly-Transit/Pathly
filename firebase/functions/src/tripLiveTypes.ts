@@ -52,6 +52,8 @@ export type TripLegObservation = {
   /** Explicit NO_DATA is retained even when the other endpoint has a usable prediction. */
   departureNoData?: boolean;
   arrivalNoData?: boolean;
+  departureInferred?: boolean;
+  arrivalInferred?: boolean;
   boardSkipped?: boolean;
   alightSkipped?: boolean;
   /** Exact fresh vehicle evidence only; the rider's own boarding status is still independent. */

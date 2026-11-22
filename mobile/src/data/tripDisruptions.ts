@@ -52,7 +52,7 @@ export function tripDisruptionFor(itinerary: Itinerary, response: TripLiveRespon
 }
 
 function arrivalDelay(step: TransitStep, observation: TripLegObservation, onBoard: boolean): number {
-  if (observation.arrives && !observation.arrivalNoData) return (Date.parse(observation.arrives) - Date.parse(step.to.time)) / 1000;
-  if (!onBoard && observation.departs && !observation.departureNoData) return (Date.parse(observation.departs) - Date.parse(step.from.time)) / 1000;
+  if (observation.arrives && !observation.arrivalNoData && !observation.arrivalInferred) return (Date.parse(observation.arrives) - Date.parse(step.to.time)) / 1000;
+  if (!onBoard && observation.departs && !observation.departureNoData && !observation.departureInferred) return (Date.parse(observation.departs) - Date.parse(step.from.time)) / 1000;
   return 0;
 }

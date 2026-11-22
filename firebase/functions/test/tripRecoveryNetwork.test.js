@@ -72,6 +72,15 @@ test('NO_DATA at boarding is not turned into a predicted departure', async () =>
   assert.equal(result.coverage.state, 'partial');
 });
 
+test('an arrival-only boarding observation is not used as an observed future departure', async () => {
+  const entity = update('08:00', [12, 17, 22]);
+  delete entity.tripUpdate.stopTimeUpdate[0].departure;
+  const result = await recoveryNetwork(base, days.days, days.baseStartMs, [route], { excludedRuns: [] }, now, async () => [feed([entity])]);
+  const ride = search(result)[0].legs.find((leg) => leg.kind === 'ride');
+  assert.equal(result.network.tripId(ride.trip), 'B-08:15:00');
+  assert.equal(result.coverage.state, 'partial');
+});
+
 test('stale or undated updates produce explicit partial coverage without live alternatives', async () => {
   const old = update('08:00', [12, 17, 22]); old.tripUpdate.timestamp = (now - 300_000) / 1000;
   const stale = await recoveryNetwork(base, days.days, days.baseStartMs, [route], { excludedRuns: [] }, now, async () => [feed([old], now - 300_000)]);
@@ -167,4 +176,15 @@ test('recovery rejects reversed global baseline clocks without changing immutabl
   assert.ok(plans.length > 0, 'valid other-line recovery remains available');
   assert.ok(plans.every((itinerary) => Date.parse(itinerary.arrivalTime) >= Date.parse(itinerary.departureTime)), 'a live rescue must not emit a negative-duration static snapshot');
   assert.ok(plans.every((itinerary) => itinerary.steps.find((step) => step.kind === 'transit').runRef.routeId === 'X'));
+});
+
+test('a recovery trip crossing midnight keeps its valid positive UTC baseline interval', async () => {
+  const { plan } = await recoveryFixture([['A', 'overnight', 'O', 'D', '24:10:00', '24:30:00']]);
+  const plans = await plan();
+  assert.ok(plans.length > 0);
+  const ride = plans[0].steps.find((step) => step.kind === 'transit');
+  assert.equal(ride.runRef.serviceDate, '20261118');
+  assert.equal(ride.from.time, new Date(wednesdayAt(24, 10)).toISOString());
+  assert.ok(Date.parse(plans[0].arrivalTime) > Date.parse(plans[0].departureTime));
+  assert.equal(plans[0].durationSeconds, 20 * 60);
 });
