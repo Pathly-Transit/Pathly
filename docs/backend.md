@@ -17,16 +17,18 @@ npm --prefix firebase/functions run build:gtfs
 
 ## Walking-graph tiles
 
-Nearby picks the stop that is closest on foot using a pedestrian street graph under `firebase/functions/static_data/walking/`. The graph is built from OpenStreetMap data and is gitignored, so a fresh checkout has none. Without it, Nearby falls back to straight-line distance. **Deploys fail until the tiles exist** (`build-walking-tiles.js --check` runs on predeploy).
+Nearby picks the stop that is closest on foot, and trips draw their walks, using a pedestrian street graph under `firebase/functions/static_data/walking/`. The graph is built from the base map's public sources: Census TIGER/Line streets and walkways, New York City's paths and step streets, and USGS trails. They're public domain, so the walks drawn on the map need no credit there. The graph is gitignored, so a fresh checkout has none. Without it, Nearby falls back to straight-line distance. **Deploys fail until the tiles exist** (`build-walking-tiles.js --check` runs on predeploy).
 
-1. Download `https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf` (~500 MB) to a folder outside the repo.
+1. From the repository root, fetch the map's sources into a folder outside the repo (README, Base map): `npm run map:download -- ../map-data`.
 2. Build the tiles. This needs about 6 GB of memory:
 
    ```sh
-   npm --prefix firebase/functions run build:walking -- <path-to>/new-york-latest.osm.pbf
+   npm --prefix firebase/functions run build:walking -- ../../map-data
    ```
 
-Streets change slowly, so rebuilding every month or two is enough.
+   The path is relative to `firebase/functions`, or give an absolute one.
+
+Streets change slowly, so rebuilding every few months, with the base map, is enough.
 
 ## Trip planning (Google Routes API)
 
