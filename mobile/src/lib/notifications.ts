@@ -5,6 +5,7 @@ export { registerForRouteAlerts } from './routeAlertRegistration';
 
 /** The one trip-progress notification, updated in place as the trip moves along. */
 export const TRIP_NOTIFICATION_ID = 'pathly-trip-progress';
+export const TRIP_DISRUPTION_ID_PREFIX = 'pathly-trip-change-';
 const TRIP_CHANNEL = 'trip-progress';
 const TRIP_ALERT_CHANNEL = 'trip-alerts';
 
@@ -14,7 +15,8 @@ if (Platform.OS !== 'web') {
   Notifications.setNotificationHandler({
     handleNotification: async (notification) => {
       const trip = notification.request.identifier === TRIP_NOTIFICATION_ID;
-      return { shouldPlaySound: !trip, shouldSetBadge: false, shouldShowBanner: !trip, shouldShowList: true };
+      const inAppChange = notification.request.identifier.startsWith(TRIP_DISRUPTION_ID_PREFIX) && AppState.currentState === 'active';
+      return { shouldPlaySound: !trip && !inAppChange, shouldSetBadge: false, shouldShowBanner: !trip && !inAppChange, shouldShowList: true };
     },
   });
 }
@@ -173,4 +175,33 @@ export async function notifyNow(title: string, body: string): Promise<void> {
   } catch {
     // A notification is a convenience; never let it break navigation.
   }
+}
+
+/** A major active-trip change uses ordinary notification settings, never critical overrides. */
+export async function notifyTripDisruptionAccepted(key: string, title: string, body: string,
+  isCurrent: () => boolean | Promise<boolean>): Promise<boolean> {
+  try {
+    if (!await isCurrent()) return false;
+    if (Platform.OS === 'android') await defaultChannel();
+    // A disruption must not interrupt the trip to ask for permission.
+    if (!await notificationsAllowed(false) || !await isCurrent()) return false;
+    let hash = 2166136261;
+    for (let index = 0; index < key.length; index += 1) hash = Math.imul(hash ^ key.charCodeAt(index), 16777619);
+    const identifier = `${TRIP_DISRUPTION_ID_PREFIX}${(hash >>> 0).toString(16)}`;
+    if (Platform.OS === 'web') {
+      if (!await isCurrent()) return false;
+      new Notification(title, { body, icon: '/favicon.png', tag: identifier });
+      return true;
+    }
+    let accepted = false;
+    await queueTripNotification(async () => {
+      if (!await isCurrent()) return;
+      await Notifications.scheduleNotificationAsync({ identifier,
+        content: { title, body, sound: 'default', interruptionLevel: 'active', data: { kind: 'active-trip-change' } },
+        trigger: Platform.OS === 'android' ? { channelId: 'default' } : null,
+      });
+      accepted = true;
+    });
+    return accepted;
+  } catch { return false; }
 }
