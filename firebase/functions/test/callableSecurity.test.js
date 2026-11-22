@@ -17,6 +17,7 @@ const {
   getRouteLiveStatus,
   getRoutesLiveStatus,
   getTripLiveStatus,
+  resolveRideGuideRun,
   getStopDepartures,
 } = require('../lib');
 
@@ -37,7 +38,7 @@ test('requires an authenticated Firebase user', async () => {
 });
 
 test('every callable rejects anonymous traffic before validation or provider work', async () => {
-  for (const callable of [findNearbyTransit, geocodeAddress, getNearestRouteStop, getRouteGeometry, getRouteLiveStatus, getRoutesLiveStatus, getTripLiveStatus, getStopDepartures, getWalkingPath]) {
+  for (const callable of [findNearbyTransit, geocodeAddress, getNearestRouteStop, getRouteGeometry, getRouteLiveStatus, getRoutesLiveStatus, getTripLiveStatus, resolveRideGuideRun, getStopDepartures, getWalkingPath]) {
     await assert.rejects(
       () => callable.run({ auth: null, data: {}, rawRequest: request(null).rawRequest }),
       (error) => error.code === 'unauthenticated',
@@ -49,6 +50,11 @@ test('selected-trip live status rejects oversized input before preparing a timet
   await assert.rejects(getTripLiveStatus.run({ auth: { uid: 'selected-user' }, data: { version: 1, legs: Array(13).fill({}) }, rawRequest: {} }), { code: 'invalid-argument' });
   assert.equal(getTripLiveStatus.__endpoint.concurrency, 1);
   assert.equal(getTripLiveStatus.__endpoint.maxInstances, 1);
+});
+
+test('Ride Guide resolver validates exact identity before any timetable preparation', async () => {
+  await assert.rejects(resolveRideGuideRun.run({ auth: { uid: 'ride-guide-user' }, data: { version: 1, agencyId: 'lirr', tripId: 'chosen' }, rawRequest: {} }), { code: 'invalid-argument' });
+  assert.equal(resolveRideGuideRun.__endpoint.concurrency, 1);
 });
 
 test('serializes transit requests so a response cannot mix two GTFS snapshots', () => {

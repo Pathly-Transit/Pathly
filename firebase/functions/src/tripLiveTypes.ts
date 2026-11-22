@@ -64,3 +64,14 @@ export type TripLegObservation = {
 
 export type TripLiveRequest = { version: 1; legs: { legKey: string; runRef: TripRunRef }[] };
 export type TripLiveResponse = { version: 1; fetchedAt: number; legs: TripLegObservation[] };
+
+/** Route View's chosen departure, before the server supplies its canonical timetable version. */
+export type ResolveRideGuideRunRequest = {
+  version: 1; agencyId: AgencyId; routeId: string; tripId: string; serviceDate: string; startTime?: string; directionId?: number;
+  boardStopId: string; alightStopId: string; boardOccurrence?: number; alightOccurrence?: number;
+  boardStopSequence?: number; alightStopSequence?: number;
+};
+export type ResolveRideGuideRunResponse = {
+  version: 1; status: 'resolved'; runRef: TripRunRef; departs: string; arrives: string;
+  stops: (ResolvedTripRun['stops'][number] & { name: string; location: { lat: number; lng: number } })[];
+} | { version: 1; status: 'unknown'; reason: 'not-found' | 'unavailable' | 'unsupported-run' };

@@ -56,7 +56,8 @@ import {
 import { walkingPath } from './walkingGraph';
 import { addLiveStatus } from './tripLive';
 import { parseTripLiveRequest, selectedTripStatus } from './selectedTripStatus';
-import type { TripLiveRequest } from './tripLiveTypes';
+import { parseResolveRideGuideRunRequest, resolveRideGuideRun as resolveRideGuideSelection } from './rideGuideRun';
+import type { ResolveRideGuideRunRequest, TripLiveRequest } from './tripLiveTypes';
 import { withStopEntrances } from './stationEntrances';
 
 const CALLABLE_RUNTIME_SERVICE_ACCOUNT = 'pathly-callable-runtime@pathly-b7f0f.iam.gserviceaccount.com';
@@ -95,6 +96,7 @@ const RATE_LIMITS = {
   getRoutesLiveStatus: { userPerMinute: 120 },
   // One bounded batch for the selected journey, normally every 15–30 seconds while active.
   getTripLiveStatus: { userPerMinute: 30 },
+  resolveRideGuideRun: { userPerMinute: 30 },
   // Opened on demand from route detail's "More departures" card.
   getStopDepartures: { userPerMinute: 60 },
   findNearbyTransit: { userPerMinute: 30 },
@@ -292,6 +294,14 @@ export const getTripLiveStatus = onCall<TripLiveRequest>({ ...liveStatusCallable
     try { await prepareAgencyStaticData(agencyId); } catch { unavailableAgencies.add(agencyId); }
   }
   return selectedTripStatus(data, { unavailableAgencies });
+});
+
+/** Give Route View's exact chosen departure a canonical active-trip reference, without rerouting. */
+export const resolveRideGuideRun = onCall<ResolveRideGuideRunRequest>({ ...protectedCallableOptions, minInstances: 0 }, async (request) => {
+  await enforceCallableSecurity(request, 'resolveRideGuideRun', RATE_LIMITS.resolveRideGuideRun);
+  const data = parseResolveRideGuideRunRequest(request.data);
+  try { await prepareAgencyStaticData(data.agencyId); } catch { return { version: 1 as const, status: 'unknown' as const, reason: 'unavailable' as const }; }
+  return resolveRideGuideSelection(data);
 });
 
 /** One route's live status — the shared body of getRouteLiveStatus and getRoutesLiveStatus. Its agency's static data must already be prepared. */

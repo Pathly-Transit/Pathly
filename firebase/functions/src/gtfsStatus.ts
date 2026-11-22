@@ -10,6 +10,7 @@ export type GtfsStopStatus = {
   lat: number;
   lon: number;
   sequence: number;
+  sequenceKnown?: boolean;
   scheduledTime: string | null;
   delaySeconds: number | null;
 };
@@ -112,6 +113,7 @@ export async function getRouteStatus(agencyId: AgencyId, routeId: string): Promi
           lat: stop?.lat ?? 0,
           lon: stop?.lon ?? 0,
           sequence: update.stopSequence ?? 0,
+          ...(Object.hasOwn(update, 'stopSequence') && Number.isSafeInteger(update.stopSequence) && (update.stopSequence ?? -1) >= 0 ? { sequenceKnown: true } : {}),
           scheduledTime: time !== null && Number.isFinite(new Date(time).getTime()) ? new Date(time).toISOString() : null,
           delaySeconds: event && Object.hasOwn(event, 'delay') ? event.delay ?? null : null,
         };

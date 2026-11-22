@@ -20,6 +20,14 @@ export type DirectionPrediction = {
    * departure says its own. Null when neither is known.
    */
   headsign: string | null;
+  /** Exact selected-departure identity. Missing live service dates are never inferred from the clock. */
+  tripId?: string;
+  serviceDate?: string;
+  startTime?: string;
+  stopId?: string;
+  stopSequence?: number;
+  directionId?: number;
+  departureTime?: string;
 };
 export type StopPredictions = {
   towardDirection1: readonly DirectionPrediction[];
@@ -29,7 +37,8 @@ export type StopPredictions = {
 /** Tiles shown per direction on route detail. */
 const PREDICTIONS_PER_DIRECTION = 6;
 
-type Entry = { tripId: string; minutes: number; peakOffpeak: boolean | null; delayMinutes: number | null; headsign: string | null };
+type Entry = { tripId: string; minutes: number; peakOffpeak: boolean | null; delayMinutes: number | null; headsign: string | null }
+  & Pick<DirectionPrediction, 'serviceDate' | 'startTime' | 'stopId' | 'stopSequence' | 'directionId' | 'departureTime'>;
 /** A tracked trip at the asked-for stop, before its delay is resolved. */
 type LiveEntry = Entry & { stopId: string; atMs: number };
 
@@ -78,6 +87,12 @@ export async function getStopPredictions(
   };
   const direction1Live: LiveEntry[] = [];
   const direction0Live: LiveEntry[] = [];
+  const liveIdentity = (trip: GtfsTripStatus, stop: GtfsTripStatus['stops'][number], atMs: number) => ({
+    ...(trip.serviceDate ? { serviceDate: trip.serviceDate } : {}), ...(trip.startTime ? { startTime: trip.startTime } : {}),
+    ...(stop.sequenceKnown || stop.sequence > 0 ? { stopSequence: stop.sequence } : {}),
+    ...(trip.directionId === 0 || trip.directionId === 1 ? { directionId: trip.directionId } : {}),
+    departureTime: new Date(atMs).toISOString(),
+  });
 
   for (const trip of trips) {
     if (config.directionalStops) {
@@ -88,14 +103,14 @@ export async function getStopPredictions(
       if (minutes < 0) continue;
       // Terminals can serve both directions from one stop_id; the trip's own direction decides then.
       const isDirection1 = direction1StopId === direction0StopId ? trip.directionId === 1 : stop.stopId === direction1StopId;
-      (isDirection1 ? direction1Live : direction0Live).push({ tripId: trip.tripId, minutes, peakOffpeak: trip.peakOffpeak, delayMinutes: feedDelayMinutes(stop.delaySeconds), headsign: liveHeadsign(trip, stop.stopId), stopId: stop.stopId, atMs });
+      (isDirection1 ? direction1Live : direction0Live).push({ tripId: trip.tripId, minutes, peakOffpeak: trip.peakOffpeak, delayMinutes: feedDelayMinutes(stop.delaySeconds), headsign: liveHeadsign(trip, stop.stopId), stopId: stop.stopId, atMs, ...liveIdentity(trip, stop, atMs) });
     } else {
       const stop = trip.stops.find((candidate) => candidate.stopId === direction1StopId);
       if (!stop?.scheduledTime) continue;
       const atMs = new Date(stop.scheduledTime).getTime();
       const minutes = Math.round((atMs - now) / 60_000);
       if (minutes < 0) continue;
-      (trip.directionId === 1 ? direction1Live : direction0Live).push({ tripId: trip.tripId, minutes, peakOffpeak: trip.peakOffpeak, delayMinutes: feedDelayMinutes(stop.delaySeconds), headsign: liveHeadsign(trip, stop.stopId), stopId: stop.stopId, atMs });
+      (trip.directionId === 1 ? direction1Live : direction0Live).push({ tripId: trip.tripId, minutes, peakOffpeak: trip.peakOffpeak, delayMinutes: feedDelayMinutes(stop.delaySeconds), headsign: liveHeadsign(trip, stop.stopId), stopId: stop.stopId, atMs, ...liveIdentity(trip, stop, atMs) });
     }
   }
 
@@ -148,7 +163,9 @@ export async function getStopPredictions(
             && Math.abs(entry.atMs - eventMs) <= MAX_PLAUSIBLE_DELAY_MINUTES * 60_000)) continue;
 
         const isDirection1 = config.directionalStops && direction1StopId !== direction0StopId ? stopId === direction1StopId : trip.directionId === 1;
-        (isDirection1 ? direction1Static : direction0Static).push({ tripId: stopTime.tripId, minutes, peakOffpeak: trip.peakOffpeak, delayMinutes: null, headsign: trip.headsign || null });
+        (isDirection1 ? direction1Static : direction0Static).push({ tripId: stopTime.tripId, minutes, peakOffpeak: trip.peakOffpeak, delayMinutes: null, headsign: trip.headsign || null,
+          serviceDate: day.dateKey, stopId: stopTime.stopId, stopSequence: stopTime.stopSequence,
+          ...(trip.directionId === 0 || trip.directionId === 1 ? { directionId: trip.directionId } : {}), departureTime: new Date(eventMs).toISOString() });
       }
     }
   };
@@ -162,9 +179,14 @@ export async function getStopPredictions(
     // only timetable departures after the last live one are added (never the same trip twice).
     const lastLive = Math.max(-1, ...live.map((entry) => entry.minutes));
     const padding = config.realtimeTripIdsMatchStatic ? staticEntries : staticEntries.filter((entry) => entry.minutes > lastLive);
+    const identity = (entry: Entry) => ({ tripId: entry.tripId,
+      ...(entry.serviceDate ? { serviceDate: entry.serviceDate } : {}), ...(entry.startTime ? { startTime: entry.startTime } : {}),
+      ...(entry.stopId ? { stopId: entry.stopId } : {}), ...(entry.stopSequence === undefined ? {} : { stopSequence: entry.stopSequence }),
+      ...(entry.directionId === undefined ? {} : { directionId: entry.directionId }), ...(entry.departureTime ? { departureTime: entry.departureTime } : {}),
+    });
     const merged: DirectionPrediction[] = [
-      ...live.map((entry) => ({ minutes: entry.minutes, live: true, peakOffpeak: entry.peakOffpeak, delayMinutes: entry.delayMinutes, headsign: entry.headsign })),
-      ...padding.map((entry) => ({ minutes: entry.minutes, live: false, peakOffpeak: entry.peakOffpeak, delayMinutes: null, headsign: entry.headsign })),
+      ...live.map((entry) => ({ minutes: entry.minutes, live: true, peakOffpeak: entry.peakOffpeak, delayMinutes: entry.delayMinutes, headsign: entry.headsign, ...identity(entry) })),
+      ...padding.map((entry) => ({ minutes: entry.minutes, live: false, peakOffpeak: entry.peakOffpeak, delayMinutes: null, headsign: entry.headsign, ...identity(entry) })),
     ];
     merged.sort((a, b) => a.minutes - b.minutes);
     return merged.slice(0, limit);

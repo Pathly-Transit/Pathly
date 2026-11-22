@@ -4,7 +4,7 @@ import type { AgencyId } from './gtfsAgencies';
 import { gtfsServiceDaysFor } from './gtfsServiceTime';
 import { agencySnapshotVersion, loadRouteStopTimes, readRoutingTimetableFile } from './gtfsStaticData';
 import { decodeRoutingTimetable, encodeRoutingTimetable, NO_DROP_OFF, NO_PICKUP, serviceRunsOn, type RoutingTimetable } from './routingTimetable';
-import type { ResolvedTripRun, TripRunRef } from './tripLiveTypes';
+import type { ResolvedTripRun, ResolveRideGuideRunRequest, TripRunRef } from './tripLiveTypes';
 
 const versions = new WeakMap<RoutingTimetable, string>();
 type Schedule = { timetable: RoutingTimetable; version: string };
@@ -124,6 +124,85 @@ export async function resolveSelectedRun(ref: TripRunRef): Promise<ResolvedTripR
   if ((ref.boardStopSequence !== undefined && ref.boardStopSequence !== board.stopSequence) || (ref.alightStopSequence !== undefined && ref.alightStopSequence !== alight.stopSequence)) return null;
   run.runRef = { ...ref, ...(board.stopSequence === undefined ? {} : { boardStopSequence: board.stopSequence }), ...(alight.stopSequence === undefined ? {} : { alightStopSequence: alight.stopSequence }) };
   return run;
+}
+
+/** Identity carried by the exact departure chosen in Route View, before a timetable version is known. */
+export type RideGuideRunSelection = Omit<ResolveRideGuideRunRequest, 'version'>;
+
+function selectedTripId(agencyId: AgencyId, staticId: string, selectedId: string): boolean {
+  if (staticId === selectedId) return true;
+  if (agencyId !== 'subway' || !selectedId) return false;
+  if (staticId.endsWith(`_${selectedId}`)) return true;
+  if (!/^\d{6}_[A-Za-z0-9]+\.\.[NS]$/.test(selectedId)) return false;
+  const position = staticId.lastIndexOf(`_${selectedId}`);
+  return position >= 0 && /^\d+R$/.test(staticId.slice(position + 1 + selectedId.length));
+}
+
+/** Exact descriptor/calendar lookup only: never chooses a run using nearby departure times. */
+export async function resolveRideGuideSelection(selected: RideGuideRunSelection): Promise<ResolvedTripRun | null> {
+  const sourceVersion = agencySnapshotVersion(selected.agencyId);
+  const schedule = await scheduleFor(selected.agencyId);
+  const day = serviceDay(selected.serviceDate);
+  if (!schedule || !day || sourceVersion !== agencySnapshotVersion(selected.agencyId)) return null;
+  const table = schedule.timetable;
+  const candidates: TripRunRef[] = [];
+  let tripBase = 0, stopBase = 0, profileBase = 0;
+  for (const pattern of table.patterns) {
+    const routeId = table.routes[pattern.route]?.id;
+    if (routeId === selected.routeId && (selected.directionId === undefined || selected.directionId === pattern.direction)) {
+      for (let local = 0; local < pattern.tripCount; local += 1) {
+        const trip = tripBase + local;
+        const tripId = table.tripIds[trip]!;
+        if (!selectedTripId(selected.agencyId, tripId, selected.tripId)) continue;
+        const service = table.services[table.tripService[trip]!];
+        if (!service || !serviceRunsOn(service, Number(selected.serviceDate), day.dayOfWeek)) continue;
+        const startTime = gtfsClock(table.tripStart[trip]! + table.profileDep[profileBase + table.tripProfile[trip]! * pattern.stopCount]!);
+        if (selected.startTime !== undefined && selected.startTime !== startTime) continue;
+        const occurrences = new Map<string, number>();
+        const visits: { stopId: string; occurrence: number; flags: number }[] = [];
+        for (let position = 0; position < pattern.stopCount; position += 1) {
+          const stopId = table.stopIds[table.patternStops[stopBase + position]!]!;
+          const occurrence = occurrences.get(stopId) ?? 0;
+          occurrences.set(stopId, occurrence + 1);
+          visits.push({ stopId, occurrence, flags: table.patternFlags[stopBase + position]! });
+        }
+        const first = visits.findIndex((stop) => (stop.flags & NO_PICKUP) === 0);
+        let last = visits.length - 1;
+        while (last >= 0 && (visits[last]!.flags & NO_DROP_OFF) !== 0) last -= 1;
+        if (first < 0 || last <= first) continue;
+        candidates.push({ version: 1, agencyId: selected.agencyId, routeId: selected.routeId, tripId, serviceDate: selected.serviceDate,
+          scheduleVersion: schedule.version, startTime, boardStopId: visits[first]!.stopId, alightStopId: visits[last]!.stopId,
+          boardOccurrence: visits[first]!.occurrence, alightOccurrence: visits[last]!.occurrence,
+          ...(pattern.direction >= 0 ? { directionId: pattern.direction } : {}) });
+      }
+    }
+    tripBase += pattern.tripCount;
+    stopBase += pattern.stopCount;
+    profileBase += pattern.profileCount * pattern.stopCount;
+  }
+  // A shortened subway ID or repeated descriptor must not select a convenient other variant.
+  if (candidates.length !== 1) return null;
+  const full = await resolveSelectedRun(candidates[0]!);
+  if (!full || sourceVersion !== agencySnapshotVersion(selected.agencyId)) return null;
+  const visit = (use: 'board' | 'alight') => {
+    const stopId = use === 'board' ? selected.boardStopId : selected.alightStopId;
+    const occurrence = use === 'board' ? selected.boardOccurrence : selected.alightOccurrence;
+    const sequence = use === 'board' ? selected.boardStopSequence : selected.alightStopSequence;
+    const matches = full.stops.filter((stop) => stop.stopId === stopId && (occurrence === undefined || stop.occurrence === occurrence)
+      && (sequence === undefined || stop.stopSequence === sequence));
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  const board = visit('board'), alight = visit('alight');
+  if (!board || !alight) return null;
+  const ref: TripRunRef = { version: 1, agencyId: full.runRef.agencyId, routeId: full.runRef.routeId, tripId: full.runRef.tripId,
+    serviceDate: full.runRef.serviceDate, scheduleVersion: full.runRef.scheduleVersion, startTime: full.runRef.startTime,
+    ...(full.runRef.directionId === undefined ? {} : { directionId: full.runRef.directionId }),
+    boardStopId: board.stopId, alightStopId: alight.stopId,
+    boardOccurrence: board.occurrence, alightOccurrence: alight.occurrence,
+    ...(board.stopSequence === undefined ? {} : { boardStopSequence: board.stopSequence }),
+    ...(alight.stopSequence === undefined ? {} : { alightStopSequence: alight.stopSequence }) };
+  const run = scheduledRun(table, ref);
+  return run ? { ...run, stops: full.stops } : null;
 }
 
 export function resetRunSchedulesForTests(): void { schedules.clear(); }
