@@ -185,6 +185,13 @@ test('a recovery trip crossing midnight keeps its valid positive UTC baseline in
   const ride = plans[0].steps.find((step) => step.kind === 'transit');
   assert.equal(ride.runRef.serviceDate, '20261118');
   assert.equal(ride.from.time, new Date(wednesdayAt(24, 10)).toISOString());
+  assert.equal(ride.to.time, new Date(wednesdayAt(24, 30)).toISOString());
+  assert.equal(ride.durationSeconds, 20 * 60);
   assert.ok(Date.parse(plans[0].arrivalTime) > Date.parse(plans[0].departureTime));
-  assert.equal(plans[0].durationSeconds, 20 * 60);
+  const rideIndex = plans[0].steps.indexOf(ride);
+  const leadWalk = plans[0].steps.slice(0, rideIndex).reduce((sum, step) => sum + step.durationSeconds, 0);
+  const tailWalk = plans[0].steps.slice(rideIndex + 1).reduce((sum, step) => sum + step.durationSeconds, 0);
+  assert.equal(Date.parse(plans[0].departureTime), Date.parse(ride.from.time) - leadWalk * 1000);
+  assert.equal(Date.parse(plans[0].arrivalTime), Date.parse(ride.to.time) + tailWalk * 1000);
+  assert.equal(plans[0].durationSeconds, 20 * 60 + leadWalk + tailWalk);
 });
