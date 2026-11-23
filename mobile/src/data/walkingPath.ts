@@ -78,7 +78,7 @@ export function useWalkingPath(
 /** An everyday walking pace, about 4.8 km/h (what trip planners like Google assume). */
 const WALK_METERS_PER_MINUTE = 80;
 
-/** Minutes to walk a street path (from the OpenStreetMap walking graph), rounded up; at least 1. */
+/** Minutes to walk a street path (from the backend's walking graph), rounded up; at least 1. */
 export function walkingMinutes(path: readonly WalkPoint[]): number | null {
   if (path.length < 2) return null;
   let meters = 0;

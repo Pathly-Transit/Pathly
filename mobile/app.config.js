@@ -62,7 +62,7 @@ module.exports = {
       'expo-web-browser',
       'expo-sharing',
       ['expo-notifications', { color: '#0B4F9C' }],
-      // Every map draws OpenStreetMap vector tiles with MapLibre Native (src/map/): no map API key.
+      // Every map draws Pathly's own vector tiles with MapLibre Native (src/map/): no map API key.
       '@maplibre/maplibre-react-native',
       [
         'expo-splash-screen',

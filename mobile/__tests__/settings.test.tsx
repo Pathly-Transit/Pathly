@@ -482,22 +482,25 @@ describe('Settings', () => {
       openURL.mockRestore();
     });
 
-    it('credits OpenStreetMap for footpaths and walking distances and links to its copyright page', async () => {
-      const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+    it('keeps every credit in About: none of the map’s sources needs one on the map, and none asks for OpenStreetMap’s', async () => {
       const screen = renderSettings();
       await openPage(screen, 'about');
-      expect(screen.getByText('Footpaths and walking routes © OpenStreetMap contributors')).toBeTruthy();
-      await act(async () => {
-        fireEvent.press(screen.getByTestId('about-osm'));
-      });
-      expect(openURL).toHaveBeenCalledWith('https://www.openstreetmap.org/copyright');
+      expect(screen.queryByTestId('about-osm')).toBeNull();
+      expect(screen.queryByText(/OpenStreetMap|Microsoft/)).toBeNull();
+      for (const label of ['Trails: U.S. Geological Survey', 'Buildings outside NYC: FEMA', 'Buildings, paths, and fields: City of New York', 'Landmarks: Wikidata']) {
+        expect(screen.getByText(label)).toBeTruthy();
+      }
+      // The map itself carries no attribution (a renderer shows any a source declares).
+      for (const isDark of [false, true]) {
+        for (const source of Object.values(pathlyMapStyle(isDark, 'default', 'all').sources)) expect((source as { attribution?: string }).attribution).toBeUndefined();
+      }
     });
 
     it('credits the map’s data, renderer, and font sources, each linking to its source or license', async () => {
       const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
       const screen = renderSettings();
       await openPage(screen, 'about');
-      for (const label of ['Map data: U.S. Census Bureau', 'Place names: U.S. Geological Survey', 'Buildings: City of New York', 'Made with Natural Earth', 'Map display: MapLibre', 'Map labels: Nunito', 'Place search: Google']) {
+      for (const label of ['Map data: U.S. Census Bureau', 'Place names: U.S. Geological Survey', 'Buildings, paths, and fields: City of New York', 'Made with Natural Earth', 'Map display: MapLibre', 'Map labels: Nunito', 'Place search: Google']) {
         expect(screen.getByText(label)).toBeTruthy();
       }
       expect(screen.getByText('© MapLibre contributors, © Mapbox · BSD license')).toBeTruthy();

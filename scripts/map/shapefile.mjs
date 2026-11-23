@@ -1,5 +1,7 @@
 // Reads ESRI shapefiles (the format the Census Bureau publishes TIGER/Line in): shapes from .shp,
 // attributes from .dbf. Coordinates are longitude/latitude (NAD83, within a meter of WGS84 here).
+import { existsSync, readFileSync } from 'node:fs';
+
 import { readZip } from './zip.mjs';
 
 const NULL = 0;
@@ -78,6 +80,17 @@ function readShp(buffer) {
     }
   }
   return shapes;
+}
+
+/**
+ * Every record of a shapefile on disk: { shape, props } (props empty when there's no .dbf, or when
+ * `withProps` is false: USGS's attribute tables run to hundreds of megabytes the map doesn't need).
+ */
+export function readShapefile(shpPath, { withProps = true } = {}) {
+  const shapes = readShp(readFileSync(shpPath));
+  const dbfPath = shpPath.replace(/\.shp$/i, '.dbf');
+  const records = withProps && existsSync(dbfPath) ? readDbf(readFileSync(dbfPath)) : [];
+  return shapes.map((shape, i) => ({ shape, props: records[i] ?? {} }));
 }
 
 /** Every record in the shapefile inside a zip: { shape, props }. */

@@ -908,18 +908,18 @@ const TERMS: readonly string[] = [
   'Place search results come from Google and are subject to Google’s terms.',
 ];
 
-export const OSM_COPYRIGHT_URL = 'https://www.openstreetmap.org/copyright';
-
 /**
- * Where the map, its labels, and Pathly's data come from. OpenStreetMap's license (ODbL) and the
- * map renderer's (BSD) and font's (SIL OFL) require their notices; the government sources are
- * public domain and credited as their publishers ask.
+ * Where the map, its labels, and Pathly's data come from: every credit lives here, none on the map.
+ * The map renderer's license (BSD) and the font's (SIL OFL) ask for their notices somewhere in the
+ * app; the data sources are public domain or ask no credit, and are listed as their publishers ask.
  */
 const CREDITS: readonly { id: string; label: string; detail: string; url?: string }[] = [
-  { id: 'census', label: 'Map data: U.S. Census Bureau', detail: 'TIGER/Line streets, water, parks, and places; population estimates', url: 'https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html' },
+  { id: 'census', label: 'Map data: U.S. Census Bureau', detail: 'TIGER/Line streets, walkways, water, parks, and places; population estimates', url: 'https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html' },
   { id: 'usgs', label: 'Place names: U.S. Geological Survey', detail: 'Geographic Names Information System', url: 'https://www.usgs.gov/us-board-on-geographic-names/domestic-names' },
-  { id: 'nyc', label: 'Buildings: City of New York', detail: 'NYC Open Data building footprints', url: 'https://data.cityofnewyork.us/d/5zhs-2jue' },
-  { id: 'microsoft', label: 'Buildings outside NYC: Microsoft', detail: 'Global ML Building Footprints, Open Database License', url: 'https://github.com/microsoft/GlobalMLBuildingFootprints' },
+  { id: 'usgs-trails', label: 'Trails: U.S. Geological Survey', detail: 'National Digital Trails', url: 'https://www.usgs.gov/national-digital-trails' },
+  { id: 'nyc', label: 'Buildings, paths, and fields: City of New York', detail: 'NYC Open Data building footprints, street centerline, and planimetric data', url: 'https://opendata.cityofnewyork.us' },
+  { id: 'fema', label: 'Buildings outside NYC: FEMA', detail: 'USA Structures, from the USGS National Map', url: 'https://gis-fema.hub.arcgis.com/pages/usa-structures' },
+  { id: 'wikidata', label: 'Landmarks: Wikidata', detail: 'Public domain (CC0)', url: 'https://www.wikidata.org' },
   { id: 'natural-earth', label: 'Made with Natural Earth', detail: 'Coastlines and cities around the region', url: 'https://www.naturalearthdata.com' },
   {
     id: 'maplibre',
@@ -963,8 +963,6 @@ export function LegalSettings({ onFeedback }: PageProps) {
             testID={`about-credit-${credit.id}`}
           />
         ))}
-        {/* Walking distances (Nearby and trip plans) come from OpenStreetMap, whose license (ODbL) requires this credit. */}
-        <SettingRow detail="Open Database License" label="Footpaths and walking routes © OpenStreetMap contributors" onPress={() => void openLink(OSM_COPYRIGHT_URL, onFeedback)} testID="about-osm" />
       </Card>
     </>
   );

@@ -1,28 +1,34 @@
 #!/usr/bin/env node
 /**
- * Builds the pedestrian street graph Nearby uses to pick the stop closest on foot (see
- * src/walkingGraph.ts) from an OpenStreetMap extract, into static_data/walking/, which is
- * bundled with the deploy. Streets change slowly; rebuild every month or two.
+ * Builds the pedestrian street graph Nearby and the trip planner use to find the stop closest on
+ * foot and draw the walk there (see src/walkingGraph.ts), into static_data/walking/, which is bundled
+ * with the deploy. It reads the base map's own public sources, so walks drawn on the map need no
+ * credit there either:
+ *   - US Census Bureau TIGER/Line 2025 streets and walkways, in every county the service area touches
+ *     (limited-access highways and their ramps left out);
+ *   - New York City's paths and trails, boardwalks, and step streets (NYC Street Centerline);
+ *   - USGS National Digital Trails: trails in parks and on public lands.
+ * Paths are joined to the streets where they end within a few meters of one. Streets change
+ * slowly; rebuild every few months, with the base map.
  *
  * Usage (after `npm run build`, which compiles the tile writer this runs):
- *   1. Download https://download.geofabrik.de/north-america/us/new-york-latest.osm.pbf (~500 MB)
- *      somewhere outside the repo.
- *   2. node --max-old-space-size=6144 scripts/build-walking-tiles.js <path-to>/new-york-latest.osm.pbf
+ *   1. From the repository root, fetch the map's sources: npm run map:download -- <data-dir>
+ *   2. node --max-old-space-size=6144 scripts/build-walking-tiles.js <data-dir>
  *   node scripts/build-walking-tiles.js --check   build nothing; exit 1 if the tiles are missing or
  *                                                 incomplete (run before every deploy)
  *
  * The tiles are gitignored, so a fresh checkout has none until step 2 runs. Without them Nearby
  * still works but quietly falls back to straight-line distance, which is why deploys check.
  *
- * Reads the file twice: first the walkable ways (which nodes they use), then those nodes'
- * coordinates. Keeps only the service area, joins ways at shared nodes, drops points along a
- * street that aren't intersections (keeping one every ~50 m so a stop mid-block snaps nearby),
- * and drops tiny disconnected pieces a stop could snap onto by mistake.
- *
- * Map data © OpenStreetMap contributors, available under the Open Database License (ODbL).
+ * Keeps only the service area, joins ways at shared points (TIGER's streets share their
+ * intersections' exact coordinates), drops points along a street that aren't intersections
+ * (keeping one every ~50 m so a stop mid-block snaps nearby), and drops tiny disconnected pieces a
+ * stop could snap onto by mistake.
  */
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
+const { pathToFileURL } = require('url');
 
 const { haversineMeters } = require('../lib/geo');
 const { SERVICE_AREA_BOUNDS } = require('../lib/serviceArea');
@@ -30,26 +36,18 @@ const { WALKING_FORMAT_VERSION, WALKING_TILE_DEGREES } = require('../lib/walking
 const { writeWalkingTiles } = require('../lib/walkingTilesBuild');
 
 const OUT_DIR = path.join(__dirname, '../static_data/walking');
+const MAP_SCRIPTS = path.join(__dirname, '../../../scripts/map');
 const MAX_EDGE_METERS = 50;
 const MIN_COMPONENT_NODES = 25;
+/** A path's end within this many meters of a street's point is joined to it. */
+const JOIN_METERS = 15;
 
-// Ways a person can walk along. Motorways are left out; so is anything tagged as closed to people on foot.
-const WALKABLE_HIGHWAYS = new Set([
-  'footway', 'path', 'pedestrian', 'steps', 'living_street', 'residential', 'service', 'unclassified', 'road',
-  'tertiary', 'tertiary_link', 'secondary', 'secondary_link', 'primary', 'primary_link', 'trunk', 'trunk_link',
-  'track', 'cycleway', 'bridleway', 'corridor', 'crossing', 'elevator',
-]);
-const FOOT_ALLOWED = new Set(['yes', 'designated', 'permissive', 'official']);
-
-function isWalkable(tags) {
-  if (!tags || !WALKABLE_HIGHWAYS.has(tags.highway)) return false;
-  if (tags.foot && FOOT_ALLOWED.has(tags.foot)) return true;
-  // use_sidepath: walk on the separately mapped sidewalk instead, which is its own way.
-  if (tags.foot === 'no' || tags.foot === 'private' || tags.foot === 'use_sidepath') return false;
-  if (tags.access === 'no' || tags.access === 'private') return false;
-  if (tags.highway === 'trunk' || tags.highway === 'trunk_link') return tags.sidewalk !== undefined && tags.sidewalk !== 'no' && tags.sidewalk !== 'none';
-  return true;
-}
+/**
+ * TIGER road kinds a person can walk along: secondary roads, streets, trails, service drives,
+ * walkways, stairways, alleys, private and parking-lot roads, bike and bridle paths. Primary roads
+ * (S1100: limited-access highways) and ramps (S1630) are left out.
+ */
+const WALKABLE_ROADS = new Set(['S1200', 'S1400', 'S1500', 'S1640', 'S1710', 'S1720', 'S1730', 'S1740', 'S1780', 'S1820', 'S1830']);
 
 /** A growable Float64Array. */
 class Float64List {
@@ -82,44 +80,205 @@ function checkTiles() {
   return null;
 }
 
+// Points are identified by their coordinates, to a millionth of a degree (~10 cm), packed into one
+// number: TIGER's streets meet at exactly shared points, so equal keys are the same intersection.
+const { north, south, east, west } = SERVICE_AREA_BOUNDS;
+const ORIGIN_LON = west - 0.05;
+const ORIGIN_LAT = south - 0.05;
+const keyOf = (lon, lat) => Math.round((lon - ORIGIN_LON) * 1e6) * 4194304 + Math.round((lat - ORIGIN_LAT) * 1e6);
+/** Every point outside the service area (keys are only for points inside it). */
+const OUTSIDE = -1;
+const lonOf = (key) => Math.floor(key / 4194304) / 1e6 + ORIGIN_LON;
+const latOf = (key) => (key % 4194304) / 1e6 + ORIGIN_LAT;
+const inServiceArea = (lon, lat) => lon >= west && lon <= east && lat >= south && lat <= north;
+const touchesServiceArea = (line) => {
+  for (let i = 0; i < line.length; i += 2) if (inServiceArea(line[i], line[i + 1])) return true;
+  return false;
+};
+
+/** "MULTILINESTRING ((x y, ...), (...))" (or a LINESTRING) as flat [lon, lat, ...] lines. */
+function parseLines(wkt) {
+  const open = wkt.indexOf('(');
+  const close = wkt.lastIndexOf(')');
+  if (open < 0 || close < open) return [];
+  return wkt.slice(open, close + 1).replace(/^\(+|\)+$/g, '').split(/\)\s*,\s*\(/).map((part) => {
+    const flat = [];
+    for (const pair of part.split(',')) {
+      const [x, y] = pair.trim().split(/\s+/).map(Number);
+      if (Number.isFinite(x) && Number.isFinite(y)) flat.push(x, y);
+    }
+    return flat;
+  }).filter((line) => line.length >= 4);
+}
+
+/** The streets, as lines of [lon, lat, ...]: each stretch once (TIGER lists a road with two names twice). */
+async function readStreets(dataDir) {
+  const { readShapefileZip } = await import(pathToFileURL(path.join(MAP_SCRIPTS, 'shapefile.mjs')).href);
+  const countyDir = path.join(dataDir, 'county');
+  const files = fs.existsSync(countyDir) ? fs.readdirSync(countyDir).filter((name) => name.endsWith('_roads.zip')) : [];
+  if (files.length === 0) throw new Error(`no TIGER road files in ${countyDir} (run npm run map:download -- ${dataDir} from the repository root)`);
+  const lines = [];
+  const seen = new Set();
+  for (const file of files) {
+    for (const { shape, props } of readShapefileZip(path.join(countyDir, file))) {
+      if (!shape || shape.type !== 'line' || !WALKABLE_ROADS.has(props.MTFCC)) continue;
+      for (const line of shape.parts) {
+        if (line.length < 4 || !touchesServiceArea(line)) continue;
+        const forward = `${keyOf(line[0], line[1])}:${keyOf(line[line.length - 2], line[line.length - 1])}:${line.length}`;
+        const backward = `${keyOf(line[line.length - 2], line[line.length - 1])}:${keyOf(line[0], line[1])}:${line.length}`;
+        if (seen.has(forward) || seen.has(backward)) continue;
+        seen.add(forward);
+        lines.push(line);
+      }
+    }
+  }
+  return lines;
+}
+
+/** The city's paths, boardwalks, and step streets, and the USGS trails, as lines of [lon, lat, ...]. */
+async function readPaths(dataDir) {
+  const lines = [];
+  const csv = path.join(dataDir, 'nyc', 'centerline_paths.csv');
+  if (fs.existsSync(csv)) {
+    const { parseCsvLine } = await import(pathToFileURL(path.join(MAP_SCRIPTS, 'sources.mjs')).href);
+    let header = null;
+    for await (const row of readline.createInterface({ input: fs.createReadStream(csv), crlfDelay: Infinity })) {
+      if (!row) continue;
+      const fields = parseCsvLine(row);
+      if (!header) {
+        header = fields.map((field) => field.replace(/^﻿/, '').trim());
+        continue;
+      }
+      const geometry = fields[header.indexOf('the_geom')] ?? '';
+      for (const line of parseLines(geometry)) if (touchesServiceArea(line)) lines.push(line);
+    }
+  } else {
+    console.warn(`  no ${csv}: walks won't follow the city's park paths`);
+  }
+  const trailsDir = path.join(dataDir, 'usgs', 'trails');
+  if (fs.existsSync(trailsDir)) {
+    const { readShapefile } = await import(pathToFileURL(path.join(MAP_SCRIPTS, 'shapefile.mjs')).href);
+    const seen = new Set();
+    for (const state of fs.readdirSync(trailsDir)) {
+      const file = path.join(trailsDir, state, 'Trans_TrailSegment.shp');
+      if (!fs.existsSync(file)) continue;
+      for (const { shape, props } of readShapefile(file)) {
+        if (!shape || shape.type !== 'line') continue;
+        if (props.trailtype && props.trailtype !== 'Terra Trail') continue;
+        if (/^(N|No)$/.test(props.hikerpedes ?? '')) continue;
+        if (props.GLOBALID && seen.has(props.GLOBALID)) continue;
+        if (props.GLOBALID) seen.add(props.GLOBALID);
+        for (const line of shape.parts) if (line.length >= 4 && touchesServiceArea(line)) lines.push(line);
+      }
+    }
+  } else {
+    console.warn(`  no ${trailsDir}: walks won't follow trails`);
+  }
+  return lines;
+}
+
+/**
+ * Joins each path to the streets: an end within JOIN_METERS of a street's point moves onto it (the
+ * paths come from other surveys, so their ends rarely land exactly on TIGER's points).
+ */
+function joinPathEnds(paths, streets) {
+  const CELL = 0.0002;
+  const cell = (x, y) => `${Math.floor(x / CELL)},${Math.floor(y / CELL)}`;
+  const wanted = new Set();
+  for (const line of paths) {
+    for (const at of [0, line.length - 2]) {
+      const cx = Math.floor(line[at] / CELL);
+      const cy = Math.floor(line[at + 1] / CELL);
+      for (let dx = -1; dx <= 1; dx += 1) for (let dy = -1; dy <= 1; dy += 1) wanted.add(`${cx + dx},${cy + dy}`);
+    }
+  }
+  const grid = new Map();
+  for (const line of streets) {
+    for (let i = 0; i < line.length; i += 2) {
+      const key = cell(line[i], line[i + 1]);
+      if (!wanted.has(key)) continue;
+      let list = grid.get(key);
+      if (!list) grid.set(key, (list = []));
+      list.push(line[i], line[i + 1]);
+    }
+  }
+  let joined = 0;
+  for (const line of paths) {
+    for (const at of [0, line.length - 2]) {
+      const [x, y] = [line[at], line[at + 1]];
+      const cx = Math.floor(x / CELL);
+      const cy = Math.floor(y / CELL);
+      let best = null;
+      let bestMeters = JOIN_METERS;
+      for (let dx = -1; dx <= 1; dx += 1) {
+        for (let dy = -1; dy <= 1; dy += 1) {
+          const points = grid.get(`${cx + dx},${cy + dy}`) ?? [];
+          for (let i = 0; i < points.length; i += 2) {
+            const meters = haversineMeters(y, x, points[i + 1], points[i]);
+            if (meters < bestMeters) {
+              bestMeters = meters;
+              best = [points[i], points[i + 1]];
+            }
+          }
+        }
+      }
+      if (best && bestMeters > 0) {
+        line[at] = best[0];
+        line[at + 1] = best[1];
+        joined += 1;
+      }
+    }
+  }
+  return joined;
+}
+
 async function main() {
   if (process.argv[2] === '--check') {
     const problem = checkTiles();
     if (problem) {
       console.error(`Walking tiles are not ready: ${problem}.`);
-      console.error('Build them first (see scripts/build-walking-tiles.js): npm --prefix firebase/functions run build:walking -- <new-york-latest.osm.pbf>');
+      console.error('Build them first (see scripts/build-walking-tiles.js): npm run map:download -- <data-dir> (repository root), then npm --prefix firebase/functions run build:walking -- <data-dir>');
       process.exit(1);
     }
     console.log('Walking tiles are ready.');
     return;
   }
-  const source = process.argv[2];
-  if (!source || !fs.existsSync(source)) {
-    console.error('Usage: node --max-old-space-size=6144 scripts/build-walking-tiles.js <new-york-latest.osm.pbf>');
+  const dataDir = process.argv[2];
+  if (!dataDir || !fs.existsSync(dataDir)) {
+    console.error('Usage: node --max-old-space-size=6144 scripts/build-walking-tiles.js <data-dir>   (the folder npm run map:download fills)');
     process.exit(2);
   }
-  const { OSMTransform } = await import('osm-pbf-parser-node');
-  // Whole blocks at a time: tens of millions of entities read one by one would be far slower.
-  const blocks = (options) => fs.createReadStream(source).pipe(new OSMTransform(options));
 
-  // Pass 1: walkable ways, as runs of node ids (wayStarts[i]..wayStarts[i + 1] in wayRefs).
-  console.log('Reading walkable ways...');
+  console.log('Reading streets and paths...');
+  const streets = await readStreets(dataDir);
+  const paths = await readPaths(dataDir);
+  const joined = joinPathEnds(paths, streets);
+  console.log(`  ${streets.length} street lines, ${paths.length} paths and trails (${joined} ends joined to streets)`);
+
+  // Every line as a run of point keys (wayStarts[i]..wayStarts[i + 1] in wayRefs), as the graph below reads them.
   const wayRefs = new Float64List();
   const wayStarts = [0];
-  for await (const block of blocks({ withTags: { way: ['highway', 'foot', 'access', 'sidewalk'], node: false, relation: false }, withInfo: false })) {
-    for (const item of block) {
-      if (item.type !== 'way' || !isWalkable(item.tags)) continue;
-      for (const ref of item.refs) wayRefs.push(ref);
-      wayStarts.push(wayRefs.length);
-    }
+  for (const line of [...streets, ...paths]) {
+    // A point outside the service area is OUTSIDE (no position), where the graph cuts the way.
+    for (let i = 0; i < line.length; i += 2) wayRefs.push(inServiceArea(line[i], line[i + 1]) ? keyOf(line[i], line[i + 1]) : OUTSIDE);
+    wayStarts.push(wayRefs.length);
   }
   const refs = wayRefs.view();
-  console.log(`  ${wayStarts.length - 1} ways, ${refs.length} node references`);
+  console.log(`  ${wayStarts.length - 1} ways, ${refs.length} points`);
 
-  // The distinct nodes those ways use, sorted, so pass 2 can find each by binary search.
-  const needed = Float64Array.from(new Set(refs)).sort();
-  const lat = new Float64Array(needed.length).fill(NaN);
-  const lon = new Float64Array(needed.length).fill(NaN);
+  // The distinct points, sorted, so each can be found by binary search (sorted and deduplicated in
+  // place: a Set can't hold the tens of millions of points a large service area has).
+  const sorted = Float64Array.from(refs).sort();
+  let distinct = 0;
+  for (let i = 0; i < sorted.length; i += 1) if (i === 0 || sorted[i] !== sorted[i - 1]) sorted[distinct++] = sorted[i];
+  const needed = sorted.subarray(0, distinct);
+  const lat = new Float64Array(needed.length);
+  const lon = new Float64Array(needed.length);
+  for (let index = 0; index < needed.length; index += 1) {
+    const outside = needed[index] === OUTSIDE;
+    lon[index] = outside ? Number.NaN : lonOf(needed[index]);
+    lat[index] = outside ? Number.NaN : latOf(needed[index]);
+  }
   const indexOf = (id) => {
     let low = 0;
     let high = needed.length - 1;
@@ -131,22 +290,6 @@ async function main() {
     }
     return -1;
   };
-
-  // Pass 2: those nodes' coordinates, inside the service area only.
-  console.log(`Reading ${needed.length} node positions...`);
-  const { north, south, east, west } = SERVICE_AREA_BOUNDS;
-  reading: for await (const block of blocks({ withTags: false, withInfo: false })) {
-    for (const item of block) {
-      if (item.type === 'way') break reading; // Nodes come first in a sorted extract.
-      if (item.type !== 'node') continue;
-      if (item.lat < south || item.lat > north || item.lon < west || item.lon > east) continue;
-      const index = indexOf(item.id);
-      if (index >= 0) {
-        lat[index] = item.lat;
-        lon[index] = item.lon;
-      }
-    }
-  }
 
   // Graph nodes: way ends and nodes shared by several ways (intersections).
   const uses = new Uint8Array(needed.length);
@@ -212,7 +355,7 @@ async function main() {
   });
   const keptEdges = edges.filter((edge) => keptIndex[edge.a] >= 0).map((edge) => ({ a: keptIndex[edge.a], b: keptIndex[edge.b], meters: edge.meters }));
 
-  const result = writeWalkingTiles(OUT_DIR, keptNodes, keptEdges, { source: `${path.basename(source)} (OpenStreetMap contributors, ODbL)` });
+  const result = writeWalkingTiles(OUT_DIR, keptNodes, keptEdges, { source: 'US Census Bureau TIGER/Line 2025, NYC Street Centerline, USGS National Digital Trails (public domain)' });
   console.log(`Wrote ${result.tiles} tiles (${result.nodes} nodes, ${result.edges} edges, ${(result.bytes / 1e6).toFixed(1)} MB) to ${OUT_DIR}`);
 }
 

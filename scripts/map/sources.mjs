@@ -70,7 +70,7 @@ function geojsonLines(geometry) {
   return list.map((line) => line.flat()).filter((line) => line.length >= 4);
 }
 
-function polygonsArea(polygons) {
+export function polygonsArea(polygons) {
   let area = 0;
   for (const polygon of polygons) {
     let polygonArea = ringAreaMeters(polygon[0]);
@@ -607,7 +607,7 @@ export function addLandmarks(store, tigerDir, log) {
 
 // ── Places and names ─────────────────────────────────────────────────────────
 
-function parseCsvLine(line) {
+export function parseCsvLine(line) {
   const out = [];
   let field = '';
   let quoted = false;
@@ -777,7 +777,7 @@ export function addGnisWaterNames(store, gnis, already, log) {
 // ── Buildings ─────────────────────────────────────────────────────────────────
 
 /** "MULTIPOLYGON (((x y, ...), (...)), ((...)))" as polygons [outer, ...holes]. */
-function parseMultiPolygon(wkt) {
+export function parseMultiPolygon(wkt) {
   const body = wkt.slice(wkt.indexOf('(((') + 3, wkt.lastIndexOf(')))'));
   return body.split(/\)\)\s*,\s*\(\(/).map((polygon) => polygon.split(/\)\s*,\s*\(/).map((ring, i) => {
     const flat = [];

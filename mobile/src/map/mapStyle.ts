@@ -7,9 +7,10 @@ import type { MapTheme, TransitIcons } from '../theme/AppSettings';
 /**
  * The base map every Pathly map draws (home, route, trip, and choose-on-map; native and web):
  * Pathly's own vector tiles of New York City, Long Island, and the region around them, built from
- * public-domain government data (Census TIGER/Line streets, water, parks, and places; USGS names;
- * NYC building footprints) and OpenStreetMap's footpaths, by scripts/build-map.mjs, and labeled in Nunito, the app's typeface
- * (scripts/build-map-fonts.mjs). Styled to read like the familiar maps riders know (white streets
+ * public data that asks no credit on the map itself (Census TIGER/Line streets, water, parks, and
+ * places; USGS names, trails, and building outlines; New York City's footprints, paths, fields, and
+ * platforms; Wikidata's landmarks) by scripts/build-map.mjs, and labeled in Nunito, the app's
+ * typeface (scripts/build-map-fonts.mjs). Settings → About lists the sources. Styled to read like the familiar maps riders know (white streets
  * with gray edges, blue water, green parks) with Pathly's own changes: highways in quiet gray so
  * route lines stand out, no business labels (stations keep theirs), and a dark version.
  *
@@ -19,8 +20,6 @@ import type { MapTheme, TransitIcons } from '../theme/AppSettings';
 
 const SITE = 'https://pathly.web.app/map';
 
-/** The credit the map shows (OpenStreetMap's footpaths and Microsoft's buildings need it; the government data doesn't). */
-export const MAP_ATTRIBUTION = '© OpenStreetMap contributors, Microsoft';
 export const MAP_TILES_URL = process.env.EXPO_PUBLIC_MAP_TILES_URL || `${SITE}/tiles/{z}/{x}/{y}.pbf`;
 const MAP_GLYPHS_URL = process.env.EXPO_PUBLIC_MAP_GLYPHS_URL || `${SITE}/fonts/{fontstack}/{range}.pbf`;
 
@@ -90,8 +89,8 @@ const LIGHT: MapPalette = {
   school: '#E8E9EA',
   water: '#90C4F3',
   aeroArea: '#E2E5EB',
-  building: '#E3E0D9',
-  buildingOutline: '#CDC9C1',
+  building: '#DBD8CF',
+  buildingOutline: '#C3BEB4',
   casing: '#C3C7CD',
   minor: '#FFFFFF',
   arterial: '#FFFFFF',
@@ -152,7 +151,7 @@ const DARK: MapPalette = {
 const MUTED_LIGHT: MapPalette = {
   ...LIGHT,
   land: '#F3F3F2', manMade: '#ECECEB', park: '#DCE6DA', grass: '#E3EBE1', hospital: '#EFE6E5', school: '#EDEBE6',
-  water: '#C9D6E0', aeroArea: '#E8E9EB', building: '#E4E4E3', buildingOutline: '#D2D2D1',
+  water: '#C9D6E0', aeroArea: '#E8E9EB', building: '#DBDBDA', buildingOutline: '#C7C7C5',
   casing: '#D0D0D0', arterialCasing: '#C4C4C4', highway: '#E0E0E0', highwayCasing: '#BDBDBD', motorway: '#DCDCDC', motorwayCasing: '#B8B8B8',
   path: '#B9CEC6', rail: '#BDBDBD', ferry: '#8FA6BA', boundary: '#B5B5B5',
   label: '#707070', placeLabel: '#4A4A4A', neighborhoodLabel: '#8A8A8A', roadLabel: '#707070', waterLabel: '#5F7A90', parkLabel: '#5E7A5E',
@@ -172,7 +171,7 @@ const MUTED_DARK: MapPalette = {
 const VIBRANT_LIGHT: MapPalette = {
   ...LIGHT,
   land: '#F6F5EE', park: '#8FD68A', grass: '#B4E6A6', hospital: '#FBC9C2', school: '#F5E2B8',
-  water: '#5DB0F5', aeroArea: '#DCE2EE', building: '#E0DCD2', buildingOutline: '#C6C0B4',
+  water: '#5DB0F5', aeroArea: '#DCE2EE', building: '#D9D4C7', buildingOutline: '#BCB5A7',
   arterialCasing: '#A7AEB8', highway: '#FCE9B6', highwayCasing: '#E3C27A', motorway: '#FBDFA0', motorwayCasing: '#DDB36A',
   path: '#86CFB3', ferry: '#1E7FE0', waterLabel: '#1A5FB4', parkLabel: '#1F7A32',
 };
@@ -186,7 +185,7 @@ const VIBRANT_DARK: MapPalette = {
 /** Warm: paper-cream land and soft, earthy greens and blues. */
 const WARM_LIGHT: MapPalette = {
   land: '#F5EFE3', manMade: '#EDE5D6', park: '#CFE0B0', grass: '#DCE8C2', hospital: '#F4D9CF', school: '#EFE3CC',
-  water: '#A9CDE0', aeroArea: '#E6E1D6', building: '#E7DECF', buildingOutline: '#D3C7B4',
+  water: '#A9CDE0', aeroArea: '#E6E1D6', building: '#E1D6C3', buildingOutline: '#CBBCA6',
   casing: '#D4C9B6', minor: '#FFFDF8', arterial: '#FFFBF2', arterialCasing: '#C9BBA4', highway: '#EBDDC4', highwayCasing: '#C4AE8A', motorway: '#E8D6B6', motorwayCasing: '#BFA37A',
   path: '#B3C69E', rail: '#B8AA94', ferry: '#5E8FB5', boundary: '#B8A991',
   label: '#6B5E4E', labelHalo: '#FFFBF2', placeLabel: '#4A3F33', neighborhoodLabel: '#8A7C6A', roadLabel: '#6B5E4E', waterLabel: '#3E6F8F', parkLabel: '#4E7A3A',
@@ -410,7 +409,7 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
     // National parks (in the tiles from zoom 9, with the detailed water over their bays) ease in.
     { id: 'park-national', type: 'fill', source: SOURCE, 'source-layer': 'park', minzoom: 9, filter: ['all', AREAS, ['==', ['get', 'kind'], 'national_park']], paint: { 'fill-color': palette.park } },
     { id: 'park-golf', type: 'fill', source: SOURCE, 'source-layer': 'park', minzoom: 10, filter: ['all', AREAS, ['==', ['get', 'kind'], 'golf_course']], paint: { 'fill-color': palette.grass, 'fill-opacity': fadeIn(10) } },
-    // Sports fields, courts, and stadiums, like a park (OpenStreetMap's; small courts show from closer in).
+    // Sports fields, courts, and tracks, like a park (New York City's; small courts show from closer in).
     { id: 'park-pitch', type: 'fill', source: SOURCE, 'source-layer': 'park', minzoom: 13, filter: ['all', AREAS, ['==', ['get', 'kind'], 'pitch']], paint: { 'fill-color': palette.park, 'fill-opacity': fadeIn(13) } },
     // The water over parks and the like, whose outlines often run out over a bay.
     { id: 'water', type: 'fill', source: SOURCE, 'source-layer': 'water', paint: { 'fill-color': palette.water } },
@@ -439,7 +438,7 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
         'fill-opacity': ['interpolate', ['linear'], ['zoom'], 14, 0, 15, 1],
       },
     },
-    // Bus and train platforms (OpenStreetMap's), paved like Google's, over the terminal around them.
+    // Train and subway platforms above ground (New York City's), paved like Google's.
     {
       id: 'landuse-platform',
       type: 'fill',
@@ -469,7 +468,7 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
     },
     ...roadLayers(palette, 'bridge'),
     {
-      // Which way a bus ramp or lane runs, in small arrows along it, close in.
+      // Which way a one-way road runs, in small arrows along it, close in (roads marked `oneway`).
       id: 'road-oneway-arrow',
       type: 'symbol',
       source: SOURCE,
@@ -588,7 +587,7 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
       },
     }),
     {
-      // Stadiums, malls, museums, and sights (OpenStreetMap's notable ones; businesses stay hidden).
+      // Stadiums, malls, museums, and sights (Wikidata's notable ones; businesses stay hidden).
       id: 'landmark-label',
       type: 'symbol',
       source: SOURCE,
@@ -756,8 +755,8 @@ export function pathlyMapStyle(isDark: boolean, theme: MapTheme = 'default', tra
     version: 8,
     name: `Pathly ${cacheKey}`,
     sources: {
-      // Footpaths come from OpenStreetMap, whose license asks for this credit on the map.
-      [SOURCE]: { type: 'vector', tiles: [MAP_TILES_URL], minzoom: 0, maxzoom: TILES_MAX_ZOOM, bounds: TILE_BOUNDS, attribution: MAP_ATTRIBUTION },
+      // No attribution: none of the tiles' sources asks for a credit on the map.
+      [SOURCE]: { type: 'vector', tiles: [MAP_TILES_URL], minzoom: 0, maxzoom: TILES_MAX_ZOOM, bounds: TILE_BOUNDS },
     },
     glyphs: MAP_GLYPHS_URL,
     layers: [...baseLayers(palette, isDark).map(withZoomFade).map(hide), ...slots],

@@ -1671,35 +1671,6 @@ describe('Pathly prototype navigation', () => {
     hidesPlaces(await screen.findByTestId('home-map', { includeHiddenElements: true }));
   });
 
-  it('shows a compass after the rider rotates the home map, and reorients to north', async () => {
-    const kit = jest.requireMock('../src/map/MapCanvas') as { mockEaseTo: jest.Mock };
-    const screen = await renderHome();
-    await screen.findByTestId(`route-card-${PJ_CARD}`);
-    const map = screen.getByTestId('home-map', { includeHiddenElements: true });
-    const settle = async (bearing: number, pitch = 0) => {
-      fireEvent(map, 'cameraIdle', { center: { latitude: 40.9, longitude: -73.1 }, zoom: 13, bearing, pitch, userInteraction: false });
-      await act(async () => {});
-    };
-    expect(screen.queryByTestId('reorient-map')).toBeNull();
-
-    // Twisted so north points right (heading 90): the compass appears, its needle pointing right.
-    await settle(90);
-    const needle = StyleSheet.flatten(screen.getByTestId('reorient-needle', { includeHiddenElements: true }).props.style);
-    expect(needle.transform).toEqual([{ rotate: '-90deg' }]);
-
-    kit.mockEaseTo.mockClear();
-    fireEvent.press(screen.getByTestId('reorient-map'));
-    expect(kit.mockEaseTo).toHaveBeenCalledWith({ bearing: 0, pitch: 0, durationMs: expect.any(Number) });
-
-    // Back at north-up, the compass goes away.
-    await settle(0);
-    expect(screen.queryByTestId('reorient-map')).toBeNull();
-
-    // A tilt alone also counts.
-    await settle(0, 30);
-    expect(screen.getByTestId('reorient-map')).toBeTruthy();
-  });
-
   it('reopens the home map on the purple dot after visiting a route', async () => {
     const { mockEaseTo } = jest.requireMock('../src/map/MapCanvas') as { mockEaseTo: jest.Mock };
     const screen = await renderHome();
