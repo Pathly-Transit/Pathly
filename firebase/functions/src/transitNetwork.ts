@@ -24,6 +24,9 @@ export const WALK_METERS_PER_SECOND = 1.3;
 export const TRANSFER_DETOUR = 1.3;
 /** The farthest apart (straight line) two stops can be for a planned walk between them. */
 export const MAX_TRANSFER_METERS = 450;
+/** Known pedestrian links just outside the general radius, still checked against the street graph. */
+const STATION_WALK_CONNECTORS = [['lirr', '237', 'path', '26724']] as const;
+const MAX_STATION_CONNECTOR_METERS = 600;
 /** Time to spare after a walk to another stop, before the next vehicle leaves. */
 export const WALK_TRANSFER_SLACK_SECONDS = 30;
 /** Down to or up from a subway platform, on top of the walk at street level. */
@@ -351,6 +354,24 @@ export class TransitNetwork {
       for (const other of this.stopsNear(this.stopLat[stop]!, this.stopLon[stop]!, MAX_TRANSFER_METERS)) {
         if (other.stop === stop || own.has(other.stop)) continue;
         own.set(other.stop, this.estimatedWalkSeconds(stop, other.stop, other.meters));
+      }
+    }
+    // Penn Station–33rd Street PATH is a real street walk (~583 m), but the stations' GTFS
+    // points are ~477 m apart: just beyond the usual 450 m candidate radius. Only these exact,
+    // served agency/stop pairs qualify; a moved or retired stop must not create a distant link.
+    for (const [fromAgency, fromId, toAgency, toId] of STATION_WALK_CONNECTORS) {
+      const fromPart = this.parts.find((part) => part.agencyId === fromAgency);
+      const toPart = this.parts.find((part) => part.agencyId === toAgency);
+      const fromLocal = fromPart?.timetable.stopIds.indexOf(fromId) ?? -1;
+      const toLocal = toPart?.timetable.stopIds.indexOf(toId) ?? -1;
+      if (!fromPart || !toPart || fromLocal < 0 || toLocal < 0) continue;
+      const from = fromPart.stopOffset + fromLocal;
+      const to = toPart.stopOffset + toLocal;
+      if (this.stopPatternStart[from + 1] === this.stopPatternStart[from] || this.stopPatternStart[to + 1] === this.stopPatternStart[to]) continue;
+      const meters = haversineMeters(this.stopLat[from]!, this.stopLon[from]!, this.stopLat[to]!, this.stopLon[to]!);
+      if (!Number.isFinite(meters) || meters > MAX_STATION_CONNECTOR_METERS) continue;
+      for (const [a, b] of [[from, to], [to, from]] as const) {
+        if (!lists[a]!.has(b)) lists[a]!.set(b, this.estimatedWalkSeconds(a, b, meters));
       }
     }
     const transferCounts = new Uint32Array(stops + 1);
