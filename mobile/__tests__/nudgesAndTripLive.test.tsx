@@ -140,16 +140,16 @@ describe('live trip notes', () => {
     expect(legNotes(leg({ live: { status: 'tracked', delaySeconds: -120 } }))[0]).toMatchObject({ kind: 'live', text: 'Live: 2 min early' });
   });
 
-  it('flags a cancelled trip and a missed connection, but not a tight one', () => {
+  it('flags a cancelled trip, but not a tight or missed connection', () => {
     expect(legNotes(leg({ live: { status: 'cancelled' } }))).toEqual([{ kind: 'cancelled', text: 'Cancelled', tone: 'danger' }]);
     expect(legNotes(leg({ connection: { status: 'tight', spareSeconds: 70 } }))).toEqual([]);
-    expect(legNotes(leg({ connection: { status: 'missed', spareSeconds: -60 } }))[0]).toMatchObject({ kind: 'missed', tone: 'danger' });
+    expect(legNotes(leg({ connection: { status: 'missed', spareSeconds: -60 } }))).toEqual([]);
   });
 
   it("gives the results card the trip's worst problem, naming the line", () => {
     const first = leg({ live: { status: 'tracked', delaySeconds: 0 } });
-    const second = leg({ line: { name: 'S92', shortName: 'S92' }, connection: { status: 'missed', spareSeconds: -60 } });
-    expect(itineraryNote(trip([first, second]))).toMatchObject({ text: 'Likely to miss the S92', tone: 'danger' });
+    const second = leg({ line: { name: 'S92', shortName: 'S92' }, live: { status: 'cancelled' } });
+    expect(itineraryNote(trip([first, second]))).toMatchObject({ text: 'S92 is cancelled', tone: 'danger' });
     expect(itineraryNote(trip([first]))).toMatchObject({ text: '62 on time', tone: 'live' });
     // A later leg's live time alone isn't worth the card's space.
     expect(itineraryNote(trip([leg(), leg({ live: { status: 'tracked', delaySeconds: 0 } })]))).toBeNull();

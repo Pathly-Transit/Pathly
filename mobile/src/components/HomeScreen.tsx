@@ -1509,7 +1509,7 @@ export function HomeScreen() {
         {savePlaceSheet}
         <Toast message={actionFeedback?.uid === uid ? actionFeedback : null} onHidden={() => setActionFeedback(null)} />
         {/* Admin tools' preview of a new account's onboarding (it saves for real). */}
-        {popupPreview === 'onboarding' ? <View style={StyleSheet.absoluteFill}><OnboardingScreen onDone={() => setPopupPreview(null)} /></View> : null}
+        {popupPreview === 'onboarding' ? <View style={styles.onboardingPreview} testID="home-onboarding-preview"><OnboardingScreen onDone={() => setPopupPreview(null)} /></View> : null}
         <LineLayersSheet choice={lineChoice} lines={layerCandidates} onChange={changeLineChoice} onClose={() => setLayersOpen(false)} visible={layersOpen} />
         <StopRoutesSheet onClose={() => setStopRoutesFor(null)} onOpenRoute={openRouteAtMapStop} stop={stopRoutesFor} />
         <SavedPlaceDetailsSheet
@@ -1546,6 +1546,8 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     left: 0,
     zIndex: 30,
   },
+  // Admin tools' onboarding preview: a whole page, so above the header (30) and the sheet.
+  onboardingPreview: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 40, elevation: 40 },
   header: { paddingTop: 10, paddingHorizontal: 16 },
   underSearch: { alignItems: 'flex-start', gap: 10, marginTop: 10 },
   underSearchContent: { flex: 1, minWidth: 0 },

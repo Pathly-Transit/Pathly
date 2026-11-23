@@ -2,10 +2,10 @@ import { formatTripClock, lineInText, type Itinerary, type TransitStep } from '.
 
 /**
  * What the backend's live check (firebase/functions/src/tripLive.ts) found about a leg, as short
- * notes for the trip screens: live times, a cancelled trip or skipped stop, and a connection into
- * the leg that's likely to be missed. A tight but makeable connection gets no note.
+ * notes for the trip screens: live times, and a cancelled trip or skipped stop. Connections into
+ * the leg, tight or likely missed, get no note.
  */
-export type TripLegNoteKind = 'live' | 'late' | 'cancelled' | 'skips-stop' | 'missed';
+export type TripLegNoteKind = 'live' | 'late' | 'cancelled' | 'skips-stop';
 export type TripLegNote = { kind: TripLegNoteKind; text: string; tone: 'live' | 'warning' | 'danger' };
 
 /** Within this of the plan, a live leg reads as on time. */
@@ -29,9 +29,6 @@ export function legNotes(step: TransitStep): TripLegNote[] {
     if (Math.abs(delay) < ON_TIME_SECONDS) notes.push({ kind: 'live', text: atArrival ? 'Live: arrival on time' : 'Live: on time', tone: 'live' });
     else notes.push({ kind: delay > 0 ? 'late' : 'live', text: `Live: ${atArrival ? 'arrival ' : ''}${minutesText(delay)} ${delay > 0 ? 'late' : 'early'}${leaves}`, tone: delay >= LATE_WARNING_SECONDS ? 'warning' : 'live' });
   }
-  if (step.connection?.status === 'missed') {
-    notes.push({ kind: 'missed', text: 'Likely to miss this connection', tone: 'danger' });
-  }
   return notes;
 }
 
@@ -52,7 +49,6 @@ export function itineraryNote(itinerary: Itinerary): TripLegNote | null {
   const text = {
     cancelled: `${line} is cancelled`,
     'skips-stop': `${line} is skipping your stop`,
-    missed: `Likely to miss the ${line}`,
     late: `${line} running ${minutesText(delay)} late`,
     live: Math.abs(delay) < ON_TIME_SECONDS ? `${line} on time` : `${line} ${minutesText(delay)} early`,
   }[note.kind];

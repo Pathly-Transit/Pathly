@@ -45,6 +45,7 @@ const PAGE_TURN_DISTANCE = 12;
 const CLAIM_DISTANCE = 6;
 /** A quick flick turns the page even when it's shorter than PAGE_TURN_DISTANCE (points per ms). */
 const FLICK_VELOCITY = 0.15;
+const webImmediatePress = Platform.OS === 'web' ? { delayPressIn: 0 } : null;
 
 /** A pulsing block where the minutes will appear, while the first live times load. */
 function TimePlaceholder({ styles }: { styles: ReturnType<typeof createStyles> }) {
@@ -199,8 +200,9 @@ export function TransitCard({ onPress, route, saved = false }: TransitCardProps)
             accessibilityHint="Opens route details. Swipe horizontally for the other direction."
             accessibilityLabel={accessibilityLabelFor(item)}
             accessibilityRole="button"
-            // Pressed at once, so even a quick flick is cancelled as moved rather than left unpressed.
-            delayPressIn={0}
+            // Pressed at once on web (react-native-web waits 50 ms), so even a quick flick is
+            // cancelled as moved rather than left unpressed. Not in RN's Pressable types.
+            {...webImmediatePress}
             focusable={Platform.OS === 'web' ? index === activePage : undefined}
             onPress={() => handlePress(index)}
             onPressIn={handlePressIn}
