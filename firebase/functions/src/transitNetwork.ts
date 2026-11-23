@@ -8,8 +8,8 @@ import { LIRR_AGENCY, METRO_NORTH_AGENCY, MTA_BUS_COMPANY_AGENCY, NICE_AGENCY, N
 /**
  * Every agency's routing timetable (routingTimetable.ts) merged into one network for the trip
  * planner (transitRouter.ts): flat arrays indexed by network-wide stop, pattern and trip numbers,
- * plus what the timetables leave to the planner — the walks between nearby stops, the time to
- * change vehicles at a stop, and a grid for finding the stops near a point.
+ * plus published transfer constraints, the time to change vehicles at a stop, and a spatial
+ * grid for the planner's request-scoped walking-transfer discovery.
  */
 
 export type TransitMode = 'subway' | 'bus' | 'rail' | 'ferry' | 'other';
@@ -22,8 +22,6 @@ export const WALK_METERS_PER_SECOND = 1.3;
  * the street graph before offering it (tripPlanner.ts).
  */
 export const TRANSFER_DETOUR = 1.3;
-/** The farthest apart (straight line) two stops can be for a planned walk between them. */
-export const MAX_TRANSFER_METERS = 450;
 /** Time to spare after a walk to another stop, before the next vehicle leaves. */
 export const WALK_TRANSFER_SLACK_SECONDS = 30;
 /** Down to or up from a subway platform, on top of the walk at street level. */
@@ -144,14 +142,12 @@ export class TransitNetwork {
   readonly stopPatternPattern: Int32Array;
   readonly stopPatternPosition: Int32Array;
 
-  /** Walks (and station changes) from each stop: target stop and seconds (-1: not allowed). */
-  readonly transferStart: Uint32Array;
-  readonly transferTo: Int32Array;
-  readonly transferSeconds: Int32Array;
   /** Timed transfers held for a connection: from trip -> [to trip, stop]. */
   readonly timedTransfers: Map<number, [number, number][]>;
 
   private readonly grid = new Map<number, number[]>();
+  private readonly publishedFrom = new Map<number, Map<number, number>>();
+  private readonly publishedTo = new Map<number, Map<number, number>>();
 
   constructor(timetables: readonly { agencyId: AgencyId; version: string; timetable: RoutingTimetable }[]) {
     this.versionKey = timetables.map((entry) => `${entry.agencyId}@${entry.version}`).join(',');
@@ -331,6 +327,15 @@ export class TransitNetwork {
       else this.grid.set(key, [stop]);
     }
 
+    // Retain the provider's directed constraints separately from inferred geometric links. A
+    // request's walking limit must never overwrite these minima or forbidden passages.
+    for (const [from, to, seconds] of stationTransfers) {
+      if (!this.publishedFrom.has(from)) this.publishedFrom.set(from, new Map());
+      if (!this.publishedTo.has(to)) this.publishedTo.set(to, new Map());
+      this.publishedFrom.get(from)!.set(to, seconds);
+      this.publishedTo.get(to)!.set(from, seconds);
+    }
+
     // Change times at a stop: the feed's own (transfers.txt from a stop to itself), else the mode's default.
     for (const [from, to, seconds] of stationTransfers) {
       if (from === to && seconds >= 0) this.stopChangeSeconds[from] = Math.max(this.stopChangeSeconds[from]!, seconds);
@@ -339,33 +344,6 @@ export class TransitNetwork {
       if (this.stopChangeSeconds[stop]! < 0) this.stopChangeSeconds[stop] = DEFAULT_CHANGE_SECONDS[this.stopMode[stop]!];
     }
 
-    // Walks between stops: the feed's station transfers, and any stop within MAX_TRANSFER_METERS.
-    const lists: Map<number, number>[] = Array.from({ length: stops }, () => new Map<number, number>());
-    for (const [from, to, seconds] of stationTransfers) {
-      if (from === to) continue;
-      lists[from]!.set(to, seconds);
-    }
-    for (let stop = 0; stop < stops; stop += 1) {
-      if (this.stopPatternStart[stop + 1] === this.stopPatternStart[stop]) continue;
-      const own = lists[stop]!;
-      for (const other of this.stopsNear(this.stopLat[stop]!, this.stopLon[stop]!, MAX_TRANSFER_METERS)) {
-        if (other.stop === stop || own.has(other.stop)) continue;
-        own.set(other.stop, this.estimatedWalkSeconds(stop, other.stop, other.meters));
-      }
-    }
-    const transferCounts = new Uint32Array(stops + 1);
-    for (let stop = 0; stop < stops; stop += 1) transferCounts[stop + 1] = transferCounts[stop]! + lists[stop]!.size;
-    this.transferStart = transferCounts;
-    this.transferTo = new Int32Array(transferCounts[stops]!);
-    this.transferSeconds = new Int32Array(transferCounts[stops]!);
-    for (let stop = 0; stop < stops; stop += 1) {
-      let slot = transferCounts[stop]!;
-      for (const [to, seconds] of lists[stop]!) {
-        this.transferTo[slot] = to;
-        this.transferSeconds[slot] = seconds;
-        slot += 1;
-      }
-    }
   }
 
   private cellKey(row: number, column: number): number {
@@ -390,9 +368,15 @@ export class TransitNetwork {
     return found.sort((a, b) => a.meters - b.meters);
   }
 
-  /** Walking time between two stops estimated from their straight-line distance. */
-  estimatedWalkSeconds(from: number, to: number, straightMeters: number): number {
-    return Math.round((straightMeters * TRANSFER_DETOUR) / WALK_METERS_PER_SECOND) + WALK_TRANSFER_SLACK_SECONDS + this.stationAccessSeconds(from, to);
+  /** Original directed GTFS minimum (-1 forbids), never an inferred walk cost. */
+  publishedTransferSeconds(from: number, to: number): number | undefined {
+    return this.publishedFrom.get(from)?.get(to);
+  }
+
+  /** Published outgoing edges, or incoming edges for an arrive-by search. */
+  publishedTransfers(stop: number, direction: 'forward' | 'backward'): readonly { stop: number; seconds: number }[] {
+    const transfers = (direction === 'forward' ? this.publishedFrom : this.publishedTo).get(stop);
+    return transfers ? [...transfers].map(([target, seconds]) => ({ stop: target, seconds })) : [];
   }
 
   /** Stairs to and from subway platforms when a walk leaves or enters a station (not between two platforms of one). */
@@ -401,15 +385,6 @@ export class TransitNetwork {
     const toSubway = this.stopMode[to] === 'subway';
     if (fromSubway && toSubway) return 0;
     return (fromSubway ? STATION_ACCESS_SECONDS : 0) + (toSubway ? STATION_ACCESS_SECONDS : 0);
-  }
-
-  /** Replaces a walk's estimate (both ways) once the street graph has measured it; -1 forbids it. */
-  correctTransfer(from: number, to: number, seconds: number): void {
-    for (const [a, b] of [[from, to], [to, from]] as const) {
-      for (let slot = this.transferStart[a]!; slot < this.transferStart[a + 1]!; slot += 1) {
-        if (this.transferTo[slot] === b) this.transferSeconds[slot] = seconds;
-      }
-    }
   }
 
   /** The stop's name as riders know it: its station's, for a platform. */

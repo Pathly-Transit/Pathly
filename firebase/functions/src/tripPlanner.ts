@@ -11,7 +11,6 @@ import {
   TRANSFER_DETOUR,
   TransitNetwork,
   WALK_METERS_PER_SECOND,
-  WALK_TRANSFER_SLACK_SECONDS,
   type ServiceDay,
   type TransitMode,
 } from './transitNetwork';
@@ -35,6 +34,7 @@ import type { TripRunRef } from './tripLiveTypes';
 import { gtfsClock, rememberRunSchedule, resolveSelectedRun, scheduledRun, scheduleVersionForTimetable } from './tripRunSchedule';
 import { recoveryNetwork, type RecoveryCoverage, type RecoveryNetwork } from './tripRecoveryNetwork';
 import { hasWalkingData, walkingMeters, walkingPath } from './walkingGraph';
+import { createWalkingTransfers, type TransferResolver, type TransferWalk } from './walkingTransfers';
 
 /**
  * Pathly's own transit trip planner: itineraries between two points from the agencies' published
@@ -71,9 +71,9 @@ const WALK_SAVED_FOR_EXTRA_RIDE_SECONDS = 5 * 60;
  */
 const CUMULATIVE_BAN_SEARCHES = 3;
 const SINGLE_BAN_SEARCHES = 2;
-/** Measured walks this much longer than estimated make the planner try again without the estimate. */
-const WALK_CHECK_TOLERANCE_SECONDS = 45;
-const MAX_WALK_CHECK_PASSES = 3;
+/** Bound routing work, returning only journeys whose transfer walks have been validated. */
+const MAX_WALK_CHECK_PASSES = 12;
+const MAX_TRANSFER_WALK_CHECKS = 128;
 /** Departures offered for a ride: a little before it to a few hours after. */
 const OPTIONS_BEFORE_SECONDS = 20 * 60;
 const OPTIONS_AFTER_SECONDS = 3 * 3600;
@@ -85,7 +85,7 @@ const MIN_WALK_STEP_METERS = 30;
 // ---------------------------------------------------------------------------------------------
 // The network, built once per instance and again when any agency's timetable changes.
 
-type LoadedNetwork = { key: string; retryAt?: number; network: TransitNetwork; router: TransitRouter; walks: Map<string, { meters: number; path: LatLng[] } | null> };
+type LoadedNetwork = { key: string; retryAt?: number; network: TransitNetwork; router: TransitRouter; walks: Map<string, TransferWalk> };
 const NETWORK_RETRY_MS = 5_000;
 let loaded: LoadedNetwork | null = null;
 let loading: Promise<LoadedNetwork | null> | null = null;
@@ -178,6 +178,7 @@ type PlanContext = {
   network: TransitNetwork;
   router: TransitRouter;
   walks: LoadedNetwork['walks'];
+  transfers: TransferResolver;
   days: ServiceDay[];
   active: Uint8Array[];
   baseStartMs: number;
@@ -237,8 +238,17 @@ function walkableStops(network: TransitNetwork, point: LatLng, lessWalking: bool
   return linesAt(network, nearby) >= MIN_NEARBY_LINES ? nearby : stopsWithinWalk(network, point, far);
 }
 
+/** An incoming ride starts at its alighting stop, so initial access is a transfer walk too. */
+function incomingAccess(network: TransitNetwork, transfers: TransferResolver, stop: number): PlanContext['access'] {
+  return transfers.resolve(stop, 'forward').map((edge) => ({
+    ...edge,
+    meters: haversineMeters(network.stopLat[stop]!, network.stopLon[stop]!, network.stopLat[edge.stop]!, network.stopLon[edge.stop]!),
+  }));
+}
+
 function search(context: PlanContext, time: number, extra: Partial<SearchOptions> = {}): Journey[] {
-  const options: SearchOptions = { days: context.days, maxRounds: MAX_ROUNDS, modes: context.modes, horizonSeconds: HORIZON_SECONDS, ...(context.bannedRuns ? { bannedRuns: context.bannedRuns } : {}), ...(context.firstRoutes ? { firstRoutes: context.firstRoutes } : {}), ...(context.incomingRide ? { incomingRide: context.incomingRide } : {}), ...extra };
+  if (context.incomingRide) context.access = incomingAccess(context.network, context.transfers, context.incomingRide.stop);
+  const options: SearchOptions = { days: context.days, maxRounds: MAX_ROUNDS, modes: context.modes, horizonSeconds: HORIZON_SECONDS, transfers: context.transfers.resolve, ...(context.bannedRuns ? { bannedRuns: context.bannedRuns } : {}), ...(context.firstRoutes ? { firstRoutes: context.firstRoutes } : {}), ...(context.incomingRide ? { incomingRide: context.incomingRide } : {}), ...extra };
   const journeys = context.arriveBy
     ? context.router.backward(time, context.access, context.egress, options, context.active)
     : context.router.forward(time, context.access, context.egress, options, context.active);
@@ -326,50 +336,12 @@ function boardWhereClosest(context: PlanContext, journey: Journey): Journey {
 
 const walkKey = (from: number, to: number) => `${from}>${to}`;
 
-/**
- * Checks each walk between stops the journeys use against the street graph, correcting the
- * network's estimate where the real walk is longer (or impossible). True when anything changed,
- * so the searches are run again.
- */
-function checkWalks(context: PlanContext, journeys: readonly Journey[]): boolean {
-  const { network, walks } = context;
-  if (!hasWalkingData()) return false;
-  let changed = false;
-  for (const journey of journeys) {
-    for (const leg of journey.legs) {
-      if (leg.kind !== 'walk' || leg.from === null || leg.to === null) continue;
-      const key = walkKey(leg.from, leg.to);
-      if (walks.has(key)) continue;
-      // Platforms of one station (and the feed's own station transfers) are trusted as published.
-      if (network.stopParent[leg.from]! >= 0 && network.stopParent[leg.from] === network.stopParent[leg.to]) {
-        walks.set(key, null);
-        continue;
-      }
-      const from = { lat: network.stopLat[leg.from]!, lng: network.stopLon[leg.from]! };
-      const to = { lat: network.stopLat[leg.to]!, lng: network.stopLon[leg.to]! };
-      const straight = haversineMeters(from.lat, from.lng, to.lat, to.lng);
-      const walk = walkingPath(from.lat, from.lng, to.lat, to.lng, Math.max(1500, straight * 4));
-      const reverseKey = walkKey(leg.to, leg.from);
-      if (!walk) {
-        network.correctTransfer(leg.from, leg.to, -1);
-        context.baseline?.network.correctTransfer(leg.from, leg.to, -1);
-        walks.set(key, null);
-        walks.set(reverseKey, null);
-        changed = true;
-        continue;
-      }
-      const path = walk.path.map((point) => ({ lat: point.lat, lng: point.lon }));
-      walks.set(key, { meters: walk.meters, path });
-      walks.set(reverseKey, { meters: walk.meters, path: [...path].reverse() });
-      const seconds = Math.round(walk.meters / WALK_METERS_PER_SECOND) + WALK_TRANSFER_SLACK_SECONDS + network.stationAccessSeconds(leg.from, leg.to);
-      if (seconds > leg.seconds + WALK_CHECK_TOLERANCE_SECONDS) {
-        network.correctTransfer(leg.from, leg.to, seconds);
-        context.baseline?.network.correctTransfer(leg.from, leg.to, seconds);
-        changed = true;
-      }
-    }
-  }
-  return changed;
+/** The initial recovery walk is encoded as access, but has the same transfer policy. */
+function transferJourney(context: PlanContext, journey: Journey): Journey {
+  const first = journey.legs[0];
+  if (!context.incomingRide || first?.kind !== 'walk' || first.from !== null || first.to === null
+    || first.to === context.incomingRide.stop) return journey;
+  return { ...journey, legs: [{ ...first, from: context.incomingRide.stop }, ...journey.legs.slice(1)] };
 }
 
 const walkingSecondsOf = (journey: Journey) => journey.legs.reduce((sum, leg) => sum + (leg.kind === 'walk' ? leg.seconds : 0), 0);
@@ -422,9 +394,10 @@ function walkStep(context: PlanContext, leg: WalkLeg, toName: string): WalkStep 
   const to = leg.to === null ? context.destination : stopPoint(network, leg.to);
   let meters: number | null = null;
   let path: LatLng[] | null = null;
-  if (leg.from !== null && leg.to !== null) {
-    const known = context.walks.get(walkKey(leg.from, leg.to));
-    if (known) ({ meters, path } = known);
+  const fromStop = leg.from ?? (context.incomingRide && leg.to !== null ? context.incomingRide.stop : null);
+  if (fromStop !== null && leg.to !== null) {
+    const known = context.walks.get(walkKey(fromStop, leg.to));
+    if (known?.kind === 'measured') ({ meters, path } = known);
   }
   if (path === null && hasWalkingData()) {
     const walk = walkingPath(from.lat, from.lng, to.lat, to.lng, Math.max(3000, haversineMeters(from.lat, from.lng, to.lat, to.lng) * 4));
@@ -704,6 +677,7 @@ export async function planTransitTrip({ request, origin, destination, nowMs, est
   const { baseStartMs, days } = serviceDaysAround(atMs);
   const active = network.activeServices(days);
   const lessWalking = request.lessWalking === true;
+  const transfers = createWalkingTransfers(network, walks, lessWalking);
   let incomingRide: SearchOptions['incomingRide'];
   let incomingDate: number | undefined;
   const incoming = request.recovery?.incomingRun;
@@ -722,24 +696,14 @@ export async function planTransitTrip({ request, origin, destination, nowMs, est
     incomingDate = date;
     incomingRide = { trip, stop, heldTrips: (network.timedTransfers.get(trip) ?? []).filter(([target, atStop]) => atStop === stop && active[day]![network.tripService[target]!] === 1).map(([target]) => target) };
   }
-  const access = walkableStops(network, origin, lessWalking).flatMap((entry) => {
-    if (!incomingRide) return [entry];
-    if (entry.stop === incomingRide.stop) return [];
-    let published: number | undefined;
-    for (let slot = network.transferStart[incomingRide.stop]!; slot < network.transferStart[incomingRide.stop + 1]!; slot += 1) {
-      if (network.transferTo[slot] === entry.stop) { published = network.transferSeconds[slot]!; break; }
-    }
-    if (published !== undefined && published < 0) return [];
-    // This is a transfer walk, including the planner's published/physical walk allowance once.
-    const seconds = published ?? Math.round(entry.meters / WALK_METERS_PER_SECOND) + WALK_TRANSFER_SLACK_SECONDS + network.stationAccessSeconds(incomingRide.stop, entry.stop);
-    return [{ ...entry, seconds }];
-  });
+  const access = incomingRide ? incomingAccess(network, transfers, incomingRide.stop) : walkableStops(network, origin, lessWalking);
   const egress = walkableStops(network, destination, lessWalking);
   if ((access.length === 0 && !incomingRide) || egress.length === 0) return [];
   let context: PlanContext = {
     network,
     router,
     walks,
+    transfers,
     days,
     active,
     baseStartMs,
@@ -764,7 +728,7 @@ export async function planTransitTrip({ request, origin, destination, nowMs, est
     const baseline = context;
     const preferred = request.recovery.preferredRoute;
     const preferredRoutes = preferred ? new Set(recovery.network.routes.flatMap((route, index) => route.agencyId === preferred.agencyId && route.routeId === preferred.routeId ? [index] : [])) : undefined;
-    context = { ...context, network: recovery.network, router: new TransitRouter(recovery.network, MAX_ROUNDS), active: recovery.network.activeServices(days), bannedRuns: recovery.bannedRuns, baseline, recovery, ...(preferredRoutes?.size ? { firstRoutes: preferredRoutes } : {}) };
+    context = { ...context, network: recovery.network, router: new TransitRouter(recovery.network, MAX_ROUNDS), transfers: createWalkingTransfers(recovery.network, walks, lessWalking), active: recovery.network.activeServices(days), bannedRuns: recovery.bannedRuns, baseline, recovery, ...(preferredRoutes?.size ? { firstRoutes: preferredRoutes } : {}) };
     if (incomingRide && incomingDate !== undefined) {
       const fromPart = network.parts.find((part) => incomingRide.trip >= part.tripOffset && incomingRide.trip < part.tripOffset + part.timetable.tripIds.length)!;
       const intoPart = recovery.network.parts.find((part) => part.agencyId === fromPart.agencyId)!;
@@ -777,6 +741,8 @@ export async function planTransitTrip({ request, origin, destination, nowMs, est
   }
 
   let journeys: Journey[] = [];
+  const settled: Journey[] = [];
+  let checkedWalks = 0;
   let rejectedBaseline = false;
   const reachableJourneys = () => runSearches(context).filter((journey) => {
     const valid = hasBaselineInterval(context, journey);
@@ -792,8 +758,15 @@ export async function planTransitTrip({ request, origin, destination, nowMs, est
       reachable = reachableJourneys();
     }
     journeys = chooseJourneys(reachable, arriveBy, context.time);
-    if (!checkWalks(context, journeys)) break;
+    const validation = context.transfers.validate(journeys.map((journey) => transferJourney(context, journey)), MAX_TRANSFER_WALK_CHECKS - checkedWalks);
+    checkedWalks += validation.checks;
+    settled.push(...journeys.filter((journey) => context.transfers.isValidated(transferJourney(context, journey))));
+    if (!validation.changed) break;
   }
+  if (journeys.some((journey) => !context.transfers.isValidated(transferJourney(context, journey)))) {
+    logger.info('Omitted unresolved transfer candidates after bounded walking validation', { event: 'trip_planner_walk_validation_limited', checkedWalks });
+  }
+  journeys = chooseJourneys(settled.filter((journey) => context.transfers.isValidated(transferJourney(context, journey))), arriveBy, context.time);
   const itineraries = journeys.map((journey) => itineraryFor(context, journey, request.destination.label, estimateFare));
   if (context.recovery) recoveryCoverages.set(itineraries, rejectedBaseline
     ? { ...context.recovery.coverage, state: 'partial', reasons: [...context.recovery.coverage.reasons, 'baseline-timing-conflict'] }

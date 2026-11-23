@@ -197,8 +197,6 @@ export async function recoveryNetwork(base: TransitNetwork, days: readonly Servi
   }
   const parts = base.parts.map((part) => ({ agencyId: part.agencyId, version: part.version, timetable: appendRuns(part.timetable, changed.filter((run) => run.trip >= part.tripOffset && run.trip < part.tripOffset + part.timetable.tripIds.length), part.tripOffset, baseStartMs, days) }));
   const network = changed.length ? new TransitNetwork(parts) : base;
-  if (network !== base && network.transferSeconds.length === base.transferSeconds.length
-    && network.transferTo.every((stop, index) => stop === base.transferTo[index])) network.transferSeconds.set(base.transferSeconds);
   const baselineTrips = new Map<number, number>();
   const liveStops = new Map<number, TripLegObservation[]>();
   const mappedBans = new Set<string>();
