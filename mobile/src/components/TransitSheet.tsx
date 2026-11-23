@@ -376,20 +376,19 @@ export function TransitSheet({
       style={styles.pageScroll}
       testID={`${activeTab}-route-list`}
     >
-      {webMap ? (
-        <>
-          {/* The map is always as tall as it shows with the sheet at its lowest, so it never resizes
-              (which made its bottom edge flicker); the sheet over it pads it instead, keeping what
-              it's centered on in the middle of what shows. */}
-          <View style={[styles.stickyMap, { height: mapHeight + restOffset }]} testID="transit-map-window">
+      {webMap ? [
+          // Separate direct children: native ScrollView treats a Fragment as one sticky header,
+          // which would pin the buttons with the map and leave them covered by the resting sheet.
+          // The map stays as tall as it shows with the sheet at its lowest; the covering sheet
+          // pads it instead of resizing it, keeping the camera centered in the visible area.
+          <View key="map" style={[styles.stickyMap, { height: mapHeight + restOffset }]} testID="transit-map-window">
             <MapSheetInsetContext.Provider value={sheetInset}>{webMap}</MapSheetInsetContext.Provider>
-          </View>
-          {/* The map buttons sit just above the sheet, so their box ends where the sheet's top edge does. */}
-          <View pointerEvents="box-none" style={[styles.mapButtonsOverSticky, { height: mapHeight + restOffset, marginTop: -(mapHeight + restOffset), paddingTop: restOffset }]}>
+          </View>,
+          // The map buttons scroll just above the sheet; their box ends at the sheet's top edge.
+          <View key="map-buttons" pointerEvents="box-none" style={[styles.mapButtonsOverSticky, { height: mapHeight + restOffset, marginTop: -(mapHeight + restOffset), paddingTop: restOffset }]}>
             <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}</View>
-          </View>
-        </>
-      ) : (
+          </View>,
+      ] : (
         <View pointerEvents="box-none" style={{ height: mapHeight + restOffset, paddingTop: restOffset }} testID="transit-map-window">
           <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}</View>
         </View>
