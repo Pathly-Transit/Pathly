@@ -78,6 +78,22 @@ export function addressAfterName(title: string, address: string): string {
   return parts.join(', ');
 }
 
+/**
+ * The rest of an address shown under a heading that already names its street, as trip details'
+ * arrival does: "123 William St, New York, NY" under "123 William Street" reads "New York, NY".
+ * Also drops a first part that only adds or loses the house number ("William St" over
+ * "123 William St"). Empty when nothing is left to add.
+ */
+export function addressAfterHeading(heading: string, address: string): string {
+  const rest = addressAfterName(heading, address);
+  const parts = rest.split(',').map((part) => part.trim()).filter(Boolean);
+  const title = addressKey(heading);
+  const first = parts[0] ? addressKey(parts[0]) : '';
+  const sameStreet = title !== '' && first !== '' && (first === title || first.endsWith(` ${title}`) || title.endsWith(` ${first}`));
+  if (sameStreet) parts.shift();
+  return parts.join(', ');
+}
+
 const PLACES_BASE_URL = 'https://places.googleapis.com/v1';
 const DETAILS_FIELD_MASK = 'id,displayName,formattedAddress,location';
 // Pathly is in English. Without a language, Google names some places in another one

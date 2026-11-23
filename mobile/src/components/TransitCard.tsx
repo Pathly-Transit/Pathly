@@ -20,9 +20,7 @@ import { Icon } from './Icon';
 import { LIVE_SIGNAL_WIDTH, LiveSignal } from './LiveSignal';
 import { PressableScale } from './PressableScale';
 import { isPath, PathMark } from './RouteBadge';
-import { afterClick } from './afterClick';
 import { useSkeletonPulse } from './Skeleton';
-import { usesWebMouseDrag } from './webMouseDrag';
 import { radii } from '../theme/shape';
 
 type TransitCardProps = {
@@ -36,8 +34,6 @@ type TransitCardProps = {
 const CARD_HORIZONTAL_MARGIN = 8;
 /** The card is a fixed 104 tall, so the big time can only grow this much with the phone's text size. */
 const MAX_TIME_FONT_SCALE = 1.3;
-// How far a touch/mouse-down has to travel before it's treated as a swipe instead of a tap.
-const SWIPE_THRESHOLD = 24;
 /**
  * A drag counts as a page swipe once its sideways part is at least this share of its up-down part
  * (about 55° from horizontal), so a swipe needn't be dead level; a steeper drag scrolls the list.
@@ -128,9 +124,34 @@ export function TransitCard({ onPress, route, saved = false }: TransitCardProps)
   const pageWidth = Math.min(width, 540) - CARD_HORIZONTAL_MARGIN * 2;
   const [activePage, setActivePage] = useState<number>(() => openingDirectionIndex(route));
 
-  // Native: the pages sit in a row that follows the finger, then settles on `activePage`. A
+  // A tap opens the route only when the pointer stayed put. On web a press still ends in a click
+  // after a mouse drag (react-native-web fires onPress from the click), so a swipe that the card
+  // or the tab pager took over must not also count as a tap. Taking the drag cancels the press
+  // with the pointer already moved, which is what marks it here.
+  const pressStart = useRef<{ x: number; y: number } | null>(null);
+  const pressMoved = useRef(false);
+  const handlePressIn = (event: GestureResponderEvent) => {
+    pressStart.current = { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY };
+    pressMoved.current = false;
+  };
+  const handlePressOut = (event: GestureResponderEvent) => {
+    const start = pressStart.current;
+    pressStart.current = null;
+    if (start && Math.hypot(event.nativeEvent.pageX - start.x, event.nativeEvent.pageY - start.y) > CLAIM_DISTANCE) pressMoved.current = true;
+  };
+  const handlePress = (index: number) => {
+    // The drag's own click: skipped once, so a later keyboard press still opens the route.
+    if (pressMoved.current) {
+      pressMoved.current = false;
+      return;
+    }
+    onPress(index);
+  };
+
+  // The pages sit in a row that follows the finger (or mouse), then settles on `activePage`. A
   // horizontal scroller nested in the vertical list only took dead-level swipes on Android (the list
-  // claimed anything at an angle), so the card claims sideways-ish drags itself instead. It starts
+  // claimed anything at an angle), so the card claims sideways-ish drags itself instead, in the
+  // capture phase, ahead of the Nearby/Favorites pager around it (TransitSheet). It starts
   // already on the opening page, so nothing slides into place as the card appears.
   const [slide] = useState(() => new Animated.Value(-activePage * pageWidth));
   const pageCount = route.directions.length;
@@ -141,7 +162,7 @@ export function TransitCard({ onPress, route, saved = false }: TransitCardProps)
     const settle = () => Animated.spring(slide, { toValue: -activePage * pageWidth, bounciness: 0, speed: 18, useNativeDriver: Platform.OS !== 'web' }).start();
     return PanResponder.create({
       onMoveShouldSetPanResponderCapture: (_event, gesture) => pageCount > 1 && Math.abs(gesture.dx) > CLAIM_DISTANCE && Math.abs(gesture.dx) > Math.abs(gesture.dy) * SWIPE_SLOPE,
-      // Once the card has the swipe, the list mustn't take it back mid-drag.
+      // Once the card has the swipe, neither the list nor the Nearby/Favorites pager may take it back.
       onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_event, gesture) => slide.setValue(-activePage * pageWidth + gesture.dx),
       onPanResponderRelease: (_event, gesture) => {
@@ -162,75 +183,35 @@ export function TransitCard({ onPress, route, saved = false }: TransitCardProps)
     return `${route.agency} ${route.routeName}. ${directionDestination(item.direction)}. ${item.stopName}. ${timing}, ${item.live ? 'live GPS prediction' : 'scheduled time'}.`;
   };
 
-  // react-native-web doesn't reliably hand a drag off from a nested Pressable to its parent
-  // ScrollView (the same class of gesture conflict already hit with the bottom sheet's drag
-  // handle) — a swipe attempt there just registers as a tap. Native keeps the ScrollView
-  // paging below, which already works correctly there. On web, a single Pressable spanning
-  // the active page tracks press-start/press-end position itself (Pressable already
-  // normalizes touch and mouse input) and decides tap-vs-swipe from the horizontal distance.
-  const dragStartX = useRef<number | null>(null);
-  const dragStartY = useRef(0);
-
-  const handlePressIn = (event: GestureResponderEvent) => {
-    dragStartX.current = event.nativeEvent.pageX;
-    dragStartY.current = event.nativeEvent.pageY;
-  };
-
-  const handlePressOut = (event: GestureResponderEvent) => {
-    const startX = dragStartX.current;
-    dragStartX.current = null;
-    if (startX == null) return;
-    const dx = event.nativeEvent.pageX - startX;
-    // A vertical drag scrolled the list; it isn't a tap on the card under the finger.
-    if (Math.abs(event.nativeEvent.pageY - dragStartY.current) > SWIPE_THRESHOLD) return;
-    if (Math.abs(dx) <= SWIPE_THRESHOLD) {
-      afterClick(() => onPress(activePage));
-      return;
-    }
-    const direction = dx < 0 ? 1 : -1;
-    setActivePage((current) => Math.min(Math.max(current + direction, 0), route.directions.length - 1));
-  };
-
-  const webActiveDirection = route.directions[activePage] ?? route.directions[0];
-
   return (
     <View
       style={[styles.card, { backgroundColor: routeColor(route.color) }]}
       testID={`route-card-${route.id}`}
     >
-      {usesWebMouseDrag ? (
-        <PressableScale
-          accessibilityHint="Opens route details. Swipe horizontally for the other direction."
-          accessibilityLabel={accessibilityLabelFor(webActiveDirection)}
-          accessibilityRole="button"
-          onPressIn={handlePressIn}
-          onPressOut={handlePressOut}
-          style={[styles.page, { width: pageWidth }]}
-          testID={`route-card-${route.id}-${activePage === 0 ? 'primary' : 'alternate'}`}
-        >
-          <PageBody index={activePage} item={webActiveDirection} route={route} styles={styles} />
-        </PressableScale>
-      ) : (
-        <Animated.View
-          {...swipe.panHandlers}
-          style={{ flexDirection: 'row', width: pageWidth * pageCount, transform: [{ translateX: slide }] }}
-          testID={`transit-${route.id}-directions`}
-        >
-          {route.directions.map((item, index) => (
-            <PressableScale
-              key={`${item.direction}-${index}`}
-              accessibilityHint="Opens route details. Swipe horizontally for the other direction."
-              accessibilityLabel={accessibilityLabelFor(item)}
-              accessibilityRole="button"
-              onPress={() => onPress(index)}
-              style={[styles.page, { width: pageWidth }]}
-              testID={`route-card-${route.id}-${index === 0 ? 'primary' : 'alternate'}`}
-            >
-              <PageBody index={index} item={item} route={route} styles={styles} />
-            </PressableScale>
-          ))}
-        </Animated.View>
-      )}
+      <Animated.View
+        {...swipe.panHandlers}
+        style={[styles.pages, { width: pageWidth * pageCount, transform: [{ translateX: slide }] }]}
+        testID={`transit-${route.id}-directions`}
+      >
+        {route.directions.map((item, index) => (
+          <PressableScale
+            key={`${item.direction}-${index}`}
+            accessibilityHint="Opens route details. Swipe horizontally for the other direction."
+            accessibilityLabel={accessibilityLabelFor(item)}
+            accessibilityRole="button"
+            // Pressed at once, so even a quick flick is cancelled as moved rather than left unpressed.
+            delayPressIn={0}
+            focusable={Platform.OS === 'web' ? index === activePage : undefined}
+            onPress={() => handlePress(index)}
+            onPressIn={handlePressIn}
+            onPressOut={handlePressOut}
+            style={[styles.page, { width: pageWidth }]}
+            testID={`route-card-${route.id}-${index === 0 ? 'primary' : 'alternate'}`}
+          >
+            <PageBody index={index} item={item} route={route} styles={styles} />
+          </PressableScale>
+        ))}
+      </Animated.View>
 
       {saved ? <View pointerEvents="none" style={styles.savedBadge} testID={`route-card-${route.id}-saved`}><Icon color="rgba(255,255,255,0.9)" name="favorite" size={12} /></View> : null}
       <View accessibilityElementsHidden={true} style={styles.pageDots}>
@@ -262,6 +243,9 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     paddingTop: 11,
     paddingBottom: 18,
   },
+  // The pages sit side by side and slide under the finger (or mouse). On web, dragging with the
+  // mouse mustn't select the card's text.
+  pages: { flexDirection: 'row', ...(Platform.OS === 'web' ? { userSelect: 'none' as const } : null) },
   copy: { minWidth: 0, flex: 1 },
   routeName: { color: colors.white, ...typography.displayTime },
   pathMark: { alignSelf: 'flex-start', height: 29, justifyContent: 'center' },

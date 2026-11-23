@@ -129,7 +129,7 @@ export function RideGuideView({ follow: followTrip = null, live = null, timing =
   const model = {
     ...toTripDetailModel(projection!.projectedItinerary, request.stops[0]!.name, alight.name, false, colors.primary, departures, preferences.travel.fareType),
     arriveTime: projection!.arrivalTime ? formatTripClock(projection!.arrivalTime) : 'Updating…',
-    arrivalLabel: projection!.confidence === 'scheduled' ? 'Scheduled arrival' : projection!.confidence === 'estimated' ? 'Expected arrival' : 'Arrive',
+    arrivalLabel: projection!.confidence === 'estimated' ? 'Expected arrival' : 'Arrive',
     detailNote: projection!.confidence === 'stale' ? 'Live timing is out of date. Checking for an update.'
       : projection!.confidence === 'unavailable' ? 'Checking your arrival and connections.' : undefined,
     // No fare is known for a ride picked this way; the page doesn't guess one.

@@ -3,7 +3,7 @@ import { fireEvent, render } from '@testing-library/react-native';
 import { subwayExpressLine } from '../src/components/RouteBadge';
 import { SavePlaceSheet } from '../src/components/SavePlaceSheet';
 import { savedLocationIcon, savedPlaceLines } from '../src/components/FavoritesStrip';
-import { addressAfterName } from '../src/data/placesSearch';
+import { addressAfterHeading, addressAfterName } from '../src/data/placesSearch';
 import { findLabeledLocation, placeToLocation, sortSavedLocations, type SavedLocation } from '../src/data/userData';
 import { AppSettingsProvider } from '../src/theme/AppSettings';
 
@@ -12,6 +12,15 @@ const saved = (id: string, title: string, subtitle: string, extra: { label?: str
   id,
   address: { ...placeToLocation(place(id, title, subtitle), 'Destination'), ...extra },
   dateSaved: null,
+});
+
+describe("trip details' arrival address", () => {
+  it('leaves out the street the heading already names', () => {
+    expect(addressAfterHeading('123 William Street', '123 William St, New York, NY 10038, USA')).toBe('New York, NY 10038');
+    expect(addressAfterHeading('William Street', '123 William St, New York, NY 10038')).toBe('New York, NY 10038');
+    expect(addressAfterHeading('123 William St', '123 William St')).toBe('');
+    expect(addressAfterHeading('Stony Brook University', '100 Nicolls Rd, Stony Brook, NY 11794')).toBe('100 Nicolls Rd, Stony Brook, NY 11794');
+  });
 });
 
 describe('search result second lines', () => {

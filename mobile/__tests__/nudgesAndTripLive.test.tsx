@@ -140,9 +140,9 @@ describe('live trip notes', () => {
     expect(legNotes(leg({ live: { status: 'tracked', delaySeconds: -120 } }))[0]).toMatchObject({ kind: 'live', text: 'Live: 2 min early' });
   });
 
-  it('flags a cancelled trip and a tight or missed connection', () => {
+  it('flags a cancelled trip and a missed connection, but not a tight one', () => {
     expect(legNotes(leg({ live: { status: 'cancelled' } }))).toEqual([{ kind: 'cancelled', text: 'Cancelled', tone: 'danger' }]);
-    expect(legNotes(leg({ connection: { status: 'tight', spareSeconds: 70 } }))).toEqual([{ kind: 'tight', text: 'Tight connection, 1 min to spare', tone: 'warning' }]);
+    expect(legNotes(leg({ connection: { status: 'tight', spareSeconds: 70 } }))).toEqual([]);
     expect(legNotes(leg({ connection: { status: 'missed', spareSeconds: -60 } }))[0]).toMatchObject({ kind: 'missed', tone: 'danger' });
   });
 

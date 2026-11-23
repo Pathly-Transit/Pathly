@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { addressAfterHeading } from '../data/placesSearch';
 import { useRouteColor } from '../data/routeColors';
 import { withAlpha } from '../data/routeDirection';
 import { routes, type ServiceAlert } from '../data/transit';
@@ -436,6 +437,8 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
   const [pickingEndStop, setPickingEndStop] = useState(false);
   // Only a list cut off to "+N" has more to show.
   const hasDestinationLines = (model.destinationLines?.length ?? 0) > MAX_ARRIVAL_BADGES;
+  // An address destination is already named by its street above, so only the rest of it shows.
+  const destinationAddress = model.destinationAddress ? addressAfterHeading(model.destination, model.destinationAddress) : '';
   const toggleLegAlerts = (index: number) => {
     ease();
     setOpenAlertLegs((current) => {
@@ -864,7 +867,7 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
         {model.walkAfter ? <WalkCard testID={`${testPrefix}-walk-end`} walk={model.walkAfter} /> : null}
         <PressableScale
           accessibilityHint={hasDestinationLines ? 'Shows every line at this stop' : undefined}
-          accessibilityLabel={`Arrive at ${model.destination}${model.destinationAddress ? `, ${model.destinationAddress}` : ''}, ${model.arriveTime}`}
+          accessibilityLabel={`Arrive at ${model.destination}${destinationAddress ? `, ${destinationAddress}` : ''}, ${model.arriveTime}`}
           accessibilityRole={hasDestinationLines ? 'button' : undefined}
           disabled={!hasDestinationLines}
           onPress={() => setDestinationLinesOpen(true)}
@@ -879,7 +882,7 @@ export function SharedTripDetailView({ actionLabel, backLabel, beforeSteps, endS
                 {model.destinationLines.slice(0, MAX_ARRIVAL_BADGES).map((line) => <RouteBadge key={line.shortName} agency={line.agency} color={tint(line.color)} mode={line.mode} shortName={line.shortName} size="small" />)}
                 {model.destinationLines.length > MAX_ARRIVAL_BADGES ? <Text style={styles.arrivalLabel}>{`+${model.destinationLines.length - MAX_ARRIVAL_BADGES}`}</Text> : null}
               </View>
-            ) : model.destinationAddress ? <Text numberOfLines={2} style={styles.headerDirection}>{model.destinationAddress}</Text> : null}
+            ) : destinationAddress ? <Text numberOfLines={2} style={styles.headerDirection}>{destinationAddress}</Text> : null}
           </View>
           <View style={styles.arrivalTime}>
             <Text style={styles.arrivalLabel}>{model.arrivalLabel ?? 'Arrive'}</Text>

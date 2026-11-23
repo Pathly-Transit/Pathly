@@ -268,7 +268,7 @@ export function PlannedTripDetailView({ destination, destinationAddress, destina
   const model = withoutStaleLive({ ...toTripDetailModel(projection.projectedItinerary, origin, destination, isActive, colors.primary, [], preferences.travel.fareType),
     ...(destinationAddress ? { destinationAddress } : {}), ...(destinationLines?.length ? { destinationLines } : {}),
     arriveTime: projection.arrivalTime ? formatTripClock(projection.arrivalTime) : 'Updating…',
-    arrivalLabel: projection.confidence === 'scheduled' ? 'Scheduled arrival' : projection.confidence === 'estimated' ? 'Expected arrival' : 'Arrive',
+    arrivalLabel: projection.confidence === 'estimated' ? 'Expected arrival' : 'Arrive',
     detailNote: projection.confidence === 'stale' ? 'Live timing is out of date. Checking for an update.'
       : projection.confidence === 'unavailable' ? 'Checking your arrival and connections.' : undefined,
   }, liveFresh);
