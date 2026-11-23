@@ -550,16 +550,12 @@ The route badge shown over a route-detail map SHALL be compact: it SHALL show th
 - **WHEN** the rider opens the Port Jefferson Branch route detail
 - **THEN** the badge over the map is a small chip with the rail icon and the short name, not "Port Jefferson", and dragging on the badge pans the map
 
-### Requirement: Reorient button on the home map
-When the rider rotates or tilts the home map (for example with a two-finger twist), a round compass button SHALL appear near the current-location control, with its needle pointing to true north. Activating it SHALL animate the map back to north-up and flat, keeping the current center and zoom, after which the button SHALL hide. The button SHALL NOT appear while the map is north-up and flat. Maps that cannot be rotated (the web map) SHALL never show it.
+### Requirement: Flat, north-up maps
+Every map (home, route, trip, and choose-on-map; native and web) SHALL stay flat and north-up: gestures SHALL pan and zoom it but SHALL NOT rotate or tilt it, and buildings SHALL be drawn as flat shapes, never raised in 3D. With nothing to turn back, the home map SHALL show no compass button.
 
 #### Scenario: Rider twists the map
-- **WHEN** the rider rotates the home map so north points to the right
-- **THEN** a compass button appears with its needle pointing right, toward north
-
-#### Scenario: Rider reorients
-- **WHEN** the rider taps the compass button
-- **THEN** the map turns back to north-up and flat at the same place and zoom, and the button disappears
+- **WHEN** the rider twists or tilts the home map with two fingers
+- **THEN** the map stays north-up and flat, and no compass button appears
 
 ### Requirement: Trip map shows the real path
 The planned trip-detail map SHALL be a real map showing the trip's actual path as the routing service returned it:

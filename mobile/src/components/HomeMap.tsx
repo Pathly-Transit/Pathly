@@ -20,9 +20,6 @@ const HOME_ZOOM = 14;
 // Far enough out to see the whole region at once, from Montauk to Poughkeepsie.
 const MIN_ZOOM = 6;
 const RECENTER_MS = 400;
-/** Within this many degrees of north-up and flat, the map counts as oriented. */
-const ORIENTED_TOLERANCE_DEGREES = 2;
-const REORIENT_MS = 300;
 
 /**
  * Where the home map's camera rests, so it can be restored when the map is rebuilt (returning from
@@ -31,8 +28,6 @@ const REORIENT_MS = 300;
 export type HomeMapCamera = { latitude: number; longitude: number; latitudeDelta?: number; longitudeDelta?: number; zoom?: number };
 
 type Padding = { bottom?: number; left?: number; right?: number; top?: number };
-
-export type MapOrientation = { heading: number; rotated: boolean };
 
 type HomeMapProps = {
   /** Camera to open on instead of the rider's location (e.g. where they had panned before). */
@@ -47,10 +42,6 @@ type HomeMapProps = {
   padding?: Padding;
   /** Incremented to center the map on `location`; later GPS updates alone never move the map. */
   recenterRequest?: number;
-  /** After the map comes to rest: its heading (degrees clockwise from north) and whether it's off north-up/flat. */
-  onOrientationChange?: (orientation: MapOrientation) => void;
-  /** Incremented to turn the map back to north-up and flat, keeping its center and zoom. */
-  reorientRequest?: number;
   /** A tap on the map (admin: show its coordinates). */
   onPress?: (point: Coordinates) => void;
   /** A long press (or right-click) on the map (admin: choose a mock location). */
@@ -86,7 +77,6 @@ export function HomeMap({
   location,
   onCameraChange,
   onLongPress,
-  onOrientationChange,
   onPress,
   onSavedLocationPress,
   onOpenStop,
@@ -95,7 +85,6 @@ export function HomeMap({
   onUserPan,
   padding,
   recenterRequest = 0,
-  reorientRequest = 0,
   savedLocations = [],
   selectedStop = null,
   locationKnown = false,
@@ -120,24 +109,12 @@ export function HomeMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the request only; `location` is read at request time
   }, [recenterRequest]);
 
-  const handledReorientRequest = useRef(reorientRequest);
-  useEffect(() => {
-    if (reorientRequest === handledReorientRequest.current) return;
-    handledReorientRequest.current = reorientRequest;
-    mapRef.current?.easeTo({ bearing: 0, pitch: 0, durationMs: REORIENT_MS });
-  }, [reorientRequest]);
-
-  const onCameraIdle = useCallback(({ center, zoom: restingZoom, bearing, pitch, userInteraction }: MapCameraChange) => {
+  const onCameraIdle = useCallback(({ center, zoom: restingZoom, userInteraction }: MapCameraChange) => {
     setZoom(restingZoom);
     onCameraChange?.({ latitude: center.latitude, longitude: center.longitude, zoom: restingZoom });
-    if (onOrientationChange) {
-      const heading = ((bearing % 360) + 360) % 360;
-      const offNorth = Math.min(heading, 360 - heading);
-      onOrientationChange({ heading, rotated: offNorth > ORIENTED_TOLERANCE_DEGREES || pitch > ORIENTED_TOLERANCE_DEGREES });
-    }
     // The center is the visible (padded) area's: where Nearby searches around.
     if (userInteraction) onUserMoveEnd?.(center);
-  }, [onCameraChange, onOrientationChange, onUserMoveEnd]);
+  }, [onCameraChange, onUserMoveEnd]);
 
   const showRider = simulatedLocation || locationKnown;
   // The saved places' pins where they're drawn at this zoom (stacked as SavedPlaceMarkers stacks them).

@@ -13,7 +13,6 @@ import { createContext, forwardRef, useContext, useImperativeHandle, useMemo, us
 import { StyleSheet, View, type NativeSyntheticEvent } from 'react-native';
 
 import { useTheme } from '../theme/AppSettings';
-import { SheetMapCredit } from './MapCredit';
 import { sheetPaddingExtra, useSheetInset } from './mapSheetInset';
 import { MAP_ICONS } from './mapIcons';
 import { mapLandColor, overlaySlotId, pathlyMapStyle, STOP_LAYER_IDS } from './mapStyle';
@@ -111,7 +110,7 @@ function cameraOf(state: ViewStateChangeEvent): MapCamera {
 }
 
 export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCanvas(
-  { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onStopPress, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
+  { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onStopPress, onUserGesture, padding, testID },
   ref,
 ) {
   const { isDark, mapTheme, transitIcons } = useTheme();
@@ -199,7 +198,7 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       testID={testID}
     >
       <Map
-        // No logo, and the map's credit is MapCredit below, in the app's own button style.
+        // No logo or attribution: the base map's sources ask no credit on the map (Settings → About lists them).
         attribution={false}
         compass={false}
         contentInset={contentInset}
@@ -247,8 +246,9 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
           onUserGesture?.();
         }}
         ref={mapRef}
-        touchPitch={interactive && pitchEnabled}
-        touchRotate={interactive && rotateEnabled}
+        // Flat and north-up: the map never turns or tilts.
+        touchPitch={false}
+        touchRotate={false}
         touchZoom={interactive}
       >
         <Images images={MAP_ICONS} />
@@ -260,7 +260,6 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
         />
         <BearingContext.Provider value={bearingStore}><ZoomContext.Provider value={zoomStore}>{children}</ZoomContext.Provider></BearingContext.Provider>
       </Map>
-      <SheetMapCredit bottomInset={padding?.bottom ?? 0} />
     </View>
   );
 });

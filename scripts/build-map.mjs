@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Builds Pathly's base map: vector tiles for New York City, Long Island, and the region around them,
-// from public-domain government data (see scripts/map/sources.mjs) plus OpenStreetMap's footpaths
-// (scripts/map/osm.mjs) and Microsoft's building footprints outside NYC (scripts/map/msbuildings.mjs),
-// cut by Pathly's own tiler. The
-// tiles go to maptiles/tiles/{z}/{x}/{y}.pbf (gitignored), and `npm run build:site` publishes them
-// at pathly.web.app/map/. Rebuild every few months as the sources update.
+// all from public data that asks no credit on the map itself (Settings → About lists the sources):
+// government data (scripts/map/sources.mjs), public footpaths, trails, fields, and platforms
+// (scripts/map/publicpaths.mjs), FEMA's building outlines outside NYC (scripts/map/structures.mjs),
+// and Wikidata's landmarks (scripts/map/landmarks.mjs), cut by Pathly's own tiler. The tiles go to
+// maptiles/tiles/{z}/{x}/{y}.pbf (gitignored), and `npm run build:site` publishes them at
+// pathly.web.app/map/. Rebuild every few months as the sources update.
 //
-//   node scripts/build-map.mjs download <data-dir>   fetch the sources (~1 GB) into <data-dir>
+//   node scripts/build-map.mjs download <data-dir>   fetch the sources (~6 GB) into <data-dir>
 //   node --max-old-space-size=8192 scripts/build-map.mjs build <data-dir> [--tiles-only]
 //                                                    build the tiles (--tiles-only reuses the
 //                                                    features read last time)
@@ -19,12 +20,11 @@ import { pipeline } from 'node:stream/promises';
 
 import { DETAIL, EXPLORATION, MAX_ZOOM, OVERVIEW, ROOT } from './map/bounds.mjs';
 import { boxesOverlap, ringBounds } from './map/geometry.mjs';
-import { addOsmLandmarks, downloadOsmLandmarks } from './map/landmarks.mjs';
-import { addOsmPaths, downloadOsmPaths } from './map/osm.mjs';
-import { addOsmTransitways, downloadOsmTransitways } from './map/transitways.mjs';
+import { addWikidataLandmarks, downloadWikidataLandmarks } from './map/landmarks.mjs';
+import { NYC_PATH_FILES, addPublicPaths, downloadUsgsTrails } from './map/publicpaths.mjs';
 import { LAYERS } from './map/schema.mjs';
-import { addMsBuildings, downloadMsBuildings } from './map/msbuildings.mjs';
 import { readShapefileZip } from './map/shapefile.mjs';
+import { addStructures, downloadStructures } from './map/structures.mjs';
 import { TRANSIT_FEEDS, addBuildings, addGnisWaterNames, addLandAndStates, addLandmarks, addOverview, addPlaces, addRail, addRoads, addTransit, addWater, addWaterways, readWater } from './map/sources.mjs';
 import { FeatureStore, POLYGON } from './map/store.mjs';
 import { writeTiles } from './map/tiler.mjs';
@@ -36,17 +36,28 @@ const NATURAL_EARTH = 'https://raw.githubusercontent.com/nvkelso/natural-earth-v
 
 async function fetchTo(url, path) {
   if (existsSync(path)) return;
-  let response = await fetch(url);
-  // The Census site turns away rapid downloads (HTTP 429): wait longer each time and ask again.
-  for (let attempt = 1; response.status === 429 && attempt <= 6; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 20_000 * attempt));
-    response = await fetch(url);
-  }
-  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  const { readFileSync, renameSync, unlinkSync } = await import('node:fs');
   const partial = `${path}.partial`;
-  await pipeline(Readable.fromWeb(response.body), createWriteStream(partial));
-  const { renameSync } = await import('node:fs');
-  renameSync(partial, path);
+  for (let rejected = 0; ; rejected += 1) {
+    let response = await fetch(url);
+    // The Census site turns away rapid downloads (HTTP 429): wait longer each time and ask again.
+    for (let attempt = 1; response.status === 429 && attempt <= 6; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20_000 * attempt));
+      response = await fetch(url);
+    }
+    if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+    await pipeline(Readable.fromWeb(response.body), createWriteStream(partial));
+    // Its firewall can also answer a burst with a "Request Rejected" page and a success status: a
+    // zip that doesn't start like one is that page. Wait and ask again.
+    if (path.endsWith('.zip') && readFileSync(partial).subarray(0, 4).toString('latin1') !== 'PK\x03\x04') {
+      unlinkSync(partial);
+      if (rejected >= 5) throw new Error(`${url}: the server kept rejecting the download`);
+      await new Promise((resolve) => setTimeout(resolve, 30_000 * (rejected + 1)));
+      continue;
+    }
+    renameSync(partial, path);
+    return;
+  }
 }
 
 async function download(dir) {
@@ -64,6 +75,7 @@ async function download(dir) {
   }
   for (const name of ['ne_10m_land', 'ne_10m_lakes', 'ne_10m_roads', 'ne_10m_populated_places_simple']) jobs.push([`${NATURAL_EARTH}/${name}.geojson`, `ne/${name}.geojson`]);
   for (const [agency, { url }] of Object.entries(TRANSIT_FEEDS)) jobs.push([url, `gtfs/${agency}.zip`]);
+  jobs.push(...NYC_PATH_FILES);
   for (const [url, path] of jobs) {
     console.log(`Fetching ${path}`);
     try {
@@ -79,12 +91,18 @@ async function download(dir) {
     .map(({ props }) => props.GEOID);
   console.log(`Fetching roads and water for ${counties.length} counties...`);
   for (const geoid of counties) {
-    for (const kind of ['roads', 'areawater', 'linearwater']) await fetchTo(`${TIGER}/${kind.toUpperCase()}/tl_2025_${geoid}_${kind}.zip`, join(dir, `county/tl_2025_${geoid}_${kind}.zip`));
+    for (const kind of ['roads', 'areawater', 'linearwater']) {
+      try {
+        await fetchTo(`${TIGER}/${kind.toUpperCase()}/tl_2025_${geoid}_${kind}.zip`, join(dir, `county/tl_2025_${geoid}_${kind}.zip`));
+      } catch (error) {
+        // Left out (the build reads whatever county files are there); run the download again later to retry.
+        console.warn(`  ${error.message}; skipped`);
+      }
+    }
   }
-  await downloadOsmPaths(dir);
-  await downloadOsmLandmarks(dir);
-  await downloadOsmTransitways(dir);
-  await downloadMsBuildings(dir);
+  await downloadUsgsTrails(dir);
+  await downloadStructures(dir);
+  await downloadWikidataLandmarks(dir);
   console.log(`Sources ready in ${dir}.`);
 }
 
@@ -107,13 +125,13 @@ async function build(dir, tilesOnly) {
     const gnis = addPlaces(store, join(dir, 'tiger'), join(dir, 'gnis'), log);
     addGnisWaterNames(store, gnis, [...waterNames, ...landmarkNames], log);
     addRoads(store, join(dir, 'county'), log);
-    addOsmPaths(store, join(dir, 'osm'), log);
-    addOsmLandmarks(store, join(dir, 'osm'), log);
-    addOsmTransitways(store, join(dir, 'osm'), log);
+    await addPublicPaths(store, dir, log);
     addRail(store, join(dir, 'tiger'), log);
     addTransit(store, join(dir, 'gtfs'), log);
+    // After the places, parks, and stations, so a landmark they already name isn't named twice.
+    addWikidataLandmarks(store, join(dir, 'wikidata'), log);
     await addBuildings(store, join(dir, 'nyc/buildings.csv'), log);
-    await addMsBuildings(store, join(dir, 'msbuildings'), join(dir, 'tiger'), log);
+    addStructures(store, dir, log);
     addOverview(store, join(dir, 'ne'), log);
     store.save(cache);
     log(`${store.count} features (saved to ${cache})`);

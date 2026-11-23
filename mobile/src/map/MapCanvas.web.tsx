@@ -6,7 +6,6 @@ import { StyleSheet, View } from 'react-native';
 
 import { useTheme } from '../theme/AppSettings';
 import { sheetPaddingExtra, useSheetInset } from './mapSheetInset';
-import { SheetMapCredit } from './MapCredit';
 import { WEB_ICON_PIXEL_RATIO, WEB_MAP_ICONS } from './mapIcons';
 import { mapLandColor, overlaySlotId, pathlyMapStyle, STOP_LAYER_IDS } from './mapStyle';
 import {
@@ -91,7 +90,7 @@ function removeOverlay(map: maplibregl.Map, layerId: string, sourceId: string) {
 }
 
 export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCanvas(
-  { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onStopPress, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
+  { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onStopPress, onUserGesture, padding, testID },
   ref,
 ) {
   const { isDark, mapTheme, transitIcons } = useTheme();
@@ -119,14 +118,16 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       bearing: initialCamera.bearing ?? 0,
       pitch: initialCamera.pitch ?? 0,
       ...(minZoom !== undefined ? { minZoom: toMapLibreZoom(minZoom) } : {}),
-      // The map's credit is added below, on the left.
+      // No attribution: the base map's sources ask no credit on the map (Settings → About lists them).
       attributionControl: false,
       interactive,
-      dragRotate: interactive && rotateEnabled,
-      pitchWithRotate: interactive && rotateEnabled && pitchEnabled,
-      touchPitch: interactive && pitchEnabled,
+      // Flat and north-up: the map never turns or tilts.
+      dragRotate: false,
+      pitchWithRotate: false,
+      touchPitch: false,
+      maxPitch: 0,
     });
-    if (!rotateEnabled) instance.touchZoomRotate.disableRotation();
+    instance.touchZoomRotate.disableRotation();
     // Keyboard arrows would also scroll the page around the map.
     instance.keyboard.disable();
 
@@ -292,8 +293,6 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
     <View style={[StyleSheet.absoluteFill, { backgroundColor: mapLandColor(isDark, mapTheme) }]} testID={testID}>
       <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
       {context ? <MapContext.Provider value={context}>{children}</MapContext.Provider> : null}
-      {/* The map's credit, in the app's own button style (MapLibre's is turned off above). */}
-      <SheetMapCredit bottomInset={padding?.bottom ?? 0} />
     </View>
   );
 });

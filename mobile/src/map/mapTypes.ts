@@ -67,9 +67,6 @@ export type MapCanvasProps = {
   padding?: MapPadding;
   /** Pans and zooms by gesture (default true); a still map just shows its trip. */
   interactive?: boolean;
-  /** Turns and tilts by gesture (default true, where the map is interactive at all). */
-  rotateEnabled?: boolean;
-  pitchEnabled?: boolean;
   minZoom?: number;
   /** The camera's center stays within these bounds. */
   maxBounds?: MapBounds;
@@ -77,7 +74,7 @@ export type MapCanvasProps = {
   onLongPress?: (point: MapPoint) => void;
   /** A tap on a station's or bus stop's icon (instead of onPress). */
   onStopPress?: (stop: MapStop) => void;
-  /** The rider started moving the map (a pan, pinch, or turn). */
+  /** The rider started moving the map (a pan or pinch). */
   onUserGesture?: () => void;
   /** The map came to rest, wherever it is. */
   onCameraIdle?: (camera: MapCameraChange) => void;

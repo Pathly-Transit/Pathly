@@ -49,9 +49,9 @@ export const MAX_ZOOM = 14;
 export const CHUNK_ZOOM = 10;
 
 /**
- * The detailed map: OpenStreetMap's streets, buildings, water, and places, a little past the
- * exploration box on every side and squared up to whole zoom-10 tiles (so its edge falls on tile
- * edges). All OpenStreetMap data is cut to this box.
+ * The detailed map: streets, buildings, water, and places from the government and other public
+ * sources, a little past the exploration box on every side and squared up to whole zoom-10 tiles
+ * (so its edge falls on tile edges). All of that data is cut to this box.
  */
 const DETAIL_MARGIN = 0.3;
 export const DETAIL = {
