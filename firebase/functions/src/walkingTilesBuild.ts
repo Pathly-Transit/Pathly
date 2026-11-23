@@ -22,7 +22,7 @@ export function writeWalkingTiles(
   dir: string,
   nodes: readonly { lat: number; lon: number }[],
   edges: readonly WalkingEdge[],
-  meta: { source?: string } = {},
+  meta: { source?: string; publicDataOnly?: boolean } = {},
 ): { tiles: number; nodes: number; edges: number; bytes: number } {
   // Each node's home tile and index there.
   const globalId = new Float64Array(nodes.length);
@@ -79,6 +79,7 @@ export function writeWalkingTiles(
     tileDegrees: WALKING_TILE_DEGREES,
     tiles: [...tileNodes.keys()].sort(),
     ...(meta.source ? { source: meta.source } : {}),
+    ...(meta.publicDataOnly ? { publicDataOnly: true } : {}),
     builtAt: new Date().toISOString(),
   };
   writeFileSync(join(dir, 'manifest.json'), `${JSON.stringify(manifest)}\n`);

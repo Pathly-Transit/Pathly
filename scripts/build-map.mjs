@@ -21,7 +21,7 @@ import { pipeline } from 'node:stream/promises';
 import { DETAIL, EXPLORATION, MAX_ZOOM, OVERVIEW, ROOT } from './map/bounds.mjs';
 import { boxesOverlap, ringBounds } from './map/geometry.mjs';
 import { addWikidataLandmarks, downloadWikidataLandmarks } from './map/landmarks.mjs';
-import { NYC_PATH_FILES, addPublicPaths, downloadUsgsTrails } from './map/publicpaths.mjs';
+import { NYC_PATH_FILES, addPublicPaths, downloadCitySidewalks, downloadUsgsTrails } from './map/publicpaths.mjs';
 import { LAYERS } from './map/schema.mjs';
 import { readShapefileZip } from './map/shapefile.mjs';
 import { addStructures, downloadStructures } from './map/structures.mjs';
@@ -100,6 +100,7 @@ async function download(dir) {
       }
     }
   }
+  await downloadCitySidewalks(dir);
   await downloadUsgsTrails(dir);
   await downloadStructures(dir);
   await downloadWikidataLandmarks(dir);
@@ -152,6 +153,8 @@ async function build(dir, tilesOnly) {
     layers: LAYERS,
     built: new Date().toISOString(),
     tiles: stats.tiles,
+    // Built from public-domain sources alone (no OpenStreetMap), so the map needs no credit: build-site.mjs won't publish tiles without it.
+    publicDataOnly: true,
   }, null, 2)}\n`);
   log(`Wrote ${stats.tiles} tiles (${(stats.bytes / 1e6).toFixed(0)} MB; ${stats.empty} empty; largest ${(stats.largest / 1e3).toFixed(0)} KB at ${stats.largestTile}) to ${join(OUT, 'tiles')}`);
 }

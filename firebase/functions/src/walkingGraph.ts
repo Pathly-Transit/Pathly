@@ -3,7 +3,8 @@ import { join } from 'path';
 import { gunzipSync, gzipSync } from 'zlib';
 
 /**
- * A pedestrian street graph of the service area, built from OpenStreetMap by
+ * A pedestrian street graph of the service area, built from public streets and paths (Census
+ * TIGER/Line, New York City's path and sidewalk data, USGS trails) by
  * scripts/build-walking-tiles.js and bundled with the deploy under static_data/walking/, so
  * "which stop is closest on foot" needs no paid API and no network call.
  *
@@ -31,7 +32,8 @@ export type WalkingTile = {
   edgeMeters: Uint16Array;
 };
 
-export type WalkingManifest = { version: number; tileDegrees: number; tiles: string[]; source?: string; builtAt?: string };
+/** `publicDataOnly`: built from public-domain sources alone, so walks drawn from it need no credit (deploys require it). */
+export type WalkingManifest = { version: number; tileDegrees: number; tiles: string[]; source?: string; publicDataOnly?: boolean; builtAt?: string };
 
 export function tileXY(lat: number, lon: number): [number, number] {
   return [Math.floor((lon + 180) / WALKING_TILE_DEGREES), Math.floor((lat + 90) / WALKING_TILE_DEGREES)];

@@ -17,7 +17,7 @@
 
 - [ ] 3.1 Wait until the other sessions' uncommitted edits to `RouteDetailView.tsx` and `SettingsPages.tsx` have landed. Then add `sbu` to `LiveSource['agencyId']` and to the agency tables (`RouteDetailView` `OWN_TRANSFER_KIND` and the agency/mode table, `INBOX_AGENCY_NAMES`, `lineIndex.ts` mode and search words, `routeGeometry.ts`), and add the "SBU Buses" map layer in `lineLayers.ts`. Verify with `npx tsc --noEmit`, plus a `lineIndex` test showing that a search for "lirr" excludes SBU's Railroad shuttle and "sbu"/"stony brook" finds SBU lines.
 - [ ] 3.2 Badge readability (design decision 5): an SBU route with a light color (`FAEC2A`) gets dark badge text, and the "LIRR"-named route renders in the bus shape with the "SBU Transit" accessibility label. Verify with `RouteBadge` component tests.
-- [ ] 3.3 The transit data sources section in Help & About (decision 8): one table of every agency's data source and attribution, rendered next to the OpenStreetMap row, with SBU's entry using the wording recorded in task 1.1. Verify with a `SettingsPages` test that every `AgencyId` has an entry and that SBU's text matches `LICENSES.md`.
+- [ ] 3.3 The transit data sources section in Help & About (decision 8): one table of every agency's data source and attribution, rendered next to the Map data row, with SBU's entry using the wording recorded in task 1.1. Verify with a `SettingsPages` test that every `AgencyId` has an entry and that SBU's text matches `LICENSES.md`.
 - [ ] 3.4 Check how a client without `sbu` in its union handles a nearby result with `agencyId: 'sbu'` (render a route card from such a payload in a test). Record whether turning the gate on must wait for client adoption (design, Open Questions).
 
 ## 4. Integration check

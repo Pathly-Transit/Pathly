@@ -4,6 +4,8 @@
 //   NYC Street Centerline (CSCL, NYC Open Data): New York City's own paths and trails, boardwalks,
 //     and step streets and pedestrian bridges (roadway types 6, 5, and 7), added to the road layer as
 //     kind `path`. They replace TIGER's walkways inside the city (the same paths, drawn twice).
+//   NYC Planimetric Database (the city's ArcGIS service): interior sidewalk centerlines, the walks
+//     inside parks, campuses, and housing developments, also kind `path`.
 //   USGS National Digital Trails (The National Map's state transportation packages): trails in parks
 //     and on public lands, from federal and state agencies, kind `path` marked `trail` (drawn dashed).
 //     Where one runs along a street or a path already on the map, it's left out.
@@ -12,12 +14,12 @@
 //     ground (the landuse layer, kind `platform`).
 //
 // All of it is public: the map needs no credit for any of it (Settings → About lists the sources).
-import { createReadStream, existsSync, readdirSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import { DETAIL } from './bounds.mjs';
-import { boxContainsBox, boxesOverlap, clipLine, pointInRing, ringBounds, zoomForArea } from './geometry.mjs';
+import { boxContainsBox, boxesOverlap, clipLine, orient, pointInRing, ringBounds, zoomForArea } from './geometry.mjs';
 import { fetchZipEntries } from './remotezip.mjs';
 import { readShapefile, readShapefileZip } from './shapefile.mjs';
 import { addPolygons, parseCsvLine, parseMultiPolygon, polygonsArea } from './sources.mjs';
@@ -33,6 +35,22 @@ export const NYC_PATH_FILES = [
   // Planimetric railroad structures: stations and their platforms, at grade (2160) and elevated (2140).
   [`${NYC_DATA}/dwer-xbgx.csv?$select=the_geom,feat_code&$where=feat_code in('2140','2160')&$limit=100000`, 'nyc/planimetric_platforms.csv'],
 ];
+
+/**
+ * The NYC Planimetric Database's 2022 layers, traced from the city's aerial imagery by the Office of
+ * Technology and Innovation and served from its ArcGIS services (NYC Open Data's copies of these
+ * two are mislinked):
+ *   interior sidewalk centerlines (feature code 3810): the walkways inside blocks rather than along
+ *     streets: park paths, campus walks, housing-development paths;
+ *   plazas (6000): pedestrian plazas, Times Square's and the ones outside stations among them.
+ */
+const NYC_PLANIMETRIC = 'https://services6.arcgis.com/yG5s3afENB5iO9fj/ArcGIS/rest/services';
+const NYC_SIDEWALK_LINES = `${NYC_PLANIMETRIC}/Sidewalk_Line_2022/FeatureServer/23/query`;
+const NYC_PLAZAS = `${NYC_PLANIMETRIC}/Plaza_2022/FeatureServer/16/query`;
+/** Where the download keeps them: JSON arrays of flat [lon, lat, ...] lines, and of polygons (rings of them). */
+export const SIDEWALK_LINES_FILE = 'nyc/sidewalk_lines.json';
+const PLAZAS_FILE = 'nyc/plazas.json';
+const ARCGIS_PAGE = 2000;
 
 const TNM = 'https://prd-tnm.s3.amazonaws.com/StagedProducts';
 
@@ -80,6 +98,88 @@ export async function downloadUsgsTrails(dir, log = console.log) {
       log(`  ${error.message}; skipped (run the download again to retry)`);
     }
   }
+}
+
+/** Every feature's GeoJSON geometry from an ArcGIS layer's query URL, a page at a time; null when the service won't answer. */
+async function fetchArcgisGeometries(url, log) {
+  const geometries = [];
+  for (let offset = 0; ; offset += ARCGIS_PAGE) {
+    const params = new URLSearchParams({
+      where: '1=1', outFields: 'OBJECTID', returnGeometry: 'true', outSR: '4326', geometryPrecision: '6',
+      orderByFields: 'OBJECTID', resultOffset: String(offset), resultRecordCount: String(ARCGIS_PAGE), f: 'geojson',
+    });
+    let page = null;
+    for (let attempt = 0; attempt < 4 && !page; attempt += 1) {
+      try {
+        const response = await fetch(`${url}?${params}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        page = await response.json();
+        if (page.error) throw new Error(page.error.message ?? 'query failed');
+      } catch (error) {
+        page = null;
+        if (attempt === 3) {
+          log(`  ${error.message}; skipped (run the download again to retry)`);
+          return null;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5000 * (attempt + 1)));
+      }
+    }
+    const features = page.features ?? [];
+    for (const { geometry } of features) if (geometry) geometries.push(geometry);
+    if (features.length < ARCGIS_PAGE) return geometries;
+  }
+}
+
+function writeJson(path, value) {
+  writeFileSync(`${path}.partial`, JSON.stringify(value));
+  renameSync(`${path}.partial`, path);
+}
+
+/** A GeoJSON ring as a flat [lon, lat, ...] ring: no closing point, wound as the map's polygons are. */
+function flatRing(coordinates, outer) {
+  const flat = coordinates.flat();
+  if (flat.length >= 4 && flat[0] === flat[flat.length - 2] && flat[1] === flat[flat.length - 1]) flat.length -= 2;
+  return orient(flat, outer);
+}
+
+/**
+ * Fetches the city's interior sidewalk centerlines and plazas into <dir>/nyc (each kept when
+ * already there).
+ */
+export async function downloadCitySidewalks(dir, log = console.log) {
+  mkdirSync(join(dir, 'nyc'), { recursive: true });
+  const linesPath = join(dir, SIDEWALK_LINES_FILE);
+  if (!existsSync(linesPath)) {
+    log('Fetching NYC interior sidewalk centerlines (planimetric)...');
+    const geometries = await fetchArcgisGeometries(NYC_SIDEWALK_LINES, log);
+    if (geometries) {
+      const lines = geometries
+        .flatMap((geometry) => (geometry.type === 'LineString' ? [geometry.coordinates] : geometry.type === 'MultiLineString' ? geometry.coordinates : []))
+        .filter((part) => part.length >= 2)
+        .map((part) => part.flat());
+      writeJson(linesPath, lines);
+      log(`  ${lines.length} sidewalk lines`);
+    }
+  }
+  const plazasPath = join(dir, PLAZAS_FILE);
+  if (!existsSync(plazasPath)) {
+    log('Fetching NYC pedestrian plazas (planimetric)...');
+    const geometries = await fetchArcgisGeometries(NYC_PLAZAS, log);
+    if (geometries) {
+      const polygons = geometries
+        .flatMap((geometry) => (geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.type === 'MultiPolygon' ? geometry.coordinates : []))
+        .map((rings) => rings.map((ring, i) => flatRing(ring, i === 0)).filter((ring) => ring.length >= 6))
+        .filter((rings) => rings.length > 0);
+      writeJson(plazasPath, polygons);
+      log(`  ${polygons.length} plazas`);
+    }
+  }
+}
+
+/** The city's interior sidewalk centerlines, as flat [lon, lat, ...] lines, or null when not downloaded. */
+export function readCitySidewalks(dir) {
+  const path = join(dir, SIDEWALK_LINES_FILE);
+  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
 }
 
 /** The five boroughs' outlines (TIGER's counties), as a point test. */
@@ -235,6 +335,28 @@ async function addCityPaths(store, nycDir, inNyc, log) {
   return count;
 }
 
+/**
+ * The city's interior sidewalks (planimetric): the park, campus, and courtyard walks between the
+ * Street Centerline's main paths, less those along a street or a path already on the map.
+ */
+function addCitySidewalks(store, dir, log) {
+  const raw = readCitySidewalks(dir);
+  if (!raw) {
+    log(`  NYC interior sidewalks: no ${join(dir, SIDEWALK_LINES_FILE)}; skipped (npm run map:download fetches it)`);
+    return;
+  }
+  const lines = new Map();
+  raw.forEach((line, i) => cutToDetail(line).forEach((part, j) => lines.set(`${i}#${j}`, part)));
+  const along = linesAlongRoads(store, lines);
+  let count = 0;
+  for (const [key, part] of lines) {
+    if (along.has(key)) continue;
+    store.add('road', LINE, PATH_MINZOOM, { kind: 'path' }, [part]);
+    count += 1;
+  }
+  log(`  NYC interior sidewalks (planimetric): ${count} lines (${along.size} along streets and paths already on the map left out)`);
+}
+
 /** USGS trails over the detailed area (once each: neighboring states' packages share some), less those along streets and paths. */
 function addUsgsTrails(store, trailsDir, log) {
   const files = existsSync(trailsDir) ? readdirSync(trailsDir).map((state) => join(trailsDir, state, 'Trans_TrailSegment.shp')).filter((file) => existsSync(file)) : [];
@@ -301,14 +423,32 @@ async function addCityPlatforms(store, nycDir, log) {
   log(`  station platforms (NYC planimetric): ${count}`);
 }
 
+/** New York City's pedestrian plazas (planimetric), as the landuse layer's kind `plaza`: paved like the streets. */
+function addCityPlazas(store, dir, log) {
+  const path = join(dir, PLAZAS_FILE);
+  if (!existsSync(path)) {
+    log(`  plazas: no ${path}; skipped (npm run map:download fetches it)`);
+    return;
+  }
+  let count = 0;
+  for (const polygon of JSON.parse(readFileSync(path, 'utf8'))) {
+    const minzoom = Math.max(PLATFORM_MINZOOM, zoomForArea(polygonsArea([polygon]), 16));
+    if (addPolygons(store, 'landuse', minzoom, { kind: 'plaza' }, [polygon]) >= 0) count += 1;
+  }
+  log(`  pedestrian plazas (NYC planimetric): ${count}`);
+}
+
 /**
- * Adds the public footpaths, trails, sports fields, and platforms. Needs the streets added first
- * (addRoads): the city's paths replace TIGER's walkways there, and trails along streets are left out.
+ * Adds the public footpaths, trails, sports fields, platforms, and plazas. Needs the streets added
+ * first (addRoads): the city's paths replace TIGER's walkways there, and trails and sidewalks along
+ * streets are left out.
  */
 export async function addPublicPaths(store, dir, log) {
   const inNyc = nycTest(join(dir, 'tiger'));
   await addCityPaths(store, join(dir, 'nyc'), inNyc, log);
+  addCitySidewalks(store, dir, log);
   addUsgsTrails(store, join(dir, 'usgs', 'trails'), log);
   await addCityFields(store, join(dir, 'nyc'), log);
   await addCityPlatforms(store, join(dir, 'nyc'), log);
+  addCityPlazas(store, dir, log);
 }

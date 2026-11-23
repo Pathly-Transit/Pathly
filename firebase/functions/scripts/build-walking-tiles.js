@@ -7,6 +7,8 @@
  *   - US Census Bureau TIGER/Line 2025 streets and walkways, in every county the service area touches
  *     (limited-access highways and their ramps left out);
  *   - New York City's paths and trails, boardwalks, and step streets (NYC Street Centerline);
+ *   - New York City's interior sidewalks: the walks inside parks, campuses, and housing
+ *     developments (NYC Planimetric Database);
  *   - USGS National Digital Trails: trails in parks and on public lands.
  * Paths are joined to the streets where they end within a few meters of one. Streets change
  * slowly; rebuild every few months, with the base map.
@@ -74,6 +76,8 @@ function checkTiles() {
     return `${manifestPath} is unreadable: ${error.message}`;
   }
   if (manifest.version !== WALKING_FORMAT_VERSION || manifest.tileDegrees !== WALKING_TILE_DEGREES) return 'tiles are in an older format';
+  // No OpenStreetMap (or other credit-requiring) data ships: only graphs this script built from public sources.
+  if (manifest.publicDataOnly !== true) return `they weren't built from public data alone (built from ${manifest.source ?? 'unknown sources'}); rebuild them`;
   if (!Array.isArray(manifest.tiles) || manifest.tiles.length === 0) return 'the manifest lists no tiles';
   const missing = manifest.tiles.filter((key) => !fs.existsSync(path.join(OUT_DIR, `${key}.bin.gz`)));
   if (missing.length > 0) return `${missing.length} of ${manifest.tiles.length} tiles are missing (e.g. ${missing[0]})`;
@@ -135,7 +139,7 @@ async function readStreets(dataDir) {
   return lines;
 }
 
-/** The city's paths, boardwalks, and step streets, and the USGS trails, as lines of [lon, lat, ...]. */
+/** The city's paths, boardwalks, step streets, and interior sidewalks, and the USGS trails, as lines of [lon, lat, ...]. */
 async function readPaths(dataDir) {
   const lines = [];
   const csv = path.join(dataDir, 'nyc', 'centerline_paths.csv');
@@ -154,6 +158,13 @@ async function readPaths(dataDir) {
     }
   } else {
     console.warn(`  no ${csv}: walks won't follow the city's park paths`);
+  }
+  const { readCitySidewalks } = await import(pathToFileURL(path.join(MAP_SCRIPTS, 'publicpaths.mjs')).href);
+  const sidewalks = readCitySidewalks(dataDir);
+  if (sidewalks) {
+    for (const line of sidewalks) if (line.length >= 4 && touchesServiceArea(line)) lines.push(line);
+  } else {
+    console.warn("  no NYC interior sidewalk lines: walks won't cut through parks, campuses, and courtyards");
   }
   const trailsDir = path.join(dataDir, 'usgs', 'trails');
   if (fs.existsSync(trailsDir)) {
@@ -177,57 +188,101 @@ async function readPaths(dataDir) {
   return lines;
 }
 
+/** A coordinate rounded as the graph keys points (keyOf), so a point added to two lines is one node. */
+const roundCoordinate = (value) => Math.round(value * 1e6) / 1e6;
+
 /**
- * Joins each path to the streets: an end within JOIN_METERS of a street's point moves onto it (the
- * paths come from other surveys, so their ends rarely land exactly on TIGER's points).
+ * Joins each path's ends to the streets and the other paths: an end within JOIN_METERS of another
+ * line moves onto the closest spot on it, and that spot becomes a point of that line when it falls
+ * between two of its points, so the two meet in the graph. (The paths come from other surveys, so
+ * their ends rarely land exactly on TIGER's points, and mid-block a street's nearest point can be
+ * far off: without this, a campus's walks, say, would never reach the street beside it.) Lines that
+ * gain points are replaced in `streets` and `paths`. Returns how many ends were joined.
  */
 function joinPathEnds(paths, streets) {
   const CELL = 0.0002;
-  const cell = (x, y) => `${Math.floor(x / CELL)},${Math.floor(y / CELL)}`;
+  const cellOf = (value) => Math.floor(value / CELL);
   const wanted = new Set();
   for (const line of paths) {
-    for (const at of [0, line.length - 2]) {
-      const cx = Math.floor(line[at] / CELL);
-      const cy = Math.floor(line[at + 1] / CELL);
-      for (let dx = -1; dx <= 1; dx += 1) for (let dy = -1; dy <= 1; dy += 1) wanted.add(`${cx + dx},${cy + dy}`);
-    }
+    for (const at of [0, line.length - 2]) wanted.add(`${cellOf(line[at])},${cellOf(line[at + 1])}`);
   }
+  // Every segment of every line near a path end, by cell: [line id, segment start index].
+  const lists = [streets, paths];
+  const lineAt = (id) => lists[id % 2][Math.floor(id / 2)];
   const grid = new Map();
-  for (const line of streets) {
-    for (let i = 0; i < line.length; i += 2) {
-      const key = cell(line[i], line[i + 1]);
-      if (!wanted.has(key)) continue;
-      let list = grid.get(key);
-      if (!list) grid.set(key, (list = []));
-      list.push(line[i], line[i + 1]);
-    }
-  }
-  let joined = 0;
-  for (const line of paths) {
-    for (const at of [0, line.length - 2]) {
-      const [x, y] = [line[at], line[at + 1]];
-      const cx = Math.floor(x / CELL);
-      const cy = Math.floor(y / CELL);
-      let best = null;
-      let bestMeters = JOIN_METERS;
-      for (let dx = -1; dx <= 1; dx += 1) {
-        for (let dy = -1; dy <= 1; dy += 1) {
-          const points = grid.get(`${cx + dx},${cy + dy}`) ?? [];
-          for (let i = 0; i < points.length; i += 2) {
-            const meters = haversineMeters(y, x, points[i + 1], points[i]);
-            if (meters < bestMeters) {
-              bestMeters = meters;
-              best = [points[i], points[i + 1]];
-            }
-          }
+  const reachX = JOIN_METERS / (111_320 * Math.cos((41 * Math.PI) / 180));
+  const reachY = JOIN_METERS / 111_320;
+  lists.forEach((list, which) => list.forEach((line, index) => {
+    const id = index * 2 + which;
+    for (let i = 2; i < line.length; i += 2) {
+      const [x0, y0, x1, y1] = [line[i - 2], line[i - 1], line[i], line[i + 1]];
+      for (let cx = cellOf(Math.min(x0, x1) - reachX); cx <= cellOf(Math.max(x0, x1) + reachX); cx += 1) {
+        for (let cy = cellOf(Math.min(y0, y1) - reachY); cy <= cellOf(Math.max(y0, y1) + reachY); cy += 1) {
+          const key = `${cx},${cy}`;
+          if (!wanted.has(key)) continue;
+          let cell = grid.get(key);
+          if (!cell) grid.set(key, (cell = []));
+          cell.push(id, i - 2);
         }
       }
-      if (best && bestMeters > 0) {
-        line[at] = best[0];
-        line[at + 1] = best[1];
-        joined += 1;
+    }
+  }));
+  // Points to add to lines, by line id: [segment start index, position along it, lon, lat].
+  const additions = new Map();
+  let joined = 0;
+  paths.forEach((line, index) => {
+    const ownId = index * 2 + 1;
+    for (const at of [0, line.length - 2]) {
+      const [x, y] = [line[at], line[at + 1]];
+      const kx = 111_320 * Math.cos((y * Math.PI) / 180);
+      const ky = 111_320;
+      // The closest street and the closest other path within reach. A street wins: it ties the path
+      // into the street grid, and a path's end near both usually meets the path elsewhere anyway.
+      const closest = [null, null];
+      const cell = grid.get(`${cellOf(x)},${cellOf(y)}`) ?? [];
+      for (let k = 0; k < cell.length; k += 2) {
+        const [id, i] = [cell[k], cell[k + 1]];
+        if (id === ownId) continue;
+        const other = lineAt(id);
+        const [ax, ay, bx, by] = [(other[i] - x) * kx, (other[i + 1] - y) * ky, (other[i + 2] - x) * kx, (other[i + 3] - y) * ky];
+        const [dx, dy] = [bx - ax, by - ay];
+        const length2 = dx * dx + dy * dy;
+        const t = length2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / length2));
+        const meters = Math.hypot(ax + t * dx, ay + t * dy);
+        if (meters < JOIN_METERS && (!closest[id % 2] || meters < closest[id % 2].meters)) closest[id % 2] = { id, i, t, meters };
+      }
+      const best = closest[0] ?? closest[1];
+      if (!best || best.meters === 0) continue;
+      const other = lineAt(best.id);
+      const segmentMeters = haversineMeters(other[best.i + 1], other[best.i], other[best.i + 3], other[best.i + 2]);
+      // Within a meter of one of the segment's points: that point. Otherwise a new point on the segment.
+      let point;
+      if (best.t * segmentMeters < 1) point = [other[best.i], other[best.i + 1]];
+      else if ((1 - best.t) * segmentMeters < 1) point = [other[best.i + 2], other[best.i + 3]];
+      else {
+        point = [roundCoordinate(other[best.i] + best.t * (other[best.i + 2] - other[best.i])), roundCoordinate(other[best.i + 1] + best.t * (other[best.i + 3] - other[best.i + 1]))];
+        let list = additions.get(best.id);
+        if (!list) additions.set(best.id, (list = []));
+        list.push([best.i, best.t, point[0], point[1]]);
+      }
+      line[at] = point[0];
+      line[at + 1] = point[1];
+      joined += 1;
+    }
+  });
+  for (const [id, list] of additions) {
+    const line = lineAt(id);
+    list.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const out = [];
+    let next = 0;
+    for (let i = 0; i < line.length; i += 2) {
+      out.push(line[i], line[i + 1]);
+      while (next < list.length && list[next][0] === i) {
+        out.push(list[next][2], list[next][3]);
+        next += 1;
       }
     }
+    lists[id % 2][Math.floor(id / 2)] = out;
   }
   return joined;
 }
@@ -253,7 +308,7 @@ async function main() {
   const streets = await readStreets(dataDir);
   const paths = await readPaths(dataDir);
   const joined = joinPathEnds(paths, streets);
-  console.log(`  ${streets.length} street lines, ${paths.length} paths and trails (${joined} ends joined to streets)`);
+  console.log(`  ${streets.length} street lines, ${paths.length} paths and trails (${joined} ends joined to streets and paths)`);
 
   // Every line as a run of point keys (wayStarts[i]..wayStarts[i + 1] in wayRefs), as the graph below reads them.
   const wayRefs = new Float64List();
@@ -355,7 +410,7 @@ async function main() {
   });
   const keptEdges = edges.filter((edge) => keptIndex[edge.a] >= 0).map((edge) => ({ a: keptIndex[edge.a], b: keptIndex[edge.b], meters: edge.meters }));
 
-  const result = writeWalkingTiles(OUT_DIR, keptNodes, keptEdges, { source: 'US Census Bureau TIGER/Line 2025, NYC Street Centerline, USGS National Digital Trails (public domain)' });
+  const result = writeWalkingTiles(OUT_DIR, keptNodes, keptEdges, { source: 'US Census Bureau TIGER/Line 2025, NYC Street Centerline, NYC Planimetric Database interior sidewalks, USGS National Digital Trails (public domain)', publicDataOnly: true });
   console.log(`Wrote ${result.tiles} tiles (${result.nodes} nodes, ${result.edges} edges, ${(result.bytes / 1e6).toFixed(1)} MB) to ${OUT_DIR}`);
 }
 

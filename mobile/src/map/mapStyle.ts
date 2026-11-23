@@ -438,6 +438,20 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
         'fill-opacity': ['interpolate', ['linear'], ['zoom'], 14, 0, 15, 1],
       },
     },
+    // Pedestrian plazas (New York City's): paved in the streets' color, so riders see where they can walk.
+    {
+      id: 'landuse-plaza',
+      type: 'fill',
+      source: SOURCE,
+      'source-layer': 'landuse',
+      minzoom: 14,
+      filter: ['all', AREAS, ['==', ['get', 'kind'], 'plaza']],
+      paint: {
+        'fill-color': palette.minor,
+        'fill-outline-color': palette.buildingOutline,
+        'fill-opacity': ['interpolate', ['linear'], ['zoom'], 14, 0, 14.5, 1],
+      },
+    },
     // Train and subway platforms above ground (New York City's), paved like Google's.
     {
       id: 'landuse-platform',

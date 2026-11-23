@@ -38,7 +38,7 @@ import { hasWalkingData, walkingMeters, walkingPath } from './walkingGraph';
 
 /**
  * Pathly's own transit trip planner: itineraries between two points from the agencies' published
- * timetables (transitRouter.ts over transitNetwork.ts) and walks along OpenStreetMap's streets
+ * timetables (transitRouter.ts over transitNetwork.ts) and walks along public streets and paths
  * (walkingGraph.ts), in the same itinerary format the app has always read. No outside service is
  * asked anything, so planning costs nothing per request.
  */

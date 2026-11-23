@@ -67,7 +67,7 @@
 - Fares: SBU publishes no fares in the feed. The campus buses are believed to be free to ride; task 2.4 confirms this on SBU's site and prices SBU legs at $0 with a dated note in `tripFares.ts`.
 
 ### 8. Attribution in Help & About
-- A "Transit data" row, next to the existing "Map data © OpenStreetMap" row, opens a list of every agency's data source. Each entry has the publisher name, a link, and any required wording. The list is built from one table, so new agencies add a line.
+- A "Transit data" row, next to the existing "Map data" row, opens a list of every agency's data source. Each entry has the publisher name, a link, and any required wording. The list is built from one table, so new agencies add a line.
 - SBU's entry is "Stony Brook University campus bus data, provided by Stony Brook University and ETA Transit Systems" unless SBU's permission asks for different text.
 - The permission reply is saved as `firebase/functions/static_data/LICENSES.md` (or appended to it, if the file exists by then) with the date and the sender, so the requirement is checkable.
 

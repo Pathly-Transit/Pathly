@@ -847,7 +847,8 @@ export function setTransitPlannerForTests(planner: typeof planTransitTrip | unde
 
 /**
  * Real transit itineraries between two places, planned by Pathly itself (tripPlanner.ts) from the
- * agencies' published timetables and OpenStreetMap's streets, so a plan costs no outside request.
+ * agencies' published timetables and the public street and path data (walkingGraph.ts), so a plan
+ * costs no outside request.
  * Each leg is then checked against the agencies' live feeds (tripLive.ts). An empty list means no
  * transit trip gets there.
  * Client call: httpsCallable(functions, 'planTrip')({ origin, destination, time, preference, modes, ferry?, lessWalking?, walkOnlyMaxMinutes? }).
