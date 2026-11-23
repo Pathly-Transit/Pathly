@@ -4,6 +4,7 @@ import { parse as parseCsv } from 'csv-parse/sync';
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 
 import type { AgencyConfig } from './gtfsAgencies';
+import { normalizePathStaticArchive } from './pathStatic';
 
 /**
  * Changes made to an agency's source feed before it's validated and published (and before a copy
@@ -99,9 +100,10 @@ export function collapsePlatformsToStations(archive: Uint8Array): Buffer {
   return zip(entries);
 }
 
-type TransformConfig = Pick<AgencyConfig, 'stationStops'>;
+type TransformConfig = Pick<AgencyConfig, 'id' | 'stationStops'>;
 
 /** The agency's source archive with its configured changes applied (see the top of this file). */
 export function transformSourceArchive(config: TransformConfig, archive: Buffer): Buffer {
-  return config.stationStops ? collapsePlatformsToStations(archive) : archive;
+  const normalized = config.id === 'path' ? normalizePathStaticArchive(archive) : archive;
+  return config.stationStops ? collapsePlatformsToStations(normalized) : normalized;
 }

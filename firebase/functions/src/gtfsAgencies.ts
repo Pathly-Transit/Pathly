@@ -327,10 +327,9 @@ export const AGENCY_CONFIGS: Record<AgencyId, AgencyConfig> = {
     id: 'path',
     displayName: 'PATH',
     dataDir: 'path',
-    // The Port Authority's feed, as its publisher (Trillium) hosts it. The latest one (checked
-    // 2026-11-18) ran out on 2026-06-01, so the refresh rejects it until a new one is published;
-    // until then PATH shows live arrivals and its stations and lines, but no timetable times.
-    staticFeedUrl: 'http://data.trilliumtransit.com/gtfs/path-nj-us/path-nj-us.zip',
+    // The operator's current feed replaced the expired Trillium archive. Import normalization
+    // keeps the station/line/direction IDs that live arrivals and saved routes already use.
+    staticFeedUrl: 'https://www.panynj.gov/content/dam/path/gtfs/PATH_GTFS.zip',
     stationStops: true,
     // Newark - World Trade Center at Newark (station 26733, once platforms are stations).
     requiredStaticFallbacks: [{ routeId: '862', stopIds: ['26733'] }],
