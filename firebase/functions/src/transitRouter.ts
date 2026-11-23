@@ -1,5 +1,6 @@
 import { NO_DROP_OFF, NO_PICKUP } from './routingTimetable';
 import type { ServiceDay, TransitMode, TransitNetwork } from './transitNetwork';
+import { createWalkingTransfers, type TransferResolver } from './walkingTransfers';
 
 /**
  * Round-based public transit routing (RAPTOR: Delling, Pajor and Werneck, "Round-Based Public
@@ -46,6 +47,8 @@ export type SearchOptions = {
   incomingRide?: { trip: number; stop: number; heldTrips: readonly number[] };
   /** How long after leaving (or before arriving) a trip may take at most, in seconds. */
   horizonSeconds: number;
+  /** Request-owned walking policy and physical observations, shared across search passes. */
+  transfers?: TransferResolver['resolve'];
 };
 
 /** One round's labels per stop, plus how each was reached. */
@@ -95,6 +98,7 @@ export class TransitRouter {
   private readonly egressSeconds: Int32Array;
   private active: Uint8Array[] = [];
   private options!: SearchOptions;
+  private readonly defaultTransfers: TransferResolver['resolve'];
 
   constructor(private readonly network: TransitNetwork, maxRounds: number) {
     const size = network.stopCount;
@@ -105,6 +109,7 @@ export class TransitRouter {
     this.queuePosition = new Int32Array(network.patternCount).fill(-1);
     this.patternAllowed = new Uint8Array(network.patternCount);
     this.egressSeconds = new Int32Array(size).fill(-1);
+    this.defaultTransfers = createWalkingTransfers(network, new Map()).resolve;
   }
 
   private prepare(options: SearchOptions, active: Uint8Array[]): void {
@@ -223,7 +228,7 @@ export class TransitRouter {
 
     let target = INF;
     const destination: { arrives: number; stop: number }[] = [{ arrives: INF, stop: -1 }];
-    const { patternStopStart, patternStops, patternFlags, patternTripStart, tripStart, tripProfileOffset, profileArr, profileDep, stopChangeSeconds, stopPatternStart, stopPatternPattern, stopPatternPosition, transferStart, transferTo, transferSeconds, timedTransfers, tripPattern, tripService } = network;
+    const { patternStopStart, patternStops, patternFlags, patternTripStart, tripStart, tripProfileOffset, profileArr, profileDep, stopChangeSeconds, stopPatternStart, stopPatternPattern, stopPatternPosition, timedTransfers, tripPattern, tripService } = network;
 
     for (let round = 1; round <= maxRounds && markedList.length > 0; round += 1) {
       const previous = this.rounds[round - 1]!;
@@ -283,18 +288,19 @@ export class TransitRouter {
           }
           if ((flags & NO_PICKUP) !== 0) continue;
           const byRide = previous.byRide[stop]!;
-          const rideReady = byRide < INF ? byRide + stopChangeSeconds[stop]! : INF;
+          const rideReady = byRide < INF && network.publishedTransferSeconds(stop, stop) !== -1 ? byRide + stopChangeSeconds[stop]! : INF;
           const walkReady = previous.byWalk[stop]!;
           const ready = walkReady <= rideReady ? walkReady : rideReady;
-          if (ready >= INF) continue;
+          // A trip-specific held connection can override a station's general transfer rule.
+          const held = byRide < INF ? (round === 1 && stop === options.incomingRide?.stop
+            ? options.incomingRide.heldTrips.map((trip): [number, number] => [trip, stop]) : timedTransfers.get(previous.trip[stop]!)) : undefined;
+          if (ready >= INF && !held?.length) continue;
           const currentDeparts = trip >= 0 ? startTime + profileDep[profile + position]! + offset : INF;
-          if (ready > currentDeparts) continue;
-          let found = this.earliestTrip(pattern, position, ready);
+          if (ready > currentDeparts && !held?.length) continue;
+          let found = ready < INF ? this.earliestTrip(pattern, position, ready) : null;
           let foundVia = walkReady <= rideReady ? 1 : 0;
           // A timed transfer the feed promises to hold: no change time needed.
           if (byRide < INF) {
-            const held = round === 1 && stop === options.incomingRide?.stop
-              ? options.incomingRide.heldTrips.map((trip): [number, number] => [trip, stop]) : timedTransfers.get(previous.trip[stop]!);
             if (held) {
               for (const [heldTrip, heldStop] of held) {
                 if (heldStop !== stop || tripPattern[heldTrip] !== pattern) continue;
@@ -328,10 +334,7 @@ export class TransitRouter {
           markedList.push(stop);
         }
         const arrived = current.byRide[stop]!;
-        for (let slot = transferStart[stop]!; slot < transferStart[stop + 1]!; slot += 1) {
-          const seconds = transferSeconds[slot]!;
-          if (seconds < 0) continue;
-          const to = transferTo[slot]!;
+        for (const { stop: to, seconds } of (options.transfers ?? this.defaultTransfers)(stop, 'forward')) {
           const time = arrived + seconds;
           if (time < best[to]! && time < target && time < current.byWalk[to]!) {
             current.byWalk[to] = time;
@@ -444,7 +447,7 @@ export class TransitRouter {
 
     let target = NEG_INF;
     const origin: { departs: number; stop: number }[] = [{ departs: NEG_INF, stop: -1 }];
-    const { patternStopStart, patternStops, patternFlags, tripStart, tripProfileOffset, profileArr, profileDep, stopChangeSeconds, stopPatternStart, stopPatternPattern, stopPatternPosition, transferStart, transferTo, transferSeconds } = network;
+    const { patternStopStart, patternStops, patternFlags, tripStart, tripProfileOffset, profileArr, profileDep, stopChangeSeconds, stopPatternStart, stopPatternPattern, stopPatternPosition } = network;
 
     for (let round = 1; round <= maxRounds && markedList.length > 0; round += 1) {
       const previous = this.rounds[round - 1]!;
@@ -503,7 +506,7 @@ export class TransitRouter {
           }
           if ((flags & NO_DROP_OFF) !== 0) continue;
           const byRide = previous.byRide[stop]!;
-          const rideReady = byRide > NEG_INF ? byRide - stopChangeSeconds[stop]! : NEG_INF;
+          const rideReady = byRide > NEG_INF && network.publishedTransferSeconds(stop, stop) !== -1 ? byRide - stopChangeSeconds[stop]! : NEG_INF;
           const walkReady = previous.byWalk[stop]!;
           const ready = walkReady >= rideReady ? walkReady : rideReady;
           if (ready <= NEG_INF) continue;
@@ -530,10 +533,7 @@ export class TransitRouter {
           markedList.push(stop);
         }
         const leaves = current.byRide[stop]!;
-        for (let slot = transferStart[stop]!; slot < transferStart[stop + 1]!; slot += 1) {
-          const seconds = transferSeconds[slot]!;
-          if (seconds < 0) continue;
-          const to = transferTo[slot]!;
+        for (const { stop: to, seconds } of (options.transfers ?? this.defaultTransfers)(stop, 'backward')) {
           const time = leaves - seconds;
           if (time > best[to]! && time > target && time > current.byWalk[to]!) {
             current.byWalk[to] = time;

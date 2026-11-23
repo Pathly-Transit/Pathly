@@ -1,9 +1,14 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 const { TransitNetwork } = require('../lib/transitNetwork');
 const { planTransitTrip, resetTripPlannerForTests, setTransitNetworkForTests } = require('../lib/tripPlanner');
 const { scheduleVersionForTimetable } = require('../lib/tripRunSchedule');
-const { buildTimetable, busFeed, stopIndex, wednesdayAt } = require('./helpers/routingFeeds');
+const { setWalkingDataForTests } = require('../lib/walkingGraph');
+const { writeWalkingTiles } = require('../lib/walkingTilesBuild');
+const { buildTimetable, busFeed, wednesdayAt } = require('./helpers/routingFeeds');
 
 test.afterEach(() => resetTripPlannerForTests());
 async function fixture({ held = false, walking = false } = {}) {
@@ -55,16 +60,26 @@ test('a guaranteed incoming transfer still targets its correct live-cloned servi
 });
 
 test('an incoming different-stop walk includes canonical transfer walking once with no extra rail margin', async () => {
-  const { plan, network } = await fixture({ walking: true });
-  const plans = await plan();
-  const first = ride(plans);
-  assert.equal(first.tripId, 'early');
-  assert.equal(first.minimumTransferSeconds, 0);
-  const from = stopIndex(network, 'P'), to = stopIndex(network, 'Q');
-  const slot = [...network.transferTo].findIndex((stop, index) => index >= network.transferStart[from] && index < network.transferStart[from + 1] && stop === to);
-  assert.ok(slot >= 0);
-  assert.equal(plans[0].steps[0].durationSeconds, network.transferSeconds[slot]);
-  assert.ok(plans[0].steps[0].durationSeconds < 180);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pathly-incoming-walk-'));
+  try {
+    // A short street detour takes 194 m, although the two stops are only 84 m apart.
+    writeWalkingTiles(dir, [
+      { lat: 40.74, lon: -73.9 }, { lat: 40.74, lon: -73.899 }, { lat: 40.78, lon: -73.9 },
+    ], [{ a: 0, b: 1, meters: 194 }]);
+    setWalkingDataForTests(dir);
+    const { plan } = await fixture({ walking: true });
+    const plans = await plan();
+    const first = ride(plans);
+    assert.equal(first.tripId, 'later', 'the measured walk cannot reach the 08:07 departure');
+    assert.equal(first.minimumTransferSeconds, 0);
+    const walk = plans[0].steps[0];
+    assert.equal(walk.kind, 'walk');
+    assert.equal(walk.distanceMeters, 194);
+    assert.equal(walk.durationSeconds, 179, 'walking time and transfer slack appear once, without another rail change margin');
+  } finally {
+    setWalkingDataForTests(null);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('unmatched incoming stops, schedules and earlier alighting claims fail safely before onward planning', async () => {
