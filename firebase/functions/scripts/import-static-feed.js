@@ -9,7 +9,7 @@
  *   node scripts/import-static-feed.js <agencyId> <source.zip>
  *
  * Download the source from the agency's staticFeedUrl in src/gtfsAgencies.ts. A feed whose service
- * has already ended (PATH's latest, at the time of writing) is still written, with a warning: its
+ * has already ended is still written, with a warning: its
  * stations and lines are right, but it has no timetable for today.
  */
 const fs = require('fs');

@@ -17,7 +17,10 @@ const { displayRouteColor } = require('../lib/routeColors');
 const { isInServiceArea } = require('../lib/serviceArea');
 const { searchStops } = require('../lib/stopSearch');
 const { agencyIdsForStep, modeForAgency } = require('../lib/tripAgencies');
-const { modeForRoute } = require('../lib/transitNetwork');
+const { modeForRoute, TransitNetwork } = require('../lib/transitNetwork');
+const { TransitRouter } = require('../lib/transitRouter');
+const { decodeRoutingTimetable } = require('../lib/routingTimetable');
+const { serviceDaysAround } = require('../lib/tripPlanner');
 
 const HOBOKEN = { lat: 40.7359, lng: -74.0292 };
 const originalFetch = global.fetch;
@@ -79,8 +82,28 @@ test('PATH platforms become their stations, in stop times and stops, keeping ent
 test('the committed PATH copy names stations, matching PATH\'s live feed', () => {
   const stops = fs.readFileSync(path.join(__dirname, '../static_data/path/stops.txt'), 'utf8');
   assert.ok(!/^781718,/m.test(stops), 'platform stops were replaced by their stations');
-  const stopTimes = fs.readFileSync(path.join(__dirname, '../static_data/path/stop_times.txt'), 'utf8').slice(0, 20_000);
+  const stopTimes = fs.readFileSync(path.join(__dirname, '../static_data/path/stop_times.txt'), 'utf8');
   assert.match(stopTimes, /,26733,/);
+});
+
+test('the committed PATH timetable can route to Newport on the release weekend and following weekday', () => {
+  const timetable = decodeRoutingTimetable(fs.readFileSync(path.join(__dirname, '../static_data/path/derived/routing.bin')));
+  const network = new TransitNetwork([{ agencyId: 'path', version: 'bundled', timetable }]);
+  const router = new TransitRouter(network, 6);
+  const atStop = (id) => timetable.stopIds.indexOf(id);
+  for (const at of ['2026-11-22T16:00:00Z', '2026-11-23T13:00:00Z']) {
+    const instant = Date.parse(at);
+    const { baseStartMs, days } = serviceDaysAround(instant);
+    for (const [from, to] of [['26724', '26732'], ['26732', '26724']]) {
+      const journeys = router.forward(Math.round((instant - baseStartMs) / 1000),
+        [{ stop: atStop(from), seconds: 0 }], [{ stop: atStop(to), seconds: 0 }],
+        { days, maxRounds: 6, modes: new Set(['subway']), horizonSeconds: 18 * 3600 }, network.activeServices(days));
+      assert.ok(journeys.length > 0, `${from} to ${to} at ${at} has current service`);
+      const ride = journeys[0].legs.find((leg) => leg.kind === 'ride');
+      assert.ok(network.pathBetween(ride.pattern, ride.boardPosition, ride.alightPosition).length > 10,
+        'the fallback timetable preserves the published track geometry');
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -116,7 +139,7 @@ test('PATH\'s lines are named by their codes, from route_long_name', () => {
 
 test('the line list, search and stops name PATH\'s lines by code', async () => {
   const pathLines = listLines().filter((line) => line.agencyId === 'path');
-  assert.deepEqual(new Set(pathLines.map((line) => line.shortName)), new Set(['HOB-33', 'HOB-WTC', 'NWK-WTC', 'JSQ-33', 'JSQ-HOB-33', 'NWK-HAR', 'WTC-33']));
+  assert.deepEqual(new Set(pathLines.map((line) => line.shortName)), new Set(['HOB-33', 'HOB-WTC', 'NWK-WTC', 'JSQ-33', 'JSQ-HOB-33']));
   assert.equal(pathLines.find((line) => line.routeId === '862').routeName, 'Newark - World Trade Center');
   const found = await searchRoutes('JSQ-33', HOBOKEN.lat, HOBOKEN.lng);
   assert.equal(found[0].routeId, '861');
