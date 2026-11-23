@@ -338,9 +338,6 @@ export function HomeScreen() {
   // Routine GPS updates move only the rider's dot, never the map.
   const [recenterRequest, setRecenterRequest] = useState(0);
   const [hasCenteredOnFix, setHasCenteredOnFix] = useState(false);
-  // A rotated or tilted map shows a compass that turns it back to north-up.
-  const [mapOrientation, setMapOrientation] = useState({ heading: 0, rotated: false });
-  const [reorientRequest, setReorientRequest] = useState(0);
   // "Finding your location" stays while it's true; "unavailable" is only a brief heads-up.
   const [unavailableNoticeDone, setUnavailableNoticeDone] = useState(false);
   useEffect(() => {
@@ -1289,22 +1286,6 @@ export function HomeScreen() {
   // Inside the sheet's scroller, so the browser moves them with the sheet, as on Route View.
   const homeMapButtons = (
     <View pointerEvents="box-none" style={[styles.locationButton, thumb.anchor(16), { bottom: 14 + thumb.mapBottomClearance }]}>
-          {mapOrientation.rotated ? (
-            <PressableScale
-              accessibilityHint="Turns the map back to north-up"
-              accessibilityLabel="Reorient map to north"
-              accessibilityRole="button"
-              onPress={() => setReorientRequest((count) => count + 1)}
-              style={styles.reorientButton}
-              testID="reorient-map"
-            >
-              {/* The needle's red end points at true north on the rotated map. */}
-              <View style={[styles.compassNeedle, { transform: [{ rotate: `${-mapOrientation.heading}deg` }] }]} testID="reorient-needle">
-                <View style={styles.needleNorth} />
-                <View style={styles.needleSouth} />
-              </View>
-            </PressableScale>
-          ) : null}
           <CurrentLocationButton
             loading={locationStatus === 'loading'}
             onPress={() => {
@@ -1342,12 +1323,10 @@ export function HomeScreen() {
             setIsLocationCentered(false);
             setRiderMovedMap(true);
           }}
-          onOrientationChange={setMapOrientation}
           onSavedLocationPress={openSavedLocationFromMap}
           // The sheet's own cover is added as it moves (TransitSheet, mapSheetInset.ts).
           padding={{ top: homeHeaderInset }}
           recenterRequest={recenterRequest}
-          reorientRequest={reorientRequest}
           savedLocations={savedLocations}
           locationKnown={locationStatus === 'located'}
           simulatedLocation={locationMocked}
@@ -1527,42 +1506,6 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     elevation: 4,
     alignItems: 'center',
     gap: 10,
-  },
-  reorientButton: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 20,
-    backgroundColor: colors.surface,
-    shadowColor: colors.shadow,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  compassNeedle: {
-    alignItems: 'center',
-  },
-  needleNorth: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: 5,
-    borderRightWidth: 5,
-    borderBottomWidth: 12,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderBottomColor: colors.red,
-  },
-  needleSouth: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: 5,
-    borderRightWidth: 5,
-    borderTopWidth: 12,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderTopColor: colors.mutedInk,
   },
   tapCoords: { position: 'absolute', alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 14, borderRadius: radii.pill, backgroundColor: colors.ink, zIndex: 4 },
   tapCoordsText: { color: colors.surface, fontFamily: fontFamilies.bold, fontSize: 13 },

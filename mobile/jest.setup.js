@@ -340,7 +340,7 @@ jest.mock('./src/map/MapCanvas', () => {
   const { forwardRef, useEffect, useImperativeHandle } = require('react');
   const { View } = require('react-native');
   // Shared across every map so tests can assert when a map was told to move, set the camera a
-  // map reports (e.g. rotated by the rider), and say where a point is on the screen.
+  // map reports, and say where a point is on the screen.
   const mockEaseTo = jest.fn();
   const mockFitPoints = jest.fn();
   const mockPointForCoordinate = jest.fn(() => Promise.resolve({ x: 0, y: 0 }));

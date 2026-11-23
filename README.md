@@ -72,8 +72,8 @@ Every map in the app (web, iOS, and Android) draws Pathly's own base map: vector
 - US Census Bureau TIGER/Line: streets, rail, water, parks and landmarks, towns, and state lines.
 - US Census Bureau population estimates: which town names show first.
 - USGS Geographic Names (GNIS): neighborhoods, bays, and islands.
-- NYC Open Data: New York City's building footprints, with their measured roof heights (buildings stand up in 3D when the map is tilted); its paths, boardwalks, and step streets (Street Centerline); and its sports fields and above-ground station platforms (Planimetric Database).
-- FEMA USA Structures, as the USGS National Map publishes them: buildings outside New York City, over the area riders explore (they have no heights, so tilted they rise to about two stories).
+- NYC Open Data: New York City's building footprints; its paths, boardwalks, and step streets (Street Centerline); and its sports fields and above-ground station platforms (Planimetric Database).
+- FEMA USA Structures, as the USGS National Map publishes them: buildings outside New York City, over the area riders explore.
 - USGS National Digital Trails: trails in parks and on public lands (drawn dashed), from federal and state agencies.
 - Wikidata (public domain): notable landmarks, such as stadiums, museums, malls, and sights, that are still standing and have a Wikipedia article.
 - Natural Earth: coastlines, highways, and cities around the detailed area, for zoomed-out maps.

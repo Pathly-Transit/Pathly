@@ -110,7 +110,7 @@ function cameraOf(state: ViewStateChangeEvent): MapCamera {
 }
 
 export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCanvas(
-  { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onStopPress, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
+  { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onStopPress, onUserGesture, padding, testID },
   ref,
 ) {
   const { isDark, mapTheme, transitIcons } = useTheme();
@@ -251,8 +251,9 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
           onUserGesture?.();
         }}
         ref={mapRef}
-        touchPitch={interactive && pitchEnabled}
-        touchRotate={interactive && rotateEnabled}
+        // Flat and north-up: the map never turns or tilts.
+        touchPitch={false}
+        touchRotate={false}
         touchZoom={interactive}
       >
         <Images images={MAP_ICONS} />

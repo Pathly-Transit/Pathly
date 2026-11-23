@@ -31,8 +31,6 @@ const TILE_BOUNDS: [number, number, number, number] = [
   MAP_EXPLORATION_BOUNDS.north + 4,
 ];
 const TILES_MAX_ZOOM = 14;
-/** A building's height when its data has none (meters: about two stories). */
-const DEFAULT_BUILDING_METERS = 6;
 
 /**
  * Empty layers at the top of the style that Pathly's own lines and dots are slotted beneath
@@ -91,8 +89,8 @@ const LIGHT: MapPalette = {
   school: '#E8E9EA',
   water: '#90C4F3',
   aeroArea: '#E2E5EB',
-  building: '#E3E0D9',
-  buildingOutline: '#CDC9C1',
+  building: '#D4CFC4',
+  buildingOutline: '#B9B3A8',
   casing: '#C3C7CD',
   minor: '#FFFFFF',
   arterial: '#FFFFFF',
@@ -153,7 +151,7 @@ const DARK: MapPalette = {
 const MUTED_LIGHT: MapPalette = {
   ...LIGHT,
   land: '#F3F3F2', manMade: '#ECECEB', park: '#DCE6DA', grass: '#E3EBE1', hospital: '#EFE6E5', school: '#EDEBE6',
-  water: '#C9D6E0', aeroArea: '#E8E9EB', building: '#E4E4E3', buildingOutline: '#D2D2D1',
+  water: '#C9D6E0', aeroArea: '#E8E9EB', building: '#D2D2D1', buildingOutline: '#BBBBBA',
   casing: '#D0D0D0', arterialCasing: '#C4C4C4', highway: '#E0E0E0', highwayCasing: '#BDBDBD', motorway: '#DCDCDC', motorwayCasing: '#B8B8B8',
   path: '#B9CEC6', rail: '#BDBDBD', ferry: '#8FA6BA', boundary: '#B5B5B5',
   label: '#707070', placeLabel: '#4A4A4A', neighborhoodLabel: '#8A8A8A', roadLabel: '#707070', waterLabel: '#5F7A90', parkLabel: '#5E7A5E',
@@ -173,7 +171,7 @@ const MUTED_DARK: MapPalette = {
 const VIBRANT_LIGHT: MapPalette = {
   ...LIGHT,
   land: '#F6F5EE', park: '#8FD68A', grass: '#B4E6A6', hospital: '#FBC9C2', school: '#F5E2B8',
-  water: '#5DB0F5', aeroArea: '#DCE2EE', building: '#E0DCD2', buildingOutline: '#C6C0B4',
+  water: '#5DB0F5', aeroArea: '#DCE2EE', building: '#D1CCBD', buildingOutline: '#B2AA9A',
   arterialCasing: '#A7AEB8', highway: '#FCE9B6', highwayCasing: '#E3C27A', motorway: '#FBDFA0', motorwayCasing: '#DDB36A',
   path: '#86CFB3', ferry: '#1E7FE0', waterLabel: '#1A5FB4', parkLabel: '#1F7A32',
 };
@@ -187,7 +185,7 @@ const VIBRANT_DARK: MapPalette = {
 /** Warm: paper-cream land and soft, earthy greens and blues. */
 const WARM_LIGHT: MapPalette = {
   land: '#F5EFE3', manMade: '#EDE5D6', park: '#CFE0B0', grass: '#DCE8C2', hospital: '#F4D9CF', school: '#EFE3CC',
-  water: '#A9CDE0', aeroArea: '#E6E1D6', building: '#E7DECF', buildingOutline: '#D3C7B4',
+  water: '#A9CDE0', aeroArea: '#E6E1D6', building: '#DBCEB7', buildingOutline: '#C2B197',
   casing: '#D4C9B6', minor: '#FFFDF8', arterial: '#FFFBF2', arterialCasing: '#C9BBA4', highway: '#EBDDC4', highwayCasing: '#C4AE8A', motorway: '#E8D6B6', motorwayCasing: '#BFA37A',
   path: '#B3C69E', rail: '#B8AA94', ferry: '#5E8FB5', boundary: '#B8A991',
   label: '#6B5E4E', labelHalo: '#FFFBF2', placeLabel: '#4A3F33', neighborhoodLabel: '#8A7C6A', roadLabel: '#6B5E4E', waterLabel: '#3E6F8F', parkLabel: '#4E7A3A',
@@ -469,21 +467,6 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
       paint: { 'line-color': palette.rail, 'line-width': width(14, 3, 18, 8), 'line-dasharray': [0.2, 4] },
     },
     ...roadLayers(palette, 'bridge'),
-    {
-      // Buildings standing up when the map is tilted, as Google's do: from street level they rise to
-      // their height (New York City's measured roofs; elsewhere a low default), over the streets.
-      id: 'building-3d',
-      type: 'fill-extrusion',
-      source: SOURCE,
-      'source-layer': 'building',
-      minzoom: 15,
-      paint: {
-        'fill-extrusion-color': palette.building,
-        'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'], 15, 0, 16, ['coalesce', ['get', 'h'], DEFAULT_BUILDING_METERS]],
-        'fill-extrusion-base': 0,
-        'fill-extrusion-opacity': 0.92,
-      },
-    },
     {
       // Which way a one-way road runs, in small arrows along it, close in (roads marked `oneway`).
       id: 'road-oneway-arrow',

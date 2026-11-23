@@ -90,7 +90,7 @@ function removeOverlay(map: maplibregl.Map, layerId: string, sourceId: string) {
 }
 
 export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCanvas(
-  { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onStopPress, onUserGesture, padding, pitchEnabled = true, rotateEnabled = true, testID },
+  { children, initialCamera, interactive = true, maxBounds, minZoom, onCameraIdle, onLongPress, onPress, onReady, onStopPress, onUserGesture, padding, testID },
   ref,
 ) {
   const { isDark, mapTheme, transitIcons } = useTheme();
@@ -121,11 +121,13 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       // No attribution: the base map's sources ask no credit on the map (Settings → About lists them).
       attributionControl: false,
       interactive,
-      dragRotate: interactive && rotateEnabled,
-      pitchWithRotate: interactive && rotateEnabled && pitchEnabled,
-      touchPitch: interactive && pitchEnabled,
+      // Flat and north-up: the map never turns or tilts.
+      dragRotate: false,
+      pitchWithRotate: false,
+      touchPitch: false,
+      maxPitch: 0,
     });
-    if (!rotateEnabled) instance.touchZoomRotate.disableRotation();
+    instance.touchZoomRotate.disableRotation();
     // Keyboard arrows would also scroll the page around the map.
     instance.keyboard.disable();
 

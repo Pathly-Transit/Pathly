@@ -234,9 +234,7 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
           setFollowing(false);
           onUserPan?.();
         } : undefined}
-        pitchEnabled={false}
         ref={mapRef}
-        rotateEnabled={false}
         testID={testID}
       >
         {/* A ride's line before the rider boards is faint, like Route View's line behind the rider's stop. */}
