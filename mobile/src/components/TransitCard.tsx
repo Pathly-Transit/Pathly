@@ -123,6 +123,8 @@ export function TransitCard({ onPress, route, saved = false }: TransitCardProps)
   const { width } = useViewportSize();
   const pageWidth = Math.min(width, 540) - CARD_HORIZONTAL_MARGIN * 2;
   const [activePage, setActivePage] = useState<number>(() => openingDirectionIndex(route));
+  // RN and RN Web name the immediate-press option differently.
+  const pressTiming = Platform.OS === 'web' ? { delayPressIn: 0 } : { unstable_pressDelay: 0 };
 
   // A tap opens the route only when the pointer stayed put. On web a press still ends in a click
   // after a mouse drag (react-native-web fires onPress from the click), so a swipe that the card
@@ -200,7 +202,7 @@ export function TransitCard({ onPress, route, saved = false }: TransitCardProps)
             accessibilityLabel={accessibilityLabelFor(item)}
             accessibilityRole="button"
             // Pressed at once, so even a quick flick is cancelled as moved rather than left unpressed.
-            delayPressIn={0}
+            {...pressTiming}
             focusable={Platform.OS === 'web' ? index === activePage : undefined}
             onPress={() => handlePress(index)}
             onPressIn={handlePressIn}
