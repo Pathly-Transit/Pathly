@@ -45,7 +45,6 @@ const PAGE_TURN_DISTANCE = 12;
 const CLAIM_DISTANCE = 6;
 /** A quick flick turns the page even when it's shorter than PAGE_TURN_DISTANCE (points per ms). */
 const FLICK_VELOCITY = 0.15;
-const webImmediatePress = Platform.OS === 'web' ? { delayPressIn: 0 } : null;
 
 /** A pulsing block where the minutes will appear, while the first live times load. */
 function TimePlaceholder({ styles }: { styles: ReturnType<typeof createStyles> }) {
@@ -124,6 +123,8 @@ export function TransitCard({ onPress, route, saved = false }: TransitCardProps)
   const { width } = useViewportSize();
   const pageWidth = Math.min(width, 540) - CARD_HORIZONTAL_MARGIN * 2;
   const [activePage, setActivePage] = useState<number>(() => openingDirectionIndex(route));
+  // RN and RN Web name the immediate-press option differently.
+  const pressTiming = Platform.OS === 'web' ? { delayPressIn: 0 } : { unstable_pressDelay: 0 };
 
   // A tap opens the route only when the pointer stayed put. On web a press still ends in a click
   // after a mouse drag (react-native-web fires onPress from the click), so a swipe that the card
@@ -200,9 +201,8 @@ export function TransitCard({ onPress, route, saved = false }: TransitCardProps)
             accessibilityHint="Opens route details. Swipe horizontally for the other direction."
             accessibilityLabel={accessibilityLabelFor(item)}
             accessibilityRole="button"
-            // Pressed at once on web (react-native-web waits 50 ms), so even a quick flick is
-            // cancelled as moved rather than left unpressed. Not in RN's Pressable types.
-            {...webImmediatePress}
+            // Pressed at once, so even a quick flick is cancelled as moved rather than left unpressed.
+            {...pressTiming}
             focusable={Platform.OS === 'web' ? index === activePage : undefined}
             onPress={() => handlePress(index)}
             onPressIn={handlePressIn}
