@@ -2,8 +2,13 @@
 /**
  * Builds the pedestrian street graph Nearby and the trip planner use to find the stop closest on
  * foot and draw the walk there (see src/walkingGraph.ts), into static_data/walking/, which is bundled
- * with the deploy. It reads the base map's own public sources, so walks drawn on the map need no
- * credit there either:
+ * with the deploy, from OpenStreetMap's pedestrian network when its extracts have been fetched
+ * (<data-dir>/osm-pbf/*.osm.pbf: npm run map:download fetches the states the service area reaches).
+ * OpenStreetMap maps the sidewalks, crossings, stairs, and campus and park paths that make walks
+ * accurate; its license asks for a credit wherever the walks show, which the app's map carries
+ * (MapCredit) and the manifest records (credits).
+ *
+ * Without the extracts, it falls back to the base map's public sources:
  *   - US Census Bureau TIGER/Line 2025 streets and walkways, in every county the service area touches
  *     (limited-access highways and their ramps left out);
  *   - New York City's paths and trails, boardwalks, and step streets (NYC Street Centerline);
@@ -15,15 +20,15 @@
  *
  * Usage (after `npm run build`, which compiles the tile writer this runs):
  *   1. From the repository root, fetch the map's sources: npm run map:download -- <data-dir>
- *   2. node --max-old-space-size=6144 scripts/build-walking-tiles.js <data-dir>
+ *   2. node --max-old-space-size=12288 scripts/build-walking-tiles.js <data-dir>
  *   node scripts/build-walking-tiles.js --check   build nothing; exit 1 if the tiles are missing or
  *                                                 incomplete (run before every deploy)
  *
  * The tiles are gitignored, so a fresh checkout has none until step 2 runs. Without them Nearby
  * still works but quietly falls back to straight-line distance, which is why deploys check.
  *
- * Keeps only the service area, joins ways at shared points (TIGER's streets share their
- * intersections' exact coordinates), drops points along a street that aren't intersections
+ * Keeps only the service area, joins ways at shared points (OpenStreetMap's ways share their nodes;
+ * TIGER's streets share their intersections' exact coordinates), drops points along a street that aren't intersections
  * (keeping one every ~50 m so a stop mid-block snaps nearby), and drops tiny disconnected pieces a
  * stop could snap onto by mistake.
  */
@@ -51,6 +56,29 @@ const JOIN_METERS = 15;
  */
 const WALKABLE_ROADS = new Set(['S1200', 'S1400', 'S1500', 'S1640', 'S1710', 'S1720', 'S1730', 'S1740', 'S1780', 'S1820', 'S1830']);
 
+/** The credit OpenStreetMap's license (ODbL) asks for wherever its data shows. */
+const OSM_CREDIT = '© OpenStreetMap contributors';
+/** The app's map style, whose credit (MAP_ATTRIBUTION, shown by MapCredit) every walk shows under. */
+const MAP_STYLE = path.join(__dirname, '../../../mobile/src/map/mapStyle.ts');
+
+// OpenStreetMap ways a person can walk along. Motorways are left out; so is anything tagged as closed to people on foot.
+const WALKABLE_HIGHWAYS = new Set([
+  'footway', 'path', 'pedestrian', 'steps', 'living_street', 'residential', 'service', 'unclassified', 'road',
+  'tertiary', 'tertiary_link', 'secondary', 'secondary_link', 'primary', 'primary_link', 'trunk', 'trunk_link',
+  'track', 'cycleway', 'bridleway', 'corridor', 'crossing', 'elevator',
+]);
+const FOOT_ALLOWED = new Set(['yes', 'designated', 'permissive', 'official']);
+
+function isWalkable(tags) {
+  if (!tags || !WALKABLE_HIGHWAYS.has(tags.highway)) return false;
+  if (tags.foot && FOOT_ALLOWED.has(tags.foot)) return true;
+  // use_sidepath: walk on the separately mapped sidewalk instead, which is its own way.
+  if (tags.foot === 'no' || tags.foot === 'private' || tags.foot === 'use_sidepath') return false;
+  if (tags.access === 'no' || tags.access === 'private') return false;
+  if (tags.highway === 'trunk' || tags.highway === 'trunk_link') return tags.sidewalk !== undefined && tags.sidewalk !== 'no' && tags.sidewalk !== 'none';
+  return true;
+}
+
 /** A growable Float64Array. */
 class Float64List {
   constructor() { this.data = new Float64Array(1 << 20); this.length = 0; }
@@ -76,8 +104,11 @@ function checkTiles() {
     return `${manifestPath} is unreadable: ${error.message}`;
   }
   if (manifest.version !== WALKING_FORMAT_VERSION || manifest.tileDegrees !== WALKING_TILE_DEGREES) return 'tiles are in an older format';
-  // No OpenStreetMap (or other credit-requiring) data ships: only graphs this script built from public sources.
-  if (manifest.publicDataOnly !== true) return `they weren't built from public data alone (built from ${manifest.source ?? 'unknown sources'}); rebuild them`;
+  // Only a graph that lists the credits its sources need ships, and only when the app's map shows them.
+  if (!Array.isArray(manifest.credits)) return `the manifest doesn't list the credits its sources need (built from ${manifest.source ?? 'unknown sources'}); rebuild them`;
+  const shown = fs.readFileSync(MAP_STYLE, 'utf-8').match(/export const MAP_ATTRIBUTION = '([^']*)'/)?.[1] ?? '';
+  const unshown = manifest.credits.filter((credit) => !shown.includes(credit));
+  if (unshown.length > 0) return `walks need ${unshown.join(', ')} credited, but the app's map (mapStyle.ts MAP_ATTRIBUTION) doesn't show it`;
   if (!Array.isArray(manifest.tiles) || manifest.tiles.length === 0) return 'the manifest lists no tiles';
   const missing = manifest.tiles.filter((key) => !fs.existsSync(path.join(OUT_DIR, `${key}.bin.gz`)));
   if (missing.length > 0) return `${missing.length} of ${manifest.tiles.length} tiles are missing (e.g. ${missing[0]})`;
@@ -135,6 +166,91 @@ async function readStreets(dataDir) {
         lines.push(line);
       }
     }
+  }
+  return lines;
+}
+
+/** The states (Geofabrik's extract names) the service area reaches; the map's other extracts are left alone. */
+const WALKING_STATES = ['new-york', 'new-jersey', 'connecticut', 'pennsylvania', 'delaware'];
+
+/** OpenStreetMap's extracts of WALKING_STATES in <data-dir>/osm-pbf. */
+function osmExtracts(dataDir) {
+  const dir = path.join(dataDir, 'osm-pbf');
+  const wanted = new Set(WALKING_STATES.map((state) => `${state}-latest.osm.pbf`));
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => wanted.has(name)).sort().map((name) => path.join(dir, name)) : [];
+}
+
+/**
+ * The walkable ways in OpenStreetMap's extracts, as lines of [lon, lat, ...] inside the service
+ * area (a way leaving it is cut there). Reads each file twice: first the walkable ways (which nodes
+ * they use; a way in two states' files, once), then those nodes' coordinates.
+ */
+async function readOsmWays(files) {
+  const { OSMTransform } = await import('osm-pbf-parser-node');
+  // Whole blocks at a time: tens of millions of entities read one by one would be far slower.
+  const blocks = (file, options) => fs.createReadStream(file).pipe(new OSMTransform(options));
+  const wayRefs = new Float64List();
+  const wayStarts = [0];
+  const seenWays = new Set();
+  for (const file of files) {
+    console.log(`  walkable ways in ${path.basename(file)}...`);
+    for await (const block of blocks(file, { withTags: { way: ['highway', 'foot', 'access', 'sidewalk'], node: false, relation: false }, withInfo: false })) {
+      for (const item of block) {
+        if (item.type !== 'way' || seenWays.has(item.id) || !isWalkable(item.tags)) continue;
+        seenWays.add(item.id);
+        for (const ref of item.refs) wayRefs.push(ref);
+        wayStarts.push(wayRefs.length);
+      }
+    }
+  }
+  seenWays.clear();
+  const refs = wayRefs.view();
+  // The distinct nodes those ways use, sorted (in place: a Set can't hold this many), for binary search.
+  const sorted = Float64Array.from(refs).sort();
+  let distinct = 0;
+  for (let i = 0; i < sorted.length; i += 1) if (i === 0 || sorted[i] !== sorted[i - 1]) sorted[distinct++] = sorted[i];
+  const needed = sorted.subarray(0, distinct);
+  const lat = new Float64Array(needed.length).fill(Number.NaN);
+  const lon = new Float64Array(needed.length).fill(Number.NaN);
+  const indexOf = (id) => {
+    let low = 0;
+    let high = needed.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (needed[mid] === id) return mid;
+      if (needed[mid] < id) low = mid + 1;
+      else high = mid - 1;
+    }
+    return -1;
+  };
+  for (const file of files) {
+    console.log(`  node positions in ${path.basename(file)}...`);
+    reading: for await (const block of blocks(file, { withTags: false, withInfo: false })) {
+      for (const item of block) {
+        if (item.type === 'way') break reading; // Nodes come first in a sorted extract.
+        if (item.type !== 'node' || !inServiceArea(item.lon, item.lat)) continue;
+        const index = indexOf(item.id);
+        if (index >= 0) {
+          lat[index] = item.lat;
+          lon[index] = item.lon;
+        }
+      }
+    }
+  }
+  // Each way as lines through its nodes inside the service area (a node outside cuts it).
+  const lines = [];
+  for (let way = 0; way + 1 < wayStarts.length; way += 1) {
+    let line = [];
+    for (let i = wayStarts[way]; i < wayStarts[way + 1]; i += 1) {
+      const index = indexOf(refs[i]);
+      if (index >= 0 && !Number.isNaN(lat[index])) {
+        line.push(lon[index], lat[index]);
+        continue;
+      }
+      if (line.length >= 4) lines.push(line);
+      line = [];
+    }
+    if (line.length >= 4) lines.push(line);
   }
   return lines;
 }
@@ -300,15 +416,29 @@ async function main() {
   }
   const dataDir = process.argv[2];
   if (!dataDir || !fs.existsSync(dataDir)) {
-    console.error('Usage: node --max-old-space-size=6144 scripts/build-walking-tiles.js <data-dir>   (the folder npm run map:download fills)');
+    console.error('Usage: node --max-old-space-size=12288 scripts/build-walking-tiles.js <data-dir>   (the folder npm run map:download fills)');
     process.exit(2);
   }
 
-  console.log('Reading streets and paths...');
-  const streets = await readStreets(dataDir);
-  const paths = await readPaths(dataDir);
-  const joined = joinPathEnds(paths, streets);
-  console.log(`  ${streets.length} street lines, ${paths.length} paths and trails (${joined} ends joined to streets and paths)`);
+  const extracts = osmExtracts(dataDir);
+  let streets;
+  let paths;
+  let meta;
+  if (extracts.length > 0) {
+    const names = extracts.map((file) => path.basename(file)).join(', ');
+    console.log(`Reading OpenStreetMap's walkable ways (${names})...`);
+    streets = await readOsmWays(extracts);
+    paths = [];
+    console.log(`  ${streets.length} walkable lines`);
+    meta = { source: `OpenStreetMap (${names}; ODbL)`, credits: [OSM_CREDIT] };
+  } else {
+    console.log('No OpenStreetMap extracts in osm-pbf/: reading the public streets and paths...');
+    streets = await readStreets(dataDir);
+    paths = await readPaths(dataDir);
+    const joined = joinPathEnds(paths, streets);
+    console.log(`  ${streets.length} street lines, ${paths.length} paths and trails (${joined} ends joined to streets and paths)`);
+    meta = { source: 'US Census Bureau TIGER/Line 2025, NYC Street Centerline, NYC Planimetric Database interior sidewalks, USGS National Digital Trails (public domain)', credits: [] };
+  }
 
   // Every line as a run of point keys (wayStarts[i]..wayStarts[i + 1] in wayRefs), as the graph below reads them.
   const wayRefs = new Float64List();
@@ -410,7 +540,7 @@ async function main() {
   });
   const keptEdges = edges.filter((edge) => keptIndex[edge.a] >= 0).map((edge) => ({ a: keptIndex[edge.a], b: keptIndex[edge.b], meters: edge.meters }));
 
-  const result = writeWalkingTiles(OUT_DIR, keptNodes, keptEdges, { source: 'US Census Bureau TIGER/Line 2025, NYC Street Centerline, NYC Planimetric Database interior sidewalks, USGS National Digital Trails (public domain)', publicDataOnly: true });
+  const result = writeWalkingTiles(OUT_DIR, keptNodes, keptEdges, meta);
   console.log(`Wrote ${result.tiles} tiles (${result.nodes} nodes, ${result.edges} edges, ${(result.bytes / 1e6).toFixed(1)} MB) to ${OUT_DIR}`);
 }
 

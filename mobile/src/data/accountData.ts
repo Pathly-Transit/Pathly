@@ -127,14 +127,14 @@ export async function deleteAccount(user: User, password: string): Promise<void>
   await eraseAccount(user);
 }
 
-/** Whether the rider can confirm with a password; one who joined only with Google has none. */
+/** Whether the rider can confirm with a password; one who joined only with Apple or Google has none. */
 export function hasPassword(user: User): boolean {
   return Boolean(user.providerData?.some((provider) => provider.providerId === 'password'));
 }
 
 /**
- * Deletes the account after `reauthenticate` confirms a recent sign-in some other way: Google
- * riders confirm with Google (googleReauth.ts), since Google Play requires every rider who can
+ * Deletes the account after `reauthenticate` confirms a recent sign-in some other way: Apple and
+ * Google riders confirm with that provider (appleAuth.ts, googleReauth.ts), since Google Play requires every rider who can
  * make an account to be able to delete it.
  */
 export async function deleteAccountAfter(user: User, reauthenticate: (user: User) => Promise<void>): Promise<void> {

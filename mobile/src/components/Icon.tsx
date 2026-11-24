@@ -25,6 +25,8 @@ const glyphs = {
   cart: ['shopping-cart-bold', 'shopping-cart-fill'],
   check: ['check-bold', 'check-bold'],
   close: ['x-circle-fill', 'x-circle-fill'],
+  // The map's data credit (MapCredit): the same outline on and off, it has no "on" state.
+  credit: ['copyright-bold', 'copyright-bold'],
   collapse: ['caret-up-bold', 'caret-up-bold'],
   dismiss: ['x-bold', 'x-bold'],
   download: ['download-simple-bold', 'download-simple-fill'],

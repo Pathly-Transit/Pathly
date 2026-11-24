@@ -29,7 +29,9 @@ jest.mock('firebase/auth', () => ({
   deleteUser: jest.fn(() => Promise.resolve()),
   EmailAuthProvider: { credential: jest.fn((email, password) => ({ providerId: 'password', email, password })) },
   GoogleAuthProvider: Object.assign(jest.fn(), { credential: jest.fn((idToken) => ({ providerId: 'google.com', idToken })) }),
+  OAuthProvider: jest.fn((providerId) => ({ credential: ({ idToken, rawNonce }) => ({ providerId, idToken, rawNonce }) })),
   reauthenticateWithCredential: jest.fn(() => Promise.resolve()),
+  revokeAccessToken: jest.fn(() => Promise.resolve()),
   sendPasswordResetEmail: jest.fn(() => Promise.resolve()),
   sendEmailVerification: jest.fn(() => Promise.resolve()),
   signInAnonymously: jest.fn(() => Promise.resolve({})),
@@ -37,6 +39,7 @@ jest.mock('firebase/auth', () => ({
     callback(mockUser);
     return () => undefined;
   }),
+  signInWithCredential: jest.fn(() => Promise.resolve({ user: { uid: 'apple-uid', displayName: null } })),
   signInWithEmailAndPassword: jest.fn(),
   signOut: jest.fn(),
   // Like Firebase, renames the User object in place.

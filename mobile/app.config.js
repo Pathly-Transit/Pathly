@@ -37,6 +37,8 @@ module.exports = {
       supportsTablet: true,
       // Must match the app record in App Store Connect. Android's package stays com.pathly.app.
       bundleIdentifier: 'com.mpaxos.pathly',
+      // Sign in with Apple, required on iOS because the app offers Google sign-in.
+      usesAppleSignIn: true,
       // Networking/authentication use standard or Apple OS-provided cryptography.
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
@@ -61,6 +63,7 @@ module.exports = {
       'expo-status-bar',
       'expo-web-browser',
       'expo-sharing',
+      'expo-apple-authentication',
       ['expo-notifications', { color: '#0B4F9C' }],
       // Every map draws Pathly's own vector tiles with MapLibre Native (src/map/): no map API key.
       '@maplibre/maplibre-react-native',

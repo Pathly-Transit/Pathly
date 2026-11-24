@@ -482,17 +482,23 @@ describe('Settings', () => {
       openURL.mockRestore();
     });
 
-    it('keeps every credit in About: none of the map’s sources needs one on the map, and none asks for OpenStreetMap’s', async () => {
+    it('credits OpenStreetMap for footpaths, transit ways, and walking routes, in About and on the map', async () => {
+      const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
       const screen = renderSettings();
       await openPage(screen, 'about');
-      expect(screen.queryByTestId('about-osm')).toBeNull();
-      expect(screen.queryByText(/OpenStreetMap|Microsoft/)).toBeNull();
-      for (const label of ['Trails: U.S. Geological Survey', 'Buildings outside NYC: FEMA', 'Buildings, paths, and fields: City of New York', 'Landmarks: Wikidata']) {
+      expect(screen.getByText('Footpaths, transit ways, and walking routes © OpenStreetMap contributors')).toBeTruthy();
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('about-credit-osm'));
+      });
+      expect(openURL).toHaveBeenCalledWith('https://www.openstreetmap.org/copyright');
+      openURL.mockRestore();
+      expect(screen.queryByText(/Microsoft/)).toBeNull();
+      for (const label of ['Trails: U.S. Geological Survey', 'Buildings outside NYC: FEMA', 'Buildings and plazas: City of New York', 'Landmarks: Wikidata']) {
         expect(screen.getByText(label)).toBeTruthy();
       }
-      // The map itself carries no attribution (a renderer shows any a source declares).
+      // The map's own source declares the credit too (MapCredit shows it on every map).
       for (const isDark of [false, true]) {
-        for (const source of Object.values(pathlyMapStyle(isDark, 'default', 'all').sources)) expect((source as { attribution?: string }).attribution).toBeUndefined();
+        for (const source of Object.values(pathlyMapStyle(isDark, 'default', 'all').sources)) expect((source as { attribution?: string }).attribution).toBe('© OpenStreetMap contributors');
       }
     });
 
@@ -500,7 +506,7 @@ describe('Settings', () => {
       const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
       const screen = renderSettings();
       await openPage(screen, 'about');
-      for (const label of ['Map data: U.S. Census Bureau', 'Place names: U.S. Geological Survey', 'Buildings, paths, and fields: City of New York', 'Made with Natural Earth', 'Map display: MapLibre', 'Map labels: Nunito', 'Place search: Google']) {
+      for (const label of ['Map data: U.S. Census Bureau', 'Place names: U.S. Geological Survey', 'Buildings and plazas: City of New York', 'Made with Natural Earth', 'Map display: MapLibre', 'Map labels: Nunito', 'Place search: Google']) {
         expect(screen.getByText(label)).toBeTruthy();
       }
       expect(screen.getByText('© MapLibre contributors, © Mapbox · BSD license')).toBeTruthy();

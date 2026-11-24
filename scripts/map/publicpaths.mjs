@@ -440,15 +440,22 @@ function addCityPlazas(store, dir, log) {
 
 /**
  * Adds the public footpaths, trails, sports fields, platforms, and plazas. Needs the streets added
- * first (addRoads): the city's paths replace TIGER's walkways there, and trails and sidewalks along
- * streets are left out.
+ * first (addRoads), and OpenStreetMap's paths and platforms when there are any (osm.mjs,
+ * transitways.mjs): trails and sidewalks along streets and paths already on the map are left out.
+ *
+ * OpenStreetMap's footpaths and fields (`osmPaths`) cover the whole map more completely than the
+ * city's paths, sidewalks, and fields, so those stand in only without them; its platforms
+ * (`osmPlatforms`) carry their names, so the city's (unnamed) stand in only without them. USGS
+ * trails (on public lands OpenStreetMap may have missed) and the city's plazas always come along.
  */
-export async function addPublicPaths(store, dir, log) {
-  const inNyc = nycTest(join(dir, 'tiger'));
-  await addCityPaths(store, join(dir, 'nyc'), inNyc, log);
-  addCitySidewalks(store, dir, log);
+export async function addPublicPaths(store, dir, log, { osmPaths = false, osmPlatforms = false } = {}) {
+  if (!osmPaths) {
+    const inNyc = nycTest(join(dir, 'tiger'));
+    await addCityPaths(store, join(dir, 'nyc'), inNyc, log);
+    addCitySidewalks(store, dir, log);
+  }
   addUsgsTrails(store, join(dir, 'usgs', 'trails'), log);
-  await addCityFields(store, join(dir, 'nyc'), log);
-  await addCityPlatforms(store, join(dir, 'nyc'), log);
+  if (!osmPaths) await addCityFields(store, join(dir, 'nyc'), log);
+  if (!osmPlatforms) await addCityPlatforms(store, join(dir, 'nyc'), log);
   addCityPlazas(store, dir, log);
 }

@@ -7,7 +7,9 @@ import { useTouchScroll } from '../hooks/useTouchScroll';
 import { useViewportSize } from '../hooks/useViewportSize';
 import { useAppSettings, useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
+import { creditBesideButton, MapCredit } from '../map/MapCredit';
 import { MapSheetInsetContext, useScrollSheetInset } from '../map/mapSheetInset';
+import { MAP_CONTROL_SIZE } from './MapControlButton';
 import { mapPageMapHeight } from './mapSheetLayout';
 import { SHEET_AT_REST_TOLERANCE, SheetHandle } from './SheetHandle';
 
@@ -199,6 +201,9 @@ export function DetailMapPage({
                 </View>
               ) : null}
               {mapOverlay}
+              {/* The map's credit rides here with the map buttons (not inside the map), so it moves
+                  with the sheet exactly as they do: level with the location button, or the GO action. */}
+              <MapCredit bottomInset={action ? creditBesideButton(ACTION_GAP + thumb.mapBottomClearance, ACTION_HEIGHT) : creditBesideButton(14 + thumb.mapBottomClearance, MAP_CONTROL_SIZE)} />
               {action && !actionSticks ? <View pointerEvents="box-none" style={[styles.action, thumb.anchor(18), { top: restingTop }]}>{action}</View> : null}
               {mapButtons ? <View pointerEvents="box-none" style={[styles.mapButtons, mapButtonsTop != null ? { right: TOP_BUTTONS_INSET, top: insets.top + mapButtonsTop } : thumb.anchor(16), mapButtonsTop != null ? { flexDirection: thumb.row } : { flexDirection: thumb.row, bottom: (action ? ACTION_HEIGHT + ACTION_GAP + 10 : 14) + thumb.mapBottomClearance }]} testID={`${scrollTestID}-map-buttons`}>{mapButtons}</View> : null}
             </View>

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Builds Pathly's base map: vector tiles for New York City, Long Island, and the region around them,
-// all from public data that asks no credit on the map itself (Settings → About lists the sources):
-// government data (scripts/map/sources.mjs), public footpaths, trails, fields, and platforms
-// (scripts/map/publicpaths.mjs), FEMA's building outlines outside NYC (scripts/map/structures.mjs),
-// and Wikidata's landmarks (scripts/map/landmarks.mjs), cut by Pathly's own tiler. The tiles go to
+// from government data (scripts/map/sources.mjs), OpenStreetMap's footpaths and sports fields
+// (scripts/map/osm.mjs) and bus roads and platforms (scripts/map/transitways.mjs), public trails and
+// plazas (scripts/map/publicpaths.mjs), FEMA's building outlines outside NYC
+// (scripts/map/structures.mjs), and Wikidata's landmarks (scripts/map/landmarks.mjs), cut by Pathly's
+// own tiler. OpenStreetMap's license asks for a credit on the map: metadata.json lists it (credits),
+// and build-site.mjs won't publish tiles whose credits the app's map doesn't show. The tiles go to
 // maptiles/tiles/{z}/{x}/{y}.pbf (gitignored), and `npm run build:site` publishes them at
 // pathly.web.app/map/. Rebuild every few months as the sources update.
 //
@@ -13,7 +15,7 @@
 //                                                    features read last time)
 //
 // Labels need the map's fonts too: node scripts/build-map-fonts.mjs
-import { createWriteStream, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -21,6 +23,8 @@ import { pipeline } from 'node:stream/promises';
 import { DETAIL, EXPLORATION, MAX_ZOOM, OVERVIEW, ROOT } from './map/bounds.mjs';
 import { boxesOverlap, ringBounds } from './map/geometry.mjs';
 import { addWikidataLandmarks, downloadWikidataLandmarks } from './map/landmarks.mjs';
+import { addOsmPaths, hasOsmPaths } from './map/osm.mjs';
+import { extractOsmFromPbf } from './map/osmpbf.mjs';
 import { NYC_PATH_FILES, addPublicPaths, downloadCitySidewalks, downloadUsgsTrails } from './map/publicpaths.mjs';
 import { LAYERS } from './map/schema.mjs';
 import { readShapefileZip } from './map/shapefile.mjs';
@@ -28,6 +32,19 @@ import { addStructures, downloadStructures } from './map/structures.mjs';
 import { TRANSIT_FEEDS, addBuildings, addGnisWaterNames, addLandAndStates, addLandmarks, addOverview, addPlaces, addRail, addRoads, addTransit, addWater, addWaterways, readWater } from './map/sources.mjs';
 import { FeatureStore, POLYGON } from './map/store.mjs';
 import { writeTiles } from './map/tiler.mjs';
+import { addOsmTransitways, hasOsmTransitways } from './map/transitways.mjs';
+
+/**
+ * The states (Geofabrik's names) the map's detailed area reaches, for its footpaths and transit ways
+ * (osmpbf.mjs); the walking graph reads the ones its service area reaches.
+ */
+const OSM_EXTRACT_STATES = [
+  'new-york', 'new-jersey', 'connecticut', 'pennsylvania', 'delaware', 'maryland', 'district-of-columbia', 'virginia',
+  'massachusetts', 'rhode-island', 'vermont', 'new-hampshire',
+];
+
+/** The credit OpenStreetMap's license (ODbL) asks for wherever its data shows. */
+export const OSM_CREDIT = '© OpenStreetMap contributors';
 
 const OUT = join(ROOT, 'maptiles');
 const TIGER = 'https://www2.census.gov/geo/tiger/TIGER2025';
@@ -61,7 +78,7 @@ async function fetchTo(url, path) {
 }
 
 async function download(dir) {
-  for (const sub of ['tiger', 'county', 'gnis', 'nyc', 'ne', 'gtfs']) mkdirSync(join(dir, sub), { recursive: true });
+  for (const sub of ['tiger', 'county', 'gnis', 'nyc', 'ne', 'gtfs', 'osm-pbf']) mkdirSync(join(dir, sub), { recursive: true });
   const jobs = [
     [`${TIGER}/COUNTY/tl_2025_us_county.zip`, 'tiger/tl_2025_us_county.zip'],
     [`${TIGER}/STATE/tl_2025_us_state.zip`, 'tiger/tl_2025_us_state.zip'],
@@ -76,6 +93,9 @@ async function download(dir) {
   for (const name of ['ne_10m_land', 'ne_10m_lakes', 'ne_10m_roads', 'ne_10m_populated_places_simple']) jobs.push([`${NATURAL_EARTH}/${name}.geojson`, `ne/${name}.geojson`]);
   for (const [agency, { url }] of Object.entries(TRANSIT_FEEDS)) jobs.push([url, `gtfs/${agency}.zip`]);
   jobs.push(...NYC_PATH_FILES);
+  // OpenStreetMap's extracts of the states the map reaches (Geofabrik, about 2 GB in all), for the
+  // map's footpaths and transit ways and firebase/functions/scripts/build-walking-tiles.js.
+  for (const state of OSM_EXTRACT_STATES) jobs.push([`https://download.geofabrik.de/north-america/us/${state}-latest.osm.pbf`, `osm-pbf/${state}-latest.osm.pbf`]);
   for (const [url, path] of jobs) {
     console.log(`Fetching ${path}`);
     try {
@@ -100,6 +120,8 @@ async function download(dir) {
       }
     }
   }
+  // OpenStreetMap's footpaths, fields, transit roads, and platforms, out of the extracts just fetched.
+  await extractOsmFromPbf(dir);
   await downloadCitySidewalks(dir);
   await downloadUsgsTrails(dir);
   await downloadStructures(dir);
@@ -112,8 +134,13 @@ async function build(dir, tilesOnly) {
   const started = Date.now();
   const log = (message) => console.log(`[${((Date.now() - started) / 1000).toFixed(0).padStart(4)}s] ${message}`);
   let store;
+  // The credits the features' sources ask for on the map, kept with the features for --tiles-only.
+  let credits;
+  const creditsFile = join(cache, 'credits.json');
   if (tilesOnly && existsSync(join(cache, 'props.json'))) {
+    if (!existsSync(creditsFile)) throw new Error(`${cache} doesn't say which credits its features need: build without --tiles-only`);
     store = FeatureStore.load(cache);
+    credits = JSON.parse(readFileSync(creditsFile, 'utf8'));
     log(`Loaded ${store.count} features from ${cache}`);
   } else {
     store = new FeatureStore();
@@ -126,7 +153,14 @@ async function build(dir, tilesOnly) {
     const gnis = addPlaces(store, join(dir, 'tiger'), join(dir, 'gnis'), log);
     addGnisWaterNames(store, gnis, [...waterNames, ...landmarkNames], log);
     addRoads(store, join(dir, 'county'), log);
-    await addPublicPaths(store, dir, log);
+    // OpenStreetMap's footpaths, fields, bus roads, and platforms where they've been fetched; the
+    // public paths, fields, and platforms stand in where they haven't.
+    const osmPaths = hasOsmPaths(join(dir, 'osm'));
+    const osmTransitways = hasOsmTransitways(join(dir, 'osm'));
+    addOsmPaths(store, join(dir, 'osm'), log);
+    addOsmTransitways(store, join(dir, 'osm'), log);
+    await addPublicPaths(store, dir, log, { osmPaths, osmPlatforms: osmTransitways });
+    credits = osmPaths || osmTransitways ? [OSM_CREDIT] : [];
     addRail(store, join(dir, 'tiger'), log);
     addTransit(store, join(dir, 'gtfs'), log);
     // After the places, parks, and stations, so a landmark they already name isn't named twice.
@@ -135,6 +169,7 @@ async function build(dir, tilesOnly) {
     addStructures(store, dir, log);
     addOverview(store, join(dir, 'ne'), log);
     store.save(cache);
+    writeFileSync(creditsFile, JSON.stringify(credits));
     log(`${store.count} features (saved to ${cache})`);
   }
   // The sea: a square under everything, so the map's background (shown while tiles load) is land.
@@ -153,8 +188,8 @@ async function build(dir, tilesOnly) {
     layers: LAYERS,
     built: new Date().toISOString(),
     tiles: stats.tiles,
-    // Built from public-domain sources alone (no OpenStreetMap), so the map needs no credit: build-site.mjs won't publish tiles without it.
-    publicDataOnly: true,
+    // The credits the map must show for these tiles' sources: build-site.mjs checks the app's map shows each.
+    credits,
   }, null, 2)}\n`);
   log(`Wrote ${stats.tiles} tiles (${(stats.bytes / 1e6).toFixed(0)} MB; ${stats.empty} empty; largest ${(stats.largest / 1e3).toFixed(0)} KB at ${stats.largestTile}) to ${join(OUT, 'tiles')}`);
 }

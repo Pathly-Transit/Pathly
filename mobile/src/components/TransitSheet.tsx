@@ -8,6 +8,7 @@ import type { RouteDetail } from '../data/transit';
 import { sortSavedLocations, type SavedLocation } from '../data/userData';
 import { useNow } from '../hooks/useNow';
 import { useTouchScroll } from '../hooks/useTouchScroll';
+import { useThumbSide } from '../hooks/useThumbSide';
 import { useAppSettings, useThemedStyles } from '../theme/AppSettings';
 import { useLayoutEase, useNativeDriver } from '../theme/motion';
 import type { Palette } from '../theme/colors';
@@ -18,7 +19,9 @@ import { NearbySkeleton } from './Skeleton';
 import { TransitCard } from './TransitCard';
 import { PressableScale } from './PressableScale';
 import { SHEET_AT_REST_TOLERANCE, SheetHandle } from './SheetHandle';
+import { creditBesideButton, MapCredit } from '../map/MapCredit';
 import { MapSheetInsetContext, useScrollSheetInset } from '../map/mapSheetInset';
+import { MAP_CONTROL_SIZE } from './MapControlButton';
 import { SHEET_LOWER_DROP } from './mapSheetLayout';
 import { Icon } from './Icon';
 
@@ -145,6 +148,7 @@ export function TransitSheet({
   const bothFavoriteKinds = savedRouteIds.length > 0 && savedLocations.length > 0;
   const ease = useLayoutEase();
   const { reducedMotionActive } = useAppSettings();
+  const thumb = useThumbSide();
   const [tabsWidth, setTabsWidth] = useState(0);
   const [indicatorX] = useState(() => new Animated.Value(0));
   const tabWidth = Math.max(0, (tabsWidth - TAB_ROW_PADDING * 2 - TAB_GAP * (tabs.length - 1)) / tabs.length);
@@ -386,11 +390,11 @@ export function TransitSheet({
           </View>,
           // The map buttons scroll just above the sheet; their box ends at the sheet's top edge.
           <View key="map-buttons" pointerEvents="box-none" style={[styles.mapButtonsOverSticky, { height: mapHeight + restOffset, marginTop: -(mapHeight + restOffset), paddingTop: restOffset }]}>
-            <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}</View>
+            <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}<MapCredit bottomInset={creditBesideButton(14 + thumb.mapBottomClearance, MAP_CONTROL_SIZE)} /></View>
           </View>,
       ] : (
         <View pointerEvents="box-none" style={{ height: mapHeight + restOffset, paddingTop: restOffset }} testID="transit-map-window">
-          <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}</View>
+          <View pointerEvents="box-none" style={styles.mapButtonsBox}>{mapButtons}<MapCredit bottomInset={creditBesideButton(14 + thumb.mapBottomClearance, MAP_CONTROL_SIZE)} /></View>
         </View>
       )}
       <SafeAreaView

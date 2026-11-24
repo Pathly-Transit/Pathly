@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useAuth } from '../auth/AuthContext';
+import { hasAppleSignIn, reauthenticateWithAppleForDeletion } from '../auth/appleAuth';
 import { useGoogleReauth } from '../auth/googleReauth';
 import { BeanAvatar } from '../avatars/BeanAvatarImage';
 import {
@@ -735,9 +736,11 @@ export function PrivacySettings({ onFeedback }: PageProps) {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const googleReauth = useGoogleReauth();
-  // A rider who joined only with Google has no password; they confirm with Google instead.
-  const confirmsWithGoogle = Boolean(user && !user.isAnonymous && !hasPassword(user));
-  const canSubmitDelete = confirmsWithGoogle ? googleReauth.available : Boolean(password);
+  // A rider who joined only with Apple or Google has no password; they confirm with that instead.
+  const confirmsWithProvider = Boolean(user && !user.isAnonymous && !hasPassword(user));
+  const confirmsWithApple = confirmsWithProvider && Boolean(user && hasAppleSignIn(user));
+  const confirmsWithGoogle = confirmsWithProvider && !confirmsWithApple;
+  const canSubmitDelete = confirmsWithApple || (confirmsWithGoogle ? googleReauth.available : Boolean(password));
   const [confirmingClearSearches, setConfirmingClearSearches] = useState(false);
 
   const clearSearches = async () => {
@@ -788,7 +791,8 @@ export function PrivacySettings({ onFeedback }: PageProps) {
     setDeleting(true);
     setDeleteError('');
     try {
-      if (confirmsWithGoogle) await deleteAccountAfter(user, googleReauth.reauthenticate);
+      if (confirmsWithApple) await deleteAccountAfter(user, reauthenticateWithAppleForDeletion);
+      else if (confirmsWithGoogle) await deleteAccountAfter(user, googleReauth.reauthenticate);
       else await deleteAccount(user, password);
       // Deleting the Auth user signs out, which leaves Settings for the sign-in screen.
     } catch (error) {
@@ -800,7 +804,7 @@ export function PrivacySettings({ onFeedback }: PageProps) {
       setDeleteError(problem === 'wrong-password'
         ? 'That password is incorrect.'
         : problem === 'wrong-account'
-          ? "That Google account isn't the one you signed in with."
+          ? `That ${confirmsWithApple ? 'Apple' : 'Google'} account isn't the one you signed in with.`
           : problem === 'too-many-attempts'
             ? 'Too many attempts. Try again later.'
             : 'Your account could not be deleted. Check your connection and try again.');
@@ -824,10 +828,10 @@ export function PrivacySettings({ onFeedback }: PageProps) {
       {deleteOpen ? (
         <View style={page.dangerCard} testID="delete-account-panel">
           <Text style={page.dangerTitle}>Delete your account</Text>
-          <Text style={page.dangerBody}>{confirmsWithGoogle
-            ? "This removes your favorites, searches, recent trips, and sign-in. You'll confirm with Google to continue."
+          <Text style={page.dangerBody}>{confirmsWithProvider
+            ? `This removes your favorites, searches, recent trips, and sign-in. You'll confirm with ${confirmsWithApple ? 'Apple' : 'Google'} to continue.`
             : 'This removes your favorites, searches, recent trips, and sign-in. Enter your password to continue.'}</Text>
-          {confirmsWithGoogle ? null : <TextInput
+          {confirmsWithProvider ? null : <TextInput
             accessibilityLabel="Password"
             autoCapitalize="none"
             autoComplete="current-password"
@@ -909,15 +913,16 @@ const TERMS: readonly string[] = [
 ];
 
 /**
- * Where the map, its labels, and Pathly's data come from: every credit lives here, none on the map.
- * The map renderer's license (BSD) and the font's (SIL OFL) ask for their notices somewhere in the
- * app; the data sources are public domain or ask no credit, and are listed as their publishers ask.
+ * Where the map, its labels, and Pathly's data come from. OpenStreetMap's license (ODbL) asks for its
+ * credit on the map too (MapCredit); the renderer's (BSD) and font's (SIL OFL) ask for their notices
+ * somewhere in the app; the government sources are public domain and credited as their publishers ask.
  */
 const CREDITS: readonly { id: string; label: string; detail: string; url?: string }[] = [
+  { id: 'osm', label: 'Footpaths, transit ways, and walking routes © OpenStreetMap contributors', detail: 'Open Database License', url: 'https://www.openstreetmap.org/copyright' },
   { id: 'census', label: 'Map data: U.S. Census Bureau', detail: 'TIGER/Line streets, walkways, water, parks, and places; population estimates', url: 'https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html' },
   { id: 'usgs', label: 'Place names: U.S. Geological Survey', detail: 'Geographic Names Information System', url: 'https://www.usgs.gov/us-board-on-geographic-names/domestic-names' },
   { id: 'usgs-trails', label: 'Trails: U.S. Geological Survey', detail: 'National Digital Trails', url: 'https://www.usgs.gov/national-digital-trails' },
-  { id: 'nyc', label: 'Buildings, paths, and fields: City of New York', detail: 'NYC Open Data building footprints, street centerline, and planimetric data', url: 'https://opendata.cityofnewyork.us' },
+  { id: 'nyc', label: 'Buildings and plazas: City of New York', detail: 'NYC Open Data building footprints and planimetric plazas', url: 'https://opendata.cityofnewyork.us' },
   { id: 'fema', label: 'Buildings outside NYC: FEMA', detail: 'USA Structures, from the USGS National Map', url: 'https://gis-fema.hub.arcgis.com/pages/usa-structures' },
   { id: 'wikidata', label: 'Landmarks: Wikidata', detail: 'Public domain (CC0)', url: 'https://www.wikidata.org' },
   { id: 'natural-earth', label: 'Made with Natural Earth', detail: 'Coastlines and cities around the region', url: 'https://www.naturalearthdata.com' },

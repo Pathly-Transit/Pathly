@@ -7,10 +7,11 @@ import type { MapTheme, TransitIcons } from '../theme/AppSettings';
 /**
  * The base map every Pathly map draws (home, route, trip, and choose-on-map; native and web):
  * Pathly's own vector tiles of New York City, Long Island, and the region around them, built from
- * public data that asks no credit on the map itself (Census TIGER/Line streets, water, parks, and
- * places; USGS names, trails, and building outlines; New York City's footprints, paths, fields, and
- * platforms; Wikidata's landmarks) by scripts/build-map.mjs, and labeled in Nunito, the app's
- * typeface (scripts/build-map-fonts.mjs). Settings → About lists the sources. Styled to read like the familiar maps riders know (white streets
+ * public data (Census TIGER/Line streets, water, parks, and places; USGS names, trails, and
+ * building outlines; New York City's footprints, plazas, and fields; Wikidata's landmarks) plus
+ * OpenStreetMap's footpaths, bus roads, and platforms (credited on the map: MapCredit), by
+ * scripts/build-map.mjs, and labeled in Nunito, the app's typeface (scripts/build-map-fonts.mjs).
+ * Settings → About lists the sources. Styled to read like the familiar maps riders know (white streets
  * with gray edges, blue water, green parks) with Pathly's own changes: highways in quiet gray so
  * route lines stand out, no business labels (stations keep theirs), and a dark version.
  *
@@ -19,6 +20,9 @@ import type { MapTheme, TransitIcons } from '../theme/AppSettings';
  */
 
 const SITE = 'https://pathly.web.app/map';
+
+/** The credit the map shows (MapCredit): OpenStreetMap's footpaths and transit ways need it; the government data doesn't. */
+export const MAP_ATTRIBUTION = '© OpenStreetMap contributors';
 
 export const MAP_TILES_URL = process.env.EXPO_PUBLIC_MAP_TILES_URL || `${SITE}/tiles/{z}/{x}/{y}.pbf`;
 const MAP_GLYPHS_URL = process.env.EXPO_PUBLIC_MAP_GLYPHS_URL || `${SITE}/fonts/{fontstack}/{range}.pbf`;
@@ -769,8 +773,8 @@ export function pathlyMapStyle(isDark: boolean, theme: MapTheme = 'default', tra
     version: 8,
     name: `Pathly ${cacheKey}`,
     sources: {
-      // No attribution: none of the tiles' sources asks for a credit on the map.
-      [SOURCE]: { type: 'vector', tiles: [MAP_TILES_URL], minzoom: 0, maxzoom: TILES_MAX_ZOOM, bounds: TILE_BOUNDS },
+      // Footpaths, bus roads, platforms, and sports fields come from OpenStreetMap, whose license asks for this credit on the map.
+      [SOURCE]: { type: 'vector', tiles: [MAP_TILES_URL], minzoom: 0, maxzoom: TILES_MAX_ZOOM, bounds: TILE_BOUNDS, attribution: MAP_ATTRIBUTION },
     },
     glyphs: MAP_GLYPHS_URL,
     layers: [...baseLayers(palette, isDark).map(withZoomFade).map(hide), ...slots],

@@ -17,10 +17,10 @@ npm --prefix firebase/functions run build:gtfs
 
 ## Walking-graph tiles
 
-Nearby picks the stop that is closest on foot, and trips draw their walks, using a pedestrian street graph under `firebase/functions/static_data/walking/`. The graph is built from the base map's public sources: Census TIGER/Line streets and walkways, New York City's paths and step streets, the city's interior sidewalks (the walks inside parks, campuses, and housing developments), and USGS trails. They're public domain, so the walks drawn on the map need no credit there. The graph is gitignored, so a fresh checkout has none. Without it, Nearby falls back to straight-line distance. **Deploys fail until the tiles exist** (`build-walking-tiles.js --check` runs on predeploy).
+Nearby picks the stop that is closest on foot, and trips draw their walks, using a pedestrian street graph under `firebase/functions/static_data/walking/`. The graph is built from OpenStreetMap's pedestrian network (sidewalks, crossings, stairs, and park and campus paths) for New York, New Jersey, Connecticut, Pennsylvania, and Delaware, from Geofabrik's state extracts that `npm run map:download` fetches into `osm-pbf/`. OpenStreetMap's license asks for a credit wherever the walks show; the map's © chip (MapCredit) and Settings → About carry it. Without the extracts the build falls back to the public sources (Census TIGER/Line streets, New York City's paths and sidewalks, USGS trails), which are accurate in the city but miss most campus and suburban paths. The graph is gitignored, so a fresh checkout has none. Without it, Nearby falls back to straight-line distance. **Deploys fail until the tiles exist and the app's map shows every credit the graph needs** (`build-walking-tiles.js --check` runs on predeploy).
 
 1. From the repository root, fetch the map's sources into a folder outside the repo (README, Base map): `npm run map:download -- ../map-data`.
-2. Build the tiles. This needs about 6 GB of memory:
+2. Build the tiles. This needs about 12 GB of memory:
 
    ```sh
    npm --prefix firebase/functions run build:walking -- ../../map-data

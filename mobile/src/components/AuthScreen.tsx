@@ -7,6 +7,7 @@ import { sendPasswordReset } from '../data/accountData';
 import { ThemedStatusBar, useTheme, useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
 import { fontFamilies, typography } from '../theme/typography';
+import { AppleSignInButton } from './AppleSignInButton';
 import { GoogleSignInButton } from './GoogleSignInButton';
 import { Icon } from './Icon';
 import { PathlingChat } from './PathlingChat';
@@ -15,7 +16,7 @@ import { radii } from '../theme/shape';
 
 type Mode = 'signIn' | 'signUp';
 
-// Closing Google's window isn't an error worth a message.
+// Closing Google's or Apple's sign-in window isn't an error worth a message.
 const CANCELLED_CODES = new Set(['auth/popup-closed-by-user', 'auth/cancelled-popup-request', 'auth/user-cancelled']);
 
 function errorCode(error: unknown): string {
@@ -35,11 +36,11 @@ function friendlyAuthError(error: unknown): string {
     case 'auth/user-not-found':
       return 'Incorrect email or password.';
     case 'auth/account-exists-with-different-credential':
-      return 'That email already has a password account. Sign in with your password instead.';
+      return 'That email already has a Pathly account. Sign in the way you did before.';
     case 'auth/popup-blocked':
       return 'Your browser blocked the Google sign-in window. Allow pop-ups and try again.';
     case 'auth/operation-not-allowed':
-      return "Google sign-in isn't turned on for this app yet.";
+      return "That sign-in option isn't turned on for this app yet.";
     default:
       return 'Something went wrong. Please try again.';
   }
@@ -106,6 +107,14 @@ export function AuthScreen() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const onProviderStart = () => {
+    setNotice('');
+    setError('');
+  };
+  const onProviderError = (caught: unknown) => {
+    if (!CANCELLED_CODES.has(errorCode(caught))) setError(friendlyAuthError(caught));
   };
 
   const continueAsGuest = async () => {
@@ -214,17 +223,9 @@ export function AuthScreen() {
               <Text style={styles.dividerText}>or</Text>
               <View style={styles.dividerLine} />
             </View>
-            {/* Google and guest are the same full-width buttons, so all three ways in read as equal choices. */}
-            <GoogleSignInButton
-              disabled={submitting}
-              onError={(caught) => {
-                if (!CANCELLED_CODES.has(errorCode(caught))) setError(friendlyAuthError(caught));
-              }}
-              onStart={() => {
-                setNotice('');
-                setError('');
-              }}
-            />
+            {/* Apple (iOS only), Google and guest are the same full-width buttons, so every way in reads as an equal choice. */}
+            <AppleSignInButton disabled={submitting} onError={onProviderError} onStart={onProviderStart} />
+            <GoogleSignInButton disabled={submitting} onError={onProviderError} onStart={onProviderStart} />
             <PressableScale
               accessibilityHint="Look around without an account. Nothing is saved."
               accessibilityLabel="Continue as guest"
