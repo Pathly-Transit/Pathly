@@ -14,14 +14,18 @@ import { gunzipSync, gzipSync } from 'zlib';
  * edges to nodes in other tiles. A node's global id encodes its home tile and its index there,
  * so the search can follow an edge into a tile it hasn't loaded yet and load it then.
  *
- * Tile file (gzipped): "PWK1", u32 nodeCount, u32 edgeCount, then i32 lat[n] and i32 lon[n]
+ * Tile file (gzipped): "PWK2", u32 nodeCount, u32 edgeCount, then i32 lat[n] and i32 lon[n]
  * (microdegrees), u32 edgeStart[n + 1] (CSR offsets), f64 edgeTarget[e] (global ids),
- * u16 edgeMeters[e]. All little-endian. manifest.json lists every tile that has nodes.
+ * u16 edgeMeters[e], u16 edgeCost[e]. All little-endian. manifest.json lists every tile that has nodes.
+ *
+ * An edge's cost is what the search minimizes: its meters, weighted the way people choose a walk
+ * (the sidewalk over the middle of the street beside it, a crossing at a traffic light over an
+ * unmarked one). Walk lengths and times are still the real meters along the chosen walk.
  */
 
 export const WALKING_TILE_DEGREES = 0.02;
-export const WALKING_FORMAT_VERSION = 1;
-const MAGIC = 'PWK1';
+export const WALKING_FORMAT_VERSION = 2;
+const MAGIC = 'PWK2';
 const LOCAL_SPAN = 2 ** 20;
 const LAT_TILES = Math.round(180 / WALKING_TILE_DEGREES);
 
@@ -31,6 +35,7 @@ export type WalkingTile = {
   edgeStart: Uint32Array;
   edgeTarget: Float64Array;
   edgeMeters: Uint16Array;
+  edgeCost: Uint16Array;
 };
 
 /** `credits`: what the graph's sources ask to be credited wherever its walks show (deploys check the app's map shows them). */
@@ -57,7 +62,7 @@ export function encodeWalkingTile(tile: WalkingTile): Buffer {
   const nodeCount = tile.lat.length;
   const edgeCount = tile.edgeTarget.length;
   if (nodeCount >= LOCAL_SPAN) throw new Error(`walking tile has too many nodes (${nodeCount})`);
-  const buffer = Buffer.alloc(12 + nodeCount * 8 + (nodeCount + 1) * 4 + edgeCount * 10);
+  const buffer = Buffer.alloc(12 + nodeCount * 8 + (nodeCount + 1) * 4 + edgeCount * 12);
   buffer.write(MAGIC, 0, 'ascii');
   buffer.writeUInt32LE(nodeCount, 4);
   buffer.writeUInt32LE(edgeCount, 8);
@@ -67,6 +72,7 @@ export function encodeWalkingTile(tile: WalkingTile): Buffer {
   for (const value of tile.edgeStart) offset = buffer.writeUInt32LE(value, offset);
   for (const value of tile.edgeTarget) offset = buffer.writeDoubleLE(value, offset);
   for (const value of tile.edgeMeters) offset = buffer.writeUInt16LE(value, offset);
+  for (const value of tile.edgeCost) offset = buffer.writeUInt16LE(value, offset);
   return gzipSync(buffer);
 }
 
@@ -84,13 +90,14 @@ export function decodeWalkingTile(gzipped: Buffer): WalkingTile {
   const lon = take(Int32Array, offset, nodeCount); offset += nodeCount * 4;
   const edgeStart = take(Uint32Array, offset, nodeCount + 1); offset += (nodeCount + 1) * 4;
   const edgeTarget = take(Float64Array, offset, edgeCount); offset += edgeCount * 8;
-  const edgeMeters = take(Uint16Array, offset, edgeCount);
-  return { lat, lon, edgeStart, edgeTarget, edgeMeters };
+  const edgeMeters = take(Uint16Array, offset, edgeCount); offset += edgeCount * 2;
+  const edgeCost = take(Uint16Array, offset, edgeCount);
+  return { lat, lon, edgeStart, edgeTarget, edgeMeters, edgeCost };
 }
 
 let dataRoot = join(__dirname, '../static_data/walking');
 let manifest: { tiles: Set<string> } | null | undefined;
-const EMPTY_TILE: WalkingTile = { lat: new Int32Array(0), lon: new Int32Array(0), edgeStart: new Uint32Array(1), edgeTarget: new Float64Array(0), edgeMeters: new Uint16Array(0) };
+const EMPTY_TILE: WalkingTile = { lat: new Int32Array(0), lon: new Int32Array(0), edgeStart: new Uint32Array(1), edgeTarget: new Float64Array(0), edgeMeters: new Uint16Array(0), edgeCost: new Uint16Array(0) };
 // Bounded so an instance serving riders all over the area doesn't keep the whole region in memory.
 const MAX_CACHED_TILES = 96;
 const tileCache = new Map<string, WalkingTile>();
@@ -128,48 +135,89 @@ function loadTile(x: number, y: number): WalkingTile {
   return tile;
 }
 
-// A point joins the graph at its nearest nodes: the nearest, plus any others nearly as close (so a
-// point mid-block can start from either end), but never one much farther, which could sit across
-// a highway or rail line the point has no way over.
+// A point joins the graph on the nearest stretch of street or path (an edge, drawn straight
+// between its two nodes), at the spot along it closest to the point, and walks on from either end.
+// Never at a node merely nearby: one around a corner, or at the dead end of the next street over,
+// is reached in a straight line through yards and buildings.
 const SNAP_MAX_METERS = 250;
-const SNAP_SLACK_METERS = 30;
-const SNAP_MAX_NODES = 4;
+/**
+ * How far (beyond SNAP_MAX_METERS) a node may be and still have an edge passing within reach. An
+ * edge is stored at both its ends, so one end in the tiles searched is enough.
+ */
+const SNAP_EDGE_REACH_METERS = 300;
+
+/** Where a point joins the graph: the closest spot on the nearest edge, the meters off it, and the edge's two ends (meters and cost along it from the spot). */
+type Snap = {
+  lat: number;
+  lon: number;
+  offMeters: number;
+  edge: string;
+  ends: { id: number; meters: number; cost: number }[];
+};
 
 // Stops are snapped again on every request, so their snaps are kept (cleared with the tiles).
 const MAX_CACHED_SNAPS = 20_000;
-const snapCache = new Map<string, { id: number; meters: number }[]>();
+const snapCache = new Map<string, Snap | null>();
 
-function snap(lat: number, lon: number): { id: number; meters: number }[] {
+function snap(lat: number, lon: number): Snap | null {
   const key = `${lat},${lon}`;
-  const cached = snapCache.get(key);
-  if (cached) return cached;
+  if (snapCache.has(key)) return snapCache.get(key)!;
   const result = snapUncached(lat, lon);
   snapCache.set(key, result);
   if (snapCache.size > MAX_CACHED_SNAPS) snapCache.delete(snapCache.keys().next().value!);
   return result;
 }
 
-function snapUncached(lat: number, lon: number): { id: number; meters: number }[] {
+function snapUncached(lat: number, lon: number): Snap | null {
   const [cx, cy] = tileXY(lat, lon);
-  const candidates: { id: number; meters: number }[] = [];
-  const metersPerLon = 111_320 * Math.cos((lat * Math.PI) / 180);
+  const kx = 111_320 * Math.cos((lat * Math.PI) / 180);
+  const ky = 110_574;
+  const reach = SNAP_MAX_METERS + SNAP_EDGE_REACH_METERS;
+  let best: { meters: number; t: number; from: number; to: number; ax: number; ay: number; bx: number; by: number; length: number; edgeMeters: number; edgeCost: number } | null = null;
   for (let x = cx - 1; x <= cx + 1; x += 1) {
     for (let y = cy - 1; y <= cy + 1; y += 1) {
       const tile = loadTile(x, y);
       for (let index = 0; index < tile.lat.length; index += 1) {
-        const dLat = (tile.lat[index]! / 1e6 - lat) * 110_574;
-        if (Math.abs(dLat) > SNAP_MAX_METERS) continue;
-        const dLon = (tile.lon[index]! / 1e6 - lon) * metersPerLon;
-        if (Math.abs(dLon) > SNAP_MAX_METERS) continue;
-        const meters = Math.hypot(dLat, dLon);
-        if (meters <= SNAP_MAX_METERS) candidates.push({ id: globalNodeId(x, y, index), meters });
+        const ay = (tile.lat[index]! / 1e6 - lat) * ky;
+        if (Math.abs(ay) > reach) continue;
+        const ax = (tile.lon[index]! / 1e6 - lon) * kx;
+        if (Math.abs(ax) > reach) continue;
+        const from = globalNodeId(x, y, index);
+        for (let edge = tile.edgeStart[index]!; edge < tile.edgeStart[index + 1]!; edge += 1) {
+          const to = tile.edgeTarget[edge]!;
+          const target = nodeLatLon(to);
+          const bx = (target.lon - lon) * kx;
+          const by = (target.lat - lat) * ky;
+          if (Math.min(ax, bx) > SNAP_MAX_METERS || Math.max(ax, bx) < -SNAP_MAX_METERS || Math.min(ay, by) > SNAP_MAX_METERS || Math.max(ay, by) < -SNAP_MAX_METERS) continue;
+          const [dx, dy] = [bx - ax, by - ay];
+          const length2 = dx * dx + dy * dy;
+          const t = length2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / length2));
+          const meters = Math.hypot(ax + t * dx, ay + t * dy);
+          if (meters <= SNAP_MAX_METERS && (!best || meters < best.meters)) {
+            best = { meters, t, from, to, ax, ay, bx, by, length: Math.sqrt(length2), edgeMeters: tile.edgeMeters[edge]!, edgeCost: tile.edgeCost[edge]! };
+          }
+        }
       }
     }
   }
-  candidates.sort((a, b) => a.meters - b.meters);
-  const nearest = candidates[0]?.meters ?? 0;
-  return candidates.filter((candidate) => candidate.meters <= nearest + SNAP_SLACK_METERS).slice(0, SNAP_MAX_NODES);
+  if (!best) return null;
+  // The edge's own meters (along its street, which may bend) shared out by where the spot falls.
+  const costPerMeter = best.edgeCost / best.edgeMeters;
+  const along = (share: number) => ({ meters: best!.edgeMeters * share, cost: best!.edgeMeters * share * costPerMeter });
+  return {
+    lat: lat + (best.ay + best.t * (best.by - best.ay)) / ky,
+    lon: lon + (best.ax + best.t * (best.bx - best.ax)) / kx,
+    offMeters: best.meters,
+    edge: `${best.from}:${best.to}`,
+    ends: [{ id: best.from, ...along(best.t) }, { id: best.to, ...along(1 - best.t) }],
+  };
 }
+
+/** A walk found: its meters, the last graph node on it (-1 when it runs along a single edge), and the spot it leaves the graph. */
+type Walk = { meters: number; endId: number; endSpot: { lat: number; lon: number } };
+
+/** How far past a walk's meters its cost may run before the search gives up on it. */
+const COST_REACH = 1.5;
 
 /** A binary min-heap of (node, meters), allowing stale duplicates (skipped when popped). */
 class NodeHeap {
@@ -221,41 +269,49 @@ class NodeHeap {
  * same rider location) shares one search.
  */
 class WalkingSearch {
+  // Settled and tentative nodes' costs (what the search minimizes), and the real meters of each one's walk.
   private readonly settled = new Map<number, number>();
   private readonly best = new Map<number, number>();
+  private readonly meters = new Map<number, number>();
   // Each reached node's previous node on its shortest walk (-1 for where the walk starts), for paths.
   private readonly previous = new Map<number, number>();
   private readonly heap = new NodeHeap();
 
+  /** Where the walk joins the graph (null when the origin is off it). */
+  readonly start: Snap | null;
+
   constructor(lat: number, lon: number) {
-    for (const start of snap(lat, lon)) this.relax(start.id, start.meters, -1);
+    this.start = snap(lat, lon);
+    for (const end of this.start?.ends ?? []) this.relax(end.id, this.start!.offMeters + end.cost, this.start!.offMeters + end.meters, -1);
   }
 
-  private relax(id: number, meters: number, from: number): void {
-    if (this.settled.has(id) || meters >= (this.best.get(id) ?? Infinity)) return;
-    this.best.set(id, meters);
+  private relax(id: number, cost: number, meters: number, from: number): void {
+    if (this.settled.has(id) || cost >= (this.best.get(id) ?? Infinity)) return;
+    this.best.set(id, cost);
+    this.meters.set(id, meters);
     this.previous.set(id, from);
-    this.heap.push(id, meters);
+    this.heap.push(id, cost);
   }
 
-  /** Expands until every node closer than `meters` is settled. */
-  private expandTo(meters: number): void {
-    while (this.heap.size > 0 && this.heap.peekKey() <= meters) {
+  /** Expands until every node costing less than `cost` is settled. */
+  private expandTo(cost: number): void {
+    while (this.heap.size > 0 && this.heap.peekKey() <= cost) {
       const { id, key } = this.heap.pop();
       if (this.settled.has(id)) continue;
       this.settled.set(id, key);
       const { x, y, localIndex } = splitNodeId(id);
       const tile = loadTile(x, y);
+      const meters = this.meters.get(id)!;
       for (let edge = tile.edgeStart[localIndex]!; edge < tile.edgeStart[localIndex + 1]!; edge += 1) {
-        this.relax(tile.edgeTarget[edge]!, key + tile.edgeMeters[edge]!, id);
+        this.relax(tile.edgeTarget[edge]!, key + tile.edgeCost[edge]!, meters + tile.edgeMeters[edge]!, id);
       }
     }
   }
 
-  private readonly answers = new Map<string, { meters: number; endId: number } | null>();
+  private readonly answers = new Map<string, Walk | null>();
 
-  /** The walk to a point (its length and the graph node it reaches the point from), or null when it isn't reachable on foot within `limitMeters`. */
-  walkTo(lat: number, lon: number, limitMeters: number): { meters: number; endId: number } | null {
+  /** The walk to a point (its length, and the graph node and spot it reaches the point from), or null when it isn't reachable on foot within `limitMeters`. */
+  walkTo(lat: number, lon: number, limitMeters: number): Walk | null {
     const key = `${lat},${lon},${limitMeters}`;
     if (this.answers.has(key)) return this.answers.get(key)!;
     const answer = this.search(lat, lon, limitMeters);
@@ -263,28 +319,41 @@ class WalkingSearch {
     return answer;
   }
 
-  /** The graph nodes of a settled node's shortest walk, from where it starts to `endId`. */
+  /** The graph nodes of a settled node's shortest walk, from where it starts to `endId` (none for -1: a walk along one edge). */
   nodesTo(endId: number): number[] {
     const nodes: number[] = [];
     for (let id = endId; id !== -1; id = this.previous.get(id) ?? -1) nodes.push(id);
     return nodes.reverse();
   }
 
-  private search(lat: number, lon: number, limitMeters: number): { meters: number; endId: number } | null {
-    const ends = snap(lat, lon);
-    if (ends.length === 0) return null;
-    let best: { meters: number; endId: number } | null = null;
-    // Settle outward in steps, stopping once nothing nearer can still turn up.
-    for (let reach = 0; reach <= limitMeters; ) {
-      reach = Math.min(limitMeters, reach + 400);
+  private search(lat: number, lon: number, limitMeters: number): Walk | null {
+    const arrival = snap(lat, lon);
+    if (!arrival || !this.start) return null;
+    const ends = arrival.ends;
+    const endSpot = { lat: arrival.lat, lon: arrival.lon };
+    let best: { cost: number; meters: number; endId: number } | null = null;
+    // On the same stretch as the start: straight along it, through neither end.
+    if (arrival.edge === this.start.edge) {
+      const meters = this.start.offMeters + Math.abs(this.start.ends[0]!.meters - ends[0]!.meters) + arrival.offMeters;
+      const cost = this.start.offMeters + Math.abs(this.start.ends[0]!.cost - ends[0]!.cost) + arrival.offMeters;
+      best = { cost, meters, endId: -1 };
+    }
+    // A walk costs more than its meters (along busy streets, across them), so the search reaches a
+    // little past the limit in cost; the limit itself holds the chosen walk's real meters.
+    const limitCost = limitMeters * COST_REACH;
+    // Settle outward in steps, stopping once nothing cheaper can still turn up.
+    for (let reach = 0; reach <= limitCost; ) {
+      reach = Math.min(limitCost, reach + 400);
       this.expandTo(reach);
       for (const end of ends) {
-        const meters = this.settled.get(end.id);
-        if (meters !== undefined && (!best || meters + end.meters < best.meters)) best = { meters: meters + end.meters, endId: end.id };
+        const cost = this.settled.get(end.id);
+        if (cost !== undefined && (!best || cost + end.cost + arrival.offMeters < best.cost)) {
+          best = { cost: cost + end.cost + arrival.offMeters, meters: this.meters.get(end.id)! + end.meters + arrival.offMeters, endId: end.id };
+        }
       }
-      if ((best && best.meters <= reach) || reach >= limitMeters) break;
+      if ((best && best.cost <= reach) || reach >= limitCost) break;
     }
-    return best && best.meters <= limitMeters ? { meters: Math.round(best.meters), endId: best.endId } : null;
+    return best && best.meters <= limitMeters ? { meters: Math.round(best.meters), endId: best.endId, endSpot } : null;
   }
 }
 
@@ -339,7 +408,9 @@ export function walkingPath(
     const search = searchFrom(fromLat, fromLon);
     const walk = search.walkTo(toLat, toLon, limitMeters);
     if (!walk) return null;
-    const path = [{ lat: fromLat, lon: fromLon }, ...search.nodesTo(walk.endId).map(nodeLatLon), { lat: toLat, lon: toLon }];
+    // From the rider onto the street, along it, and off it to the destination.
+    const startSpot = search.start ? [{ lat: search.start.lat, lon: search.start.lon }] : [];
+    const path = [{ lat: fromLat, lon: fromLon }, ...startSpot, ...search.nodesTo(walk.endId).map(nodeLatLon), walk.endSpot, { lat: toLat, lon: toLon }];
     return { meters: walk.meters, path };
   } catch {
     return null;

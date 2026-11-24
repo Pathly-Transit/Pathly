@@ -27,6 +27,13 @@
  * The tiles are gitignored, so a fresh checkout has none until step 2 runs. Without them Nearby
  * still works but quietly falls back to straight-line distance, which is why deploys check.
  *
+ * Walks keep to the sidewalk and cross at the corner, as people do: each edge has a cost the
+ * search minimizes besides its meters (see src/walkingGraph.ts). Along a street whose sidewalks
+ * OpenStreetMap maps as their own ways (tagged so, or found running beside it), the middle of the
+ * street costs STREET_BESIDE_SIDEWALK times its length, so walks take the sidewalk on the side they
+ * need and change sides at a crossing; a crossing costs more without a traffic signal, and more
+ * again unmarked, the more so the wider the street it crosses.
+ *
  * Keeps only the service area, joins ways at shared points (OpenStreetMap's ways share their nodes;
  * TIGER's streets share their intersections' exact coordinates), drops points along a street that aren't intersections
  * (keeping one every ~50 m so a stop mid-block snaps nearby), and drops tiny disconnected pieces a
@@ -68,9 +75,60 @@ const WALKABLE_HIGHWAYS = new Set([
   'track', 'cycleway', 'bridleway', 'corridor', 'crossing', 'elevator',
 ]);
 const FOOT_ALLOWED = new Set(['yes', 'designated', 'permissive', 'official']);
+/** Ways cars drive on, which may have sidewalks mapped beside them. */
+const CAR_HIGHWAYS = new Set([
+  'residential', 'service', 'unclassified', 'road', 'tertiary', 'tertiary_link', 'secondary', 'secondary_link',
+  'primary', 'primary_link', 'trunk', 'trunk_link',
+]);
+
+// What each walkable line is, for its edges' costs.
+const PATH = 0;
+const STREET = 1;
+/** A street tagged as having its sidewalks mapped as their own ways (sidewalk=separate). */
+const STREET_SIDEWALKS_SEPARATE = 2;
+const SIDEWALK = 3;
+const CROSSING_SIGNALS = 4;
+const CROSSING_MARKED = 5;
+const CROSSING_UNMARKED = 6;
+const CROSSING_UNKNOWN = 7;
+
+/** How much more the middle of a street costs than the sidewalk beside it. */
+const STREET_BESIDE_SIDEWALK = 3;
+/** Each crossing's cost: meters × per, plus a fixed amount (a crossing at a light costs little more than its width). */
+const CROSSING_COST = {
+  [CROSSING_SIGNALS]: { per: 1, plus: 5 },
+  [CROSSING_MARKED]: { per: 1.5, plus: 15 },
+  [CROSSING_UNKNOWN]: { per: 1.5, plus: 20 },
+  [CROSSING_UNMARKED]: { per: 2.5, plus: 40 },
+};
+/** A sidewalk within this many meters of a street, running the same way, runs beside it. */
+const BESIDE_METERS = 22;
+
+const WAY_TAGS = [
+  'highway', 'foot', 'access', 'sidewalk', 'sidewalk:both', 'sidewalk:left', 'sidewalk:right',
+  'footway', 'crossing', 'crossing:signals', 'crossing:markings', 'crossing_ref',
+];
+const SIGNAL_CROSSINGS = /^(traffic_signals|pelican|toucan|puffin|pegasus)$/;
+
+/** A walkable way's class (PATH, STREET, ... above) by its tags (readOsmWays adds the signals its nodes show). */
+function wayClass(tags) {
+  if (tags.footway === 'sidewalk') return SIDEWALK;
+  if (tags.footway === 'crossing' || tags.highway === 'crossing' || tags.crossing) {
+    if (SIGNAL_CROSSINGS.test(tags.crossing ?? '') || tags['crossing:signals'] === 'yes') return CROSSING_SIGNALS;
+    if (tags.crossing === 'unmarked' || tags['crossing:markings'] === 'no') return CROSSING_UNMARKED;
+    if (/^(marked|zebra|uncontrolled)$/.test(tags.crossing ?? '') || tags.crossing_ref || (tags['crossing:markings'] && tags['crossing:markings'] !== 'no')) return CROSSING_MARKED;
+    return CROSSING_UNKNOWN;
+  }
+  if (!CAR_HIGHWAYS.has(tags.highway)) return PATH;
+  const separate = (value) => value === 'separate';
+  if (separate(tags.sidewalk) || separate(tags['sidewalk:both']) || ((separate(tags['sidewalk:left']) || separate(tags['sidewalk:right'])) && (separate(tags['sidewalk:left']) || tags['sidewalk:left'] === 'no') && (separate(tags['sidewalk:right']) || tags['sidewalk:right'] === 'no'))) return STREET_SIDEWALKS_SEPARATE;
+  return STREET;
+}
 
 function isWalkable(tags) {
   if (!tags || !WALKABLE_HIGHWAYS.has(tags.highway)) return false;
+  // A crossing mapped as not allowed: people cross elsewhere.
+  if (tags.crossing === 'no') return false;
   if (tags.foot && FOOT_ALLOWED.has(tags.foot)) return true;
   // use_sidepath: walk on the separately mapped sidewalk instead, which is its own way.
   if (tags.foot === 'no' || tags.foot === 'private' || tags.foot === 'use_sidepath') return false;
@@ -182,8 +240,9 @@ function osmExtracts(dataDir) {
 
 /**
  * The walkable ways in OpenStreetMap's extracts, as lines of [lon, lat, ...] inside the service
- * area (a way leaving it is cut there). Reads each file twice: first the walkable ways (which nodes
- * they use; a way in two states' files, once), then those nodes' coordinates.
+ * area (a way leaving it is cut there), and each line's class (PATH, STREET, ...). Reads each file
+ * twice: first the walkable ways (which nodes they use; a way in two states' files, once), then
+ * those nodes' coordinates and traffic signals (a crossing through a signal's node crosses at it).
  */
 async function readOsmWays(files) {
   const { OSMTransform } = await import('osm-pbf-parser-node');
@@ -191,15 +250,17 @@ async function readOsmWays(files) {
   const blocks = (file, options) => fs.createReadStream(file).pipe(new OSMTransform(options));
   const wayRefs = new Float64List();
   const wayStarts = [0];
+  const wayClasses = [];
   const seenWays = new Set();
   for (const file of files) {
     console.log(`  walkable ways in ${path.basename(file)}...`);
-    for await (const block of blocks(file, { withTags: { way: ['highway', 'foot', 'access', 'sidewalk'], node: false, relation: false }, withInfo: false })) {
+    for await (const block of blocks(file, { withTags: { way: WAY_TAGS, node: false, relation: false }, withInfo: false })) {
       for (const item of block) {
         if (item.type !== 'way' || seenWays.has(item.id) || !isWalkable(item.tags)) continue;
         seenWays.add(item.id);
         for (const ref of item.refs) wayRefs.push(ref);
         wayStarts.push(wayRefs.length);
+        wayClasses.push(wayClass(item.tags));
       }
     }
   }
@@ -212,6 +273,7 @@ async function readOsmWays(files) {
   const needed = sorted.subarray(0, distinct);
   const lat = new Float64Array(needed.length).fill(Number.NaN);
   const lon = new Float64Array(needed.length).fill(Number.NaN);
+  const signal = new Uint8Array(needed.length);
   const indexOf = (id) => {
     let low = 0;
     let high = needed.length - 1;
@@ -225,7 +287,7 @@ async function readOsmWays(files) {
   };
   for (const file of files) {
     console.log(`  node positions in ${path.basename(file)}...`);
-    reading: for await (const block of blocks(file, { withTags: false, withInfo: false })) {
+    reading: for await (const block of blocks(file, { withTags: { node: ['highway', 'crossing', 'crossing:signals'], way: false, relation: false }, withInfo: false })) {
       for (const item of block) {
         if (item.type === 'way') break reading; // Nodes come first in a sorted extract.
         if (item.type !== 'node' || !inServiceArea(item.lon, item.lat)) continue;
@@ -233,12 +295,29 @@ async function readOsmWays(files) {
         if (index >= 0) {
           lat[index] = item.lat;
           lon[index] = item.lon;
+          const tags = item.tags;
+          if (tags && (tags.highway === 'traffic_signals' || SIGNAL_CROSSINGS.test(tags.crossing ?? '') || tags['crossing:signals'] === 'yes')) signal[index] = 1;
         }
       }
     }
   }
+  // A crossing through a traffic signal's node crosses at the light, however the crossing itself is tagged.
+  let signalled = 0;
+  for (let way = 0; way + 1 < wayStarts.length; way += 1) {
+    if (wayClasses[way] < CROSSING_MARKED) continue;
+    for (let i = wayStarts[way]; i < wayStarts[way + 1]; i += 1) {
+      const index = indexOf(refs[i]);
+      if (index >= 0 && signal[index]) {
+        wayClasses[way] = CROSSING_SIGNALS;
+        signalled += 1;
+        break;
+      }
+    }
+  }
+  console.log(`  ${signalled} crossings at traffic signals found by their nodes`);
   // Each way as lines through its nodes inside the service area (a node outside cuts it).
   const lines = [];
+  const classes = [];
   for (let way = 0; way + 1 < wayStarts.length; way += 1) {
     let line = [];
     for (let i = wayStarts[way]; i < wayStarts[way + 1]; i += 1) {
@@ -247,12 +326,90 @@ async function readOsmWays(files) {
         line.push(lon[index], lat[index]);
         continue;
       }
-      if (line.length >= 4) lines.push(line);
+      if (line.length >= 4) {
+        lines.push(line);
+        classes.push(wayClasses[way]);
+      }
       line = [];
     }
-    if (line.length >= 4) lines.push(line);
+    if (line.length >= 4) {
+      lines.push(line);
+      classes.push(wayClasses[way]);
+    }
   }
-  return lines;
+  return { lines, classes };
+}
+
+/** Grid cells about 45 m on a side, for finding the sidewalks near a street. */
+const SIDEWALK_CELL = 0.0004;
+
+/**
+ * Finds sidewalks beside streets: returns `besideShare(x0, y0, x1, y1)`, the share of a street
+ * segment that has a sidewalk (a SIDEWALK line) running the same way within BESIDE_METERS of it,
+ * sampled every ~15 m.
+ */
+function sidewalkIndex(lines, classes) {
+  const cell = (x, y) => Math.floor(x / SIDEWALK_CELL) * 1_000_000 + Math.floor(y / SIDEWALK_CELL);
+  const segments = new Float64List();
+  const grid = new Map();
+  lines.forEach((line, index) => {
+    if (classes[index] !== SIDEWALK) return;
+    for (let i = 2; i < line.length; i += 2) {
+      const start = segments.length;
+      segments.push(line[i - 2]);
+      segments.push(line[i - 1]);
+      segments.push(line[i]);
+      segments.push(line[i + 1]);
+      const seen = new Set();
+      // Every cell the segment passes through (sampled finely enough not to skip one).
+      const steps = Math.max(1, Math.ceil(Math.max(Math.abs(line[i] - line[i - 2]), Math.abs(line[i + 1] - line[i - 1])) / (SIDEWALK_CELL / 2)));
+      for (let step = 0; step <= steps; step += 1) {
+        const key = cell(line[i - 2] + ((line[i] - line[i - 2]) * step) / steps, line[i - 1] + ((line[i + 1] - line[i - 1]) * step) / steps);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        let list = grid.get(key);
+        if (!list) grid.set(key, (list = []));
+        list.push(start);
+      }
+    }
+  });
+  const data = () => segments.data;
+  return function besideShare(x0, y0, x1, y1) {
+    const kx = 111_320 * Math.cos((y0 * Math.PI) / 180);
+    const ky = 111_320;
+    const [dx, dy] = [(x1 - x0) * kx, (y1 - y0) * ky];
+    const length = Math.hypot(dx, dy);
+    if (length === 0) return 0;
+    const samples = Math.max(1, Math.round(length / 15));
+    const reachCells = 1;
+    let beside = 0;
+    const seg = data();
+    for (let s = 0; s < samples; s += 1) {
+      const t = (s + 0.5) / samples;
+      const [px, py] = [x0 + (x1 - x0) * t, y0 + (y1 - y0) * t];
+      const [cx, cy] = [Math.floor(px / SIDEWALK_CELL), Math.floor(py / SIDEWALK_CELL)];
+      let found = false;
+      for (let gx = cx - reachCells; gx <= cx + reachCells && !found; gx += 1) {
+        for (let gy = cy - reachCells; gy <= cy + reachCells && !found; gy += 1) {
+          for (const start of grid.get(gx * 1_000_000 + gy) ?? []) {
+            const [ax, ay, bx, by] = [(seg[start] - px) * kx, (seg[start + 1] - py) * ky, (seg[start + 2] - px) * kx, (seg[start + 3] - py) * ky];
+            const [sx, sy] = [bx - ax, by - ay];
+            const segLength = Math.hypot(sx, sy);
+            if (segLength === 0) continue;
+            // Running the same way: within about 30 degrees of the street.
+            if (Math.abs(sx * dx + sy * dy) < 0.85 * segLength * length) continue;
+            const u = Math.max(0, Math.min(1, -(ax * sx + ay * sy) / (segLength * segLength)));
+            if (Math.hypot(ax + u * sx, ay + u * sy) <= BESIDE_METERS) {
+              found = true;
+              break;
+            }
+          }
+        }
+      }
+      if (found) beside += 1;
+    }
+    return beside / samples;
+  };
 }
 
 /** The city's paths, boardwalks, step streets, and interior sidewalks, and the USGS trails, as lines of [lon, lat, ...]. */
@@ -424,10 +581,12 @@ async function main() {
   let streets;
   let paths;
   let meta;
+  // Each line's class (PATH, STREET, ...); without OpenStreetMap, every line is a plain path.
+  let classes = null;
   if (extracts.length > 0) {
     const names = extracts.map((file) => path.basename(file)).join(', ');
     console.log(`Reading OpenStreetMap's walkable ways (${names})...`);
-    streets = await readOsmWays(extracts);
+    ({ lines: streets, classes } = await readOsmWays(extracts));
     paths = [];
     console.log(`  ${streets.length} walkable lines`);
     meta = { source: `OpenStreetMap (${names}; ODbL)`, credits: [OSM_CREDIT] };
@@ -441,9 +600,12 @@ async function main() {
   }
 
   // Every line as a run of point keys (wayStarts[i]..wayStarts[i + 1] in wayRefs), as the graph below reads them.
+  const lines = [...streets, ...paths];
+  const lineClass = (way) => (classes ? classes[way] : PATH);
+  const besideShare = classes ? sidewalkIndex(lines, classes) : null;
   const wayRefs = new Float64List();
   const wayStarts = [0];
-  for (const line of [...streets, ...paths]) {
+  for (const line of lines) {
     // A point outside the service area is OUTSIDE (no position), where the graph cuts the way.
     for (let i = 0; i < line.length; i += 2) wayRefs.push(inServiceArea(line[i], line[i + 1]) ? keyOf(line[i], line[i + 1]) : OUTSIDE);
     wayStarts.push(wayRefs.length);
@@ -494,9 +656,14 @@ async function main() {
     }
     return graphIndex[index];
   };
+  const counts = { besideSidewalks: 0, streets: 0, crossings: [0, 0, 0, 0] };
   for (let way = 0; way + 1 < wayStarts.length; way += 1) {
+    const kind = lineClass(way);
+    const isStreet = kind === STREET || kind === STREET_SIDEWALKS_SEPARATE;
     let from = -1;
     let meters = 0;
+    // Meters of this edge with a sidewalk beside it (for streets).
+    let beside = 0;
     for (let i = wayStarts[way]; i < wayStarts[way + 1]; i += 1) {
       const index = refIndex[i];
       if (Number.isNaN(lat[index])) {
@@ -507,19 +674,38 @@ async function main() {
       if (from < 0) {
         from = index;
         meters = 0;
+        beside = 0;
         continue;
       }
       const previous = refIndex[i - 1];
-      meters += haversineMeters(lat[previous], lon[previous], lat[index], lon[index]);
+      const step = haversineMeters(lat[previous], lon[previous], lat[index], lon[index]);
+      meters += step;
+      if (kind === STREET && besideShare) beside += step * besideShare(lon[previous], lat[previous], lon[index], lat[index]);
       const isEnd = i + 1 === wayStarts[way + 1] || Number.isNaN(lat[refIndex[i + 1]]);
       if (isEnd || uses[index] > 1 || meters >= MAX_EDGE_METERS) {
-        edges.push({ a: nodeFor(from), b: nodeFor(index), meters });
+        let cost = meters;
+        if (isStreet) {
+          counts.streets += 1;
+          if (kind === STREET_SIDEWALKS_SEPARATE || beside >= meters / 2) {
+            cost = meters * STREET_BESIDE_SIDEWALK;
+            counts.besideSidewalks += 1;
+          }
+        } else if (CROSSING_COST[kind]) {
+          cost = meters * CROSSING_COST[kind].per + CROSSING_COST[kind].plus;
+          counts.crossings[kind - CROSSING_SIGNALS] += 1;
+        }
+        edges.push({ a: nodeFor(from), b: nodeFor(index), meters, cost });
         from = index;
         meters = 0;
+        beside = 0;
       }
     }
   }
   console.log(`  ${nodes.length} graph nodes, ${edges.length} edges`);
+  if (classes) {
+    const [signals, marked, unmarked, unknown] = counts.crossings;
+    console.log(`  ${counts.besideSidewalks} of ${counts.streets} street edges have their sidewalks mapped beside them; crossings: ${signals} at signals, ${marked} marked, ${unmarked} unmarked, ${unknown} untagged`);
+  }
 
   // Drop small disconnected pieces (a mapped path in a courtyard, a lone driveway).
   const parent = Int32Array.from({ length: nodes.length }, (_, index) => index);
@@ -538,7 +724,7 @@ async function main() {
       keptNodes.push(node);
     }
   });
-  const keptEdges = edges.filter((edge) => keptIndex[edge.a] >= 0).map((edge) => ({ a: keptIndex[edge.a], b: keptIndex[edge.b], meters: edge.meters }));
+  const keptEdges = edges.filter((edge) => keptIndex[edge.a] >= 0).map((edge) => ({ a: keptIndex[edge.a], b: keptIndex[edge.b], meters: edge.meters, cost: edge.cost }));
 
   const result = writeWalkingTiles(OUT_DIR, keptNodes, keptEdges, meta);
   console.log(`Wrote ${result.tiles} tiles (${result.nodes} nodes, ${result.edges} edges, ${(result.bytes / 1e6).toFixed(1)} MB) to ${OUT_DIR}`);

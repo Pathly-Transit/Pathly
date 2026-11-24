@@ -1,4 +1,4 @@
-import { approachingVehicle, bearingDegrees, directionArrowAt, MIN_FIT_SPAN, snapStopsToPath, splitPathAtStop, streetWalkToDraw, walkConnectors, withAlpha, withMinimumFitSpan } from '../src/data/routeDirection';
+import { approachingVehicle, bearingDegrees, directionArrowAt, MIN_FIT_SPAN, snapStopsToPath, splitPathAtStop, streetWalkToDraw, walkConnectors, walkToStreetStop, withAlpha, withMinimumFitSpan } from '../src/data/routeDirection';
 
 // A straight east-west line along 40.9°N: 21 points about 84 m apart.
 const line = Array.from({ length: 21 }, (_, index) => ({ lat: 40.9, lon: -73.2 + index * 0.001 }));
@@ -162,5 +162,20 @@ describe('streetWalkToDraw', () => {
 
   it('drops a walk too short to be more than a jog along the street', () => {
     expect(streetWalkToDraw(walk, { lat: 40.7150, lon: -74.0050 }, stop)).toBeNull();
+  });
+});
+
+describe('walkToStreetStop', () => {
+  const rider = { lat: 40.7116, lon: -74.0108 };
+  const stop = { lat: 40.7115, lon: -74.0110 };
+
+  it('draws the whole walk from the rider to the stop, however short', () => {
+    const walk = [{ lat: 40.7116, lon: -74.0105 }, { lat: 40.7114, lon: -74.0108 }];
+    expect(walkToStreetStop(walk, rider, stop)).toEqual([rider, ...walk, stop]);
+  });
+
+  it('runs straight from the rider to the stop with no street walk', () => {
+    expect(walkToStreetStop(null, rider, stop)).toEqual([rider, stop]);
+    expect(walkToStreetStop(null, null, stop)).toBeNull();
   });
 });

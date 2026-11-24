@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BeanAvatar } from '../avatars/BeanAvatarImage';
 import { formatAge, visibleTrains } from '../data/liveTrains';
-import { approachingVehicle, ARROW_ZOOM_SLACK, directionArrowAt, focusStopIndex, metersPerPixel, middleDirectionArrowAt, riderNearStop, snapStopsToPath, splitPathAtStop, streetWalkToDraw, walkConnectors, withAlpha } from '../data/routeDirection';
+import { approachingVehicle, ARROW_ZOOM_SLACK, directionArrowAt, focusStopIndex, metersPerPixel, middleDirectionArrowAt, riderNearStop, snapStopsToPath, splitPathAtStop, streetWalkToDraw, walkConnectors, walkToStreetStop, withAlpha } from '../data/routeDirection';
 import { entranceLabel, type StationEntrance } from '../data/stationEntrances';
 import { stopRevealZoom, zoomForRegion } from '../data/stopDeclutter';
 import type { RouteLiveVehicle } from '../data/transitLive';
@@ -277,19 +277,24 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, entrance
   // The rider, when they're near their stop: framed with it so they see the walk there.
   // The purple dot is always framed: its walk and stop are the point of the page.
   const nearRider = walkOrigin && focusStop && (exploreFrom != null || riderNearStop(walkOrigin, focusStop)) ? walkOrigin : null;
-  // Thin dotted joins from the rider's dot and to the stop's dot, where the street walk stops short
-  // of them (or straight between them with no walk, for a rider near enough to walk). No street
-  // walk once the rider is at the stop: just the thin join between the dots.
-  const streetWalk = useMemo(
-    () => streetWalkToDraw(walkPath, walkOrigin ? { lat: walkOrigin.latitude, lon: walkOrigin.longitude } : null, focusStop),
-    [focusStop, walkOrigin?.latitude, walkOrigin?.longitude, walkPath], // eslint-disable-line react-hooks/exhaustive-deps -- keyed by value
-  );
+  // A subway or rail station is reached through its entrances, so its walk ends at the street and
+  // thin dotted joins stand for the way inside (and for the rider already at the station). A bus
+  // stop or ferry landing is on the street: its whole walk, however short, is the one dotted walk.
+  const atStation = mode === 'subway' || mode === 'rail';
+  const streetWalk = useMemo(() => {
+    const from = walkOrigin ? { lat: walkOrigin.latitude, lon: walkOrigin.longitude } : null;
+    if (atStation) return streetWalkToDraw(walkPath, from, focusStop);
+    const near = nearRider ? { lat: nearRider.latitude, lon: nearRider.longitude } : null;
+    return walkToStreetStop(walkPath, walkPath ? from : near, focusDot);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by value
+  }, [atStation, focusStop, focusDot?.lat, focusDot?.lon, nearRider?.latitude, nearRider?.longitude, walkOrigin?.latitude, walkOrigin?.longitude, walkPath]);
   const connectors = useMemo(() => {
+    if (!atStation) return [];
     const from = streetWalk ? walkOrigin : nearRider;
     if (!from) return [];
     return walkConnectors(streetWalk, { lat: from.latitude, lon: from.longitude }, focusDot).map((join) => join.map(toPoint));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by value
-  }, [focusDot?.lat, focusDot?.lon, nearRider?.latitude, nearRider?.longitude, walkOrigin?.latitude, walkOrigin?.longitude, streetWalk]);
+  }, [atStation, focusDot?.lat, focusDot?.lon, nearRider?.latitude, nearRider?.longitude, walkOrigin?.latitude, walkOrigin?.longitude, streetWalk]);
   // Set once the map has framed an approaching vehicle (below).
   const framedVehicle = useRef(false);
   // The nearest stop (and whether the rider is near it) often resolves after the page opens; follow

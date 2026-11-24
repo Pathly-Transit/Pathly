@@ -11,8 +11,11 @@ import {
   type WalkingManifest,
 } from './walkingGraph';
 
-/** A walkable connection between nodes `a` and `b` (indexes into the node list), both ways. */
-export type WalkingEdge = { a: number; b: number; meters: number };
+/**
+ * A walkable connection between nodes `a` and `b` (indexes into the node list), both ways. `cost`
+ * (its meters unless given) is what walks minimize: see walkingGraph.ts.
+ */
+export type WalkingEdge = { a: number; b: number; meters: number; cost?: number };
 
 /**
  * Cuts a walking graph into walkingGraph.ts's tiles and writes them, with manifest.json, to
@@ -36,12 +39,13 @@ export function writeWalkingTiles(
     list.push(index);
   });
 
-  const adjacency: { to: number; meters: number }[][] = nodes.map(() => []);
+  const adjacency: { to: number; meters: number; cost: number }[][] = nodes.map(() => []);
   for (const edge of edges) {
     if (edge.a === edge.b) continue;
     const meters = Math.max(1, Math.min(65_535, Math.round(edge.meters)));
-    adjacency[edge.a]!.push({ to: edge.b, meters });
-    adjacency[edge.b]!.push({ to: edge.a, meters });
+    const cost = Math.max(meters, Math.min(65_535, Math.round(edge.cost ?? edge.meters)));
+    adjacency[edge.a]!.push({ to: edge.b, meters, cost });
+    adjacency[edge.b]!.push({ to: edge.a, meters, cost });
   }
 
   mkdirSync(dir, { recursive: true });
@@ -57,15 +61,17 @@ export function writeWalkingTiles(
       edgeStart: new Uint32Array(members.length + 1),
       edgeTarget: new Float64Array(edgeCount),
       edgeMeters: new Uint16Array(edgeCount),
+      edgeCost: new Uint16Array(edgeCount),
     };
     let edge = 0;
     members.forEach((index, local) => {
       tile.lat[local] = Math.round(nodes[index]!.lat * 1e6);
       tile.lon[local] = Math.round(nodes[index]!.lon * 1e6);
       tile.edgeStart[local] = edge;
-      for (const { to, meters } of adjacency[index]!) {
+      for (const { to, meters, cost } of adjacency[index]!) {
         tile.edgeTarget[edge] = globalId[to]!;
         tile.edgeMeters[edge] = meters;
+        tile.edgeCost[edge] = cost;
         edge += 1;
       }
     });

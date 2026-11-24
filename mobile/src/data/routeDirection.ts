@@ -165,6 +165,26 @@ export function streetWalkToDraw(walk: readonly LatLon[] | null | undefined, fro
 }
 
 /**
+ * The whole walk to a stop on the street (a bus stop, a ferry landing), drawn as one: from the
+ * rider's dot along the street walk to the stop's dot, however short. Thin joins are only for a
+ * station's entrances (streetWalkToDraw, walkConnectors), where the last stretch is inside. With no
+ * street walk, it runs straight from the rider to the stop. Null when there's nothing to draw.
+ */
+export function walkToStreetStop(walk: readonly LatLon[] | null | undefined, from: LatLon | null | undefined, to: LatLon | null | undefined): LatLon[] | null {
+  const points: LatLon[] = [];
+  // Points under a meter from the last one add nothing.
+  const add = (point: LatLon) => {
+    const last = points[points.length - 1];
+    if (!last || distanceMeters(last, point) > 1) points.push(point);
+  };
+  if (from) add(from);
+  if (walk && walk.length >= 2) walk.forEach(add);
+  else if (!from) return null;
+  if (to) add(to);
+  return points.length >= 2 ? points : null;
+}
+
+/**
  * The short joins drawn (thinner than the walk) from the rider's dot to where the street walk starts,
  * and from where it ends to the stop's dot. Routing starts and ends on the nearest street, and the
  * stop's dot sits on the line (snapStopsToPath), so the walk alone stops short of both dots. With no

@@ -101,3 +101,29 @@ test('stops beyond walking range, or unreachable on foot, use straight line', ()
   const near = [{ ...far[0], distanceMeters: 300 }, { ...far[1], distanceMeters: 400 }];
   assert.deepEqual(pickWalkingNearest(near, 0, 0, () => null), { stop: near[0], walkMeters: null });
 });
+
+test('walks take the sidewalk over the middle of the street, and still report real meters', () => {
+  // From a corner to the next one: straight down the middle of the street (300 m, costed as a
+  // street with sidewalks beside it), or along the sidewalk through two points (about 340 m).
+  const start = { lat: 40.6000, lon: -73.9500 };
+  const end = { lat: 40.6027, lon: -73.9500 };
+  const walkNodes = [start, end, { lat: 40.6000, lon: -73.9502 }, { lat: 40.6027, lon: -73.9502 }];
+  const meters = (a, b) => haversineMeters(walkNodes[a].lat, walkNodes[a].lon, walkNodes[b].lat, walkNodes[b].lon);
+  const sidewalkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pathly-sidewalk-'));
+  try {
+    writeWalkingTiles(sidewalkDir, walkNodes, [
+      { a: 0, b: 1, meters: meters(0, 1), cost: meters(0, 1) * 3 },
+      { a: 0, b: 2, meters: meters(0, 2) },
+      { a: 2, b: 3, meters: meters(2, 3) },
+      { a: 3, b: 1, meters: meters(3, 1) },
+    ]);
+    setWalkingDataForTests(sidewalkDir);
+    const walk = walkingPath(start.lat, start.lon, end.lat, end.lon, 1_000);
+    const sidewalk = Math.round(meters(0, 2) + meters(2, 3) + meters(3, 1));
+    assert.ok(Math.abs(walk.meters - sidewalk) <= 2, `walk was ${walk.meters} m, sidewalk ${sidewalk} m`);
+    assert.ok(walk.path.some((point) => Math.abs(point.lon - -73.9502) < 1e-6), 'the walk keeps to the sidewalk');
+  } finally {
+    setWalkingDataForTests(dir);
+    fs.rmSync(sidewalkDir, { force: true, recursive: true });
+  }
+});
