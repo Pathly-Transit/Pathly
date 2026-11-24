@@ -64,6 +64,9 @@ function assetUri(source: unknown): string | undefined {
 
 /** The base map's icons, loaded once per page and shared by every map. */
 const iconImages = new Map<string, Promise<HTMLImageElement>>();
+/** The icons already loaded, which a map that asks for one is given at once (MapLibre warns and draws stops without it otherwise). */
+const loadedIcons = new Map<string, HTMLImageElement>();
+
 function loadIcon(name: string): Promise<HTMLImageElement> | undefined {
   const uri = assetUri(WEB_MAP_ICONS[name]);
   if (!uri) return undefined;
@@ -71,7 +74,10 @@ function loadIcon(name: string): Promise<HTMLImageElement> | undefined {
   if (!image) {
     image = new Promise((resolve, reject) => {
       const element = new Image();
-      element.onload = () => resolve(element);
+      element.onload = () => {
+        loadedIcons.set(name, element);
+        resolve(element);
+      };
       element.onerror = reject;
       element.src = uri;
     });
@@ -79,6 +85,9 @@ function loadIcon(name: string): Promise<HTMLImageElement> | undefined {
   }
   return image;
 }
+
+// Every icon, starting as the page loads: they're in hand by the time the map's first tiles are.
+if (typeof Image !== 'undefined') for (const name of Object.keys(WEB_MAP_ICONS)) void loadIcon(name)?.catch(() => undefined);
 
 /** Removes a layer and its source, if the map (and its current style) still has them. */
 function removeOverlay(map: maplibregl.Map, layerId: string, sourceId: string) {
@@ -141,6 +150,11 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
     instance.on('style.load', () => setStyleKey((key) => key + 1));
     // The style's icons (transit stops), added as the map asks for them (each new style asks again).
     instance.on('styleimagemissing', ({ id }: { id: string }) => {
+      const loaded = loadedIcons.get(id);
+      if (loaded) {
+        instance.addImage(id, loaded, { pixelRatio: WEB_ICON_PIXEL_RATIO });
+        return;
+      }
       void loadIcon(id)?.then((image) => {
         if (!instance.hasImage(id)) instance.addImage(id, image, { pixelRatio: WEB_ICON_PIXEL_RATIO });
       }).catch(() => undefined);

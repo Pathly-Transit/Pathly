@@ -10,7 +10,8 @@
 //   building    building outlines
 //   road        kind: motorway, primary, secondary, tertiary, minor, service, path; trail (an
 //               informal or unpaved path), stub (a short dead-end path: last zoom only), link (ramps),
-//               brunnel (bridge/tunnel), name, ref (route number)
+//               brunnel (bridge/tunnel), name, ref (route number), oneway (drawn the way
+//               traffic runs)
 //   rail        railroads
 //   waterway    kind: river, canal, stream; name
 //   ferry       ferry routes

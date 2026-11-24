@@ -1,4 +1,4 @@
-// OpenStreetMap's footpaths, sports fields, transit roads, platforms, and lakes and ponds, read from Geofabrik's state
+// OpenStreetMap's streets, footpaths, sports fields, transit roads, platforms, and lakes and ponds, read from Geofabrik's state
 // extracts (<data-dir>/osm-pbf/*.osm.pbf, which `npm run map:download` fetches) rather than asked of
 // the Overpass API square by square: the same ways, picked by the same rules as osm.mjs's and
 // transitways.mjs's queries, written in the same form those modules read (one file per state in
@@ -7,7 +7,7 @@
 //
 // OpenStreetMap data is © OpenStreetMap contributors, under the Open Database License: the map
 // credits it (mapStyle.ts's MAP_ATTRIBUTION, shown by MapCredit, and Settings → About).
-import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { DETAIL } from './bounds.mjs';
@@ -298,9 +298,101 @@ async function extractStateWater(file, osmDir, log) {
   log(`  ${state}: ${water.length} water areas`);
 }
 
+/** The file prefix osm streets are written under (roads1_pbf_<state>.ndjson), which osmroads.mjs reads. */
+export const ROADS_PREFIX = 'roads1_pbf_';
+
+/** The streets and roads the map draws (footpaths are osm.mjs's, bus roads transitways.mjs's). */
+const STREET_HIGHWAYS = new Set([
+  'motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link',
+  'tertiary', 'tertiary_link', 'unclassified', 'residential', 'living_street', 'road', 'service', 'track',
+]);
+const ROAD_TAGS = ['highway', 'name', 'ref', 'bridge', 'tunnel', 'oneway', 'junction', 'service', 'area', 'indoor', 'bus', 'psv', 'access'];
+
+const isStreet = (tags) => STREET_HIGHWAYS.has(tags.highway) && tags.area !== 'yes' && !tags.indoor && !isTransitway(tags);
+
+/**
+ * One extract's streets, written as <osmDir>/roads1_pbf_<state>.ndjson, a way per line:
+ * [id, highway, name, ref, brunnel, oneway (1, -1 against the drawing, or 0), service, line].
+ * A way crossing the area's edge is cut there, each piece under its own id.
+ */
+async function extractStateRoads(file, osmDir, log) {
+  const { OSMTransform } = await import('osm-pbf-parser-node');
+  const blocks = (options) => createReadStream(file).pipe(new OSMTransform(options));
+  const state = basename(file).replace(/-latest\.osm\.pbf$/, '');
+  const ways = [];
+  const refs = new Float64List();
+  for await (const block of blocks({ withTags: { way: ROAD_TAGS, node: false, relation: false }, withInfo: false })) {
+    for (const item of block) {
+      if (item.type !== 'way' || !item.tags || !isStreet(item.tags)) continue;
+      ways.push({ id: item.id, tags: item.tags, start: refs.length, end: refs.length + item.refs.length });
+      for (const ref of item.refs) refs.push(ref);
+    }
+  }
+  const all = refs.view();
+  const needed = Float64Array.from(all).sort();
+  let distinct = 0;
+  for (let i = 0; i < needed.length; i += 1) if (i === 0 || needed[i] !== needed[i - 1]) needed[distinct++] = needed[i];
+  const ids = needed.subarray(0, distinct);
+  const lon = new Float64Array(ids.length).fill(Number.NaN);
+  const lat = new Float64Array(ids.length).fill(Number.NaN);
+  const indexOf = (id) => {
+    let low = 0;
+    let high = ids.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (ids[mid] === id) return mid;
+      if (ids[mid] < id) low = mid + 1;
+      else high = mid - 1;
+    }
+    return -1;
+  };
+  const [west, south, east, north] = [DETAIL.west - MARGIN, DETAIL.south - MARGIN, DETAIL.east + MARGIN, DETAIL.north + MARGIN];
+  reading: for await (const block of blocks({ withTags: false, withInfo: false })) {
+    for (const item of block) {
+      if (item.type === 'way') break reading;
+      if (item.type !== 'node' || item.lon < west || item.lon > east || item.lat < south || item.lat > north) continue;
+      const index = indexOf(item.id);
+      if (index >= 0) {
+        lon[index] = round(item.lon);
+        lat[index] = round(item.lat);
+      }
+    }
+  }
+  const path = join(osmDir, `${ROADS_PREFIX}${state}.ndjson`);
+  const out = createWriteStream(`${path}.partial`);
+  const write = (line) => (out.write(line) ? undefined : new Promise((resolve) => out.once('drain', resolve)));
+  let count = 0;
+  for (const way of ways) {
+    const runs = [];
+    let line = [];
+    for (let i = way.start; i < way.end; i += 1) {
+      const index = indexOf(all[i]);
+      if (index >= 0 && !Number.isNaN(lon[index])) {
+        line.push(lon[index], lat[index]);
+        continue;
+      }
+      if (line.length >= 4) runs.push(line);
+      line = [];
+    }
+    if (line.length >= 4) runs.push(line);
+    if (runs.length === 0) continue;
+    const { tags } = way;
+    const brunnel = tags.bridge && tags.bridge !== 'no' ? 'bridge' : tags.tunnel && tags.tunnel !== 'no' && tags.tunnel !== 'building_passage' ? 'tunnel' : '';
+    const oneway = /^(yes|1|true)$/.test(tags.oneway ?? '') || (tags.junction === 'roundabout' && tags.oneway !== 'no') ? 1 : tags.oneway === '-1' ? -1 : 0;
+    for (let i = 0; i < runs.length; i += 1) {
+      const id = runs.length === 1 ? way.id : `${way.id}#${i}`;
+      await write(`${JSON.stringify([id, tags.highway, tags.name ?? '', tags.ref ?? '', brunnel, oneway, tags.service ?? '', runs[i]])}\n`);
+      count += 1;
+    }
+  }
+  await new Promise((resolve, reject) => out.end((error) => (error ? reject(error) : resolve())));
+  renameSync(`${path}.partial`, path);
+  log(`  ${state}: ${count} streets`);
+}
+
 /**
  * Reads OpenStreetMap's footpaths, fields, transit roads, and platforms out of every extract in
- * <dir>/osm-pbf into <dir>/osm, and its lakes and ponds. A state already read from the same extract
+ * <dir>/osm-pbf into <dir>/osm, and its lakes and ponds and its streets. A state already read from the same extract
  * (its files newer than the extract) is kept.
  */
 export async function extractOsmFromPbf(dir, log = console.log) {
@@ -320,5 +412,6 @@ export async function extractOsmFromPbf(dir, log = console.log) {
     const fresh = (path) => existsSync(path) && statSync(path).mtimeMs > statSync(file).mtimeMs;
     if (!fresh(out)) await extractState(file, osmDir, log);
     if (!fresh(join(osmDir, `${WATER_PREFIX}${state}.json`))) await extractStateWater(file, osmDir, log);
+    if (!fresh(join(osmDir, `${ROADS_PREFIX}${state}.ndjson`))) await extractStateRoads(file, osmDir, log);
   }
 }

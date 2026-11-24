@@ -180,7 +180,7 @@ function chainSegments(x1, y1, x2, y2, group, count) {
  * stretch once, with attributes merged from every feature on it (`merge(list) → { props, minzoom }`
  * or null to leave it out), joined into long lines. Only stretches touching `box` are kept.
  */
-function joinedLines(records, merge, box) {
+export function joinedLines(records, merge, box) {
   const x1 = new Grow(Int32Array);
   const y1 = new Grow(Int32Array);
   const x2 = new Grow(Int32Array);

@@ -25,6 +25,7 @@ import { boxesOverlap, ringBounds } from './map/geometry.mjs';
 import { addWikidataLandmarks, downloadWikidataLandmarks } from './map/landmarks.mjs';
 import { addOsmPaths, hasOsmPaths } from './map/osm.mjs';
 import { extractOsmFromPbf } from './map/osmpbf.mjs';
+import { addOsmRoads, hasOsmRoads } from './map/osmroads.mjs';
 import { NYC_PATH_FILES, addPublicPaths, downloadCitySidewalks, downloadUsgsTrails } from './map/publicpaths.mjs';
 import { LAYERS } from './map/schema.mjs';
 import { readShapefileZip } from './map/shapefile.mjs';
@@ -154,7 +155,11 @@ async function build(dir, tilesOnly) {
     const landmarkNames = addLandmarks(store, join(dir, 'tiger'), log);
     const gnis = addPlaces(store, join(dir, 'tiger'), join(dir, 'gnis'), log);
     addGnisWaterNames(store, gnis, [...waterNames, ...landmarkNames], log);
-    addRoads(store, join(dir, 'county'), log);
+    // OpenStreetMap's streets where they've been read out of the extracts (TIGER's keep streets that
+    // were never built, and don't know one-way streets); TIGER's stand in where they haven't.
+    const osmRoads = hasOsmRoads(join(dir, 'osm'));
+    if (osmRoads) await addOsmRoads(store, join(dir, 'osm'), log);
+    else addRoads(store, join(dir, 'county'), log);
     // OpenStreetMap's footpaths, fields, bus roads, and platforms where they've been fetched; the
     // public paths, fields, and platforms stand in where they haven't.
     const osmPaths = hasOsmPaths(join(dir, 'osm'));
@@ -162,7 +167,7 @@ async function build(dir, tilesOnly) {
     addOsmPaths(store, join(dir, 'osm'), log);
     addOsmTransitways(store, join(dir, 'osm'), log);
     await addPublicPaths(store, dir, log, { osmPaths, osmPlatforms: osmTransitways });
-    credits = osmPaths || osmTransitways || osmWater.added > 0 ? [OSM_CREDIT] : [];
+    credits = osmRoads || osmPaths || osmTransitways || osmWater.added > 0 ? [OSM_CREDIT] : [];
     addRail(store, join(dir, 'tiger'), log);
     addTransit(store, join(dir, 'gtfs'), log);
     // After the places, parks, and stations, so a landmark they already name isn't named twice.

@@ -7,9 +7,9 @@ import type { MapTheme, TransitIcons } from '../theme/AppSettings';
 /**
  * The base map every Pathly map draws (home, route, trip, and choose-on-map; native and web):
  * Pathly's own vector tiles of New York City, Long Island, and the region around them, built from
- * public data (Census TIGER/Line streets, water, parks, and places; USGS names, trails, and
- * building outlines; New York City's footprints, plazas, and fields; Wikidata's landmarks) plus
- * OpenStreetMap's footpaths, bus roads, and platforms (credited on the map: MapCredit), by
+ * OpenStreetMap's streets, footpaths, lakes, bus roads, and platforms (credited on the map:
+ * MapCredit) plus public data (Census TIGER/Line water, parks, railroads, and places; USGS names,
+ * trails, and building outlines; New York City's footprints and plazas; Wikidata's landmarks), by
  * scripts/build-map.mjs, and labeled in Nunito, the app's typeface (scripts/build-map-fonts.mjs).
  * Settings → About lists the sources. Styled to read like the familiar maps riders know (white streets
  * with gray edges, blue water, green parks) with Pathly's own changes: highways in quiet gray so
@@ -103,7 +103,7 @@ const LIGHT: MapPalette = {
   highwayCasing: '#A9AEB6',
   motorway: '#DADCE0',
   motorwayCasing: '#A2A7AF',
-  path: '#9FD6C1',
+  path: '#7FC4AA',
   rail: '#A9AEB5',
   ferry: '#4F8FD6',
   boundary: '#A4A9B0',
@@ -157,7 +157,7 @@ const MUTED_LIGHT: MapPalette = {
   land: '#F3F3F2', manMade: '#ECECEB', park: '#DCE6DA', grass: '#E3EBE1', hospital: '#EFE6E5', school: '#EDEBE6',
   water: '#C9D6E0', aeroArea: '#E8E9EB', building: '#DBDBDA', buildingOutline: '#C7C7C5',
   casing: '#D0D0D0', arterialCasing: '#C4C4C4', highway: '#E0E0E0', highwayCasing: '#BDBDBD', motorway: '#DCDCDC', motorwayCasing: '#B8B8B8',
-  path: '#B9CEC6', rail: '#BDBDBD', ferry: '#8FA6BA', boundary: '#B5B5B5',
+  path: '#A3BBB2', rail: '#BDBDBD', ferry: '#8FA6BA', boundary: '#B5B5B5',
   label: '#707070', placeLabel: '#4A4A4A', neighborhoodLabel: '#8A8A8A', roadLabel: '#707070', waterLabel: '#5F7A90', parkLabel: '#5E7A5E',
   stationLabel: '#4A5560',
 };
@@ -177,7 +177,7 @@ const VIBRANT_LIGHT: MapPalette = {
   land: '#F6F5EE', park: '#8FD68A', grass: '#B4E6A6', hospital: '#FBC9C2', school: '#F5E2B8',
   water: '#5DB0F5', aeroArea: '#DCE2EE', building: '#D9D4C7', buildingOutline: '#BCB5A7',
   arterialCasing: '#A7AEB8', highway: '#FCE9B6', highwayCasing: '#E3C27A', motorway: '#FBDFA0', motorwayCasing: '#DDB36A',
-  path: '#86CFB3', ferry: '#1E7FE0', waterLabel: '#1A5FB4', parkLabel: '#1F7A32',
+  path: '#66BC9C', ferry: '#1E7FE0', waterLabel: '#1A5FB4', parkLabel: '#1F7A32',
 };
 const VIBRANT_DARK: MapPalette = {
   ...DARK,
@@ -191,7 +191,7 @@ const WARM_LIGHT: MapPalette = {
   land: '#F5EFE3', manMade: '#EDE5D6', park: '#CFE0B0', grass: '#DCE8C2', hospital: '#F4D9CF', school: '#EFE3CC',
   water: '#A9CDE0', aeroArea: '#E6E1D6', building: '#E1D6C3', buildingOutline: '#CBBCA6',
   casing: '#D4C9B6', minor: '#FFFDF8', arterial: '#FFFBF2', arterialCasing: '#C9BBA4', highway: '#EBDDC4', highwayCasing: '#C4AE8A', motorway: '#E8D6B6', motorwayCasing: '#BFA37A',
-  path: '#B3C69E', rail: '#B8AA94', ferry: '#5E8FB5', boundary: '#B8A991',
+  path: '#9AB282', rail: '#B8AA94', ferry: '#5E8FB5', boundary: '#B8A991',
   label: '#6B5E4E', labelHalo: '#FFFBF2', placeLabel: '#4A3F33', neighborhoodLabel: '#8A7C6A', roadLabel: '#6B5E4E', waterLabel: '#3E6F8F', parkLabel: '#4E7A3A',
   stationLabel: '#4D4438',
 };
