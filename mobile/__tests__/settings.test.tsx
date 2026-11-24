@@ -482,11 +482,11 @@ describe('Settings', () => {
       openURL.mockRestore();
     });
 
-    it('credits OpenStreetMap for footpaths, transit ways, and walking routes, in About and on the map', async () => {
+    it('credits OpenStreetMap for footpaths, lakes, transit ways, and walking routes, in About and on the map', async () => {
       const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
       const screen = renderSettings();
       await openPage(screen, 'about');
-      expect(screen.getByText('Footpaths, transit ways, and walking routes © OpenStreetMap contributors')).toBeTruthy();
+      expect(screen.getByText('Footpaths, lakes, transit ways, and walking routes © OpenStreetMap contributors')).toBeTruthy();
       await act(async () => {
         fireEvent.press(screen.getByTestId('about-credit-osm'));
       });

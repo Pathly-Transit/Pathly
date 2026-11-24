@@ -918,7 +918,7 @@ const TERMS: readonly string[] = [
  * somewhere in the app; the government sources are public domain and credited as their publishers ask.
  */
 const CREDITS: readonly { id: string; label: string; detail: string; url?: string }[] = [
-  { id: 'osm', label: 'Footpaths, transit ways, and walking routes © OpenStreetMap contributors', detail: 'Open Database License', url: 'https://www.openstreetmap.org/copyright' },
+  { id: 'osm', label: 'Footpaths, lakes, transit ways, and walking routes © OpenStreetMap contributors', detail: 'Open Database License', url: 'https://www.openstreetmap.org/copyright' },
   { id: 'census', label: 'Map data: U.S. Census Bureau', detail: 'TIGER/Line streets, walkways, water, parks, and places; population estimates', url: 'https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html' },
   { id: 'usgs', label: 'Place names: U.S. Geological Survey', detail: 'Geographic Names Information System', url: 'https://www.usgs.gov/us-board-on-geographic-names/domestic-names' },
   { id: 'usgs-trails', label: 'Trails: U.S. Geological Survey', detail: 'National Digital Trails', url: 'https://www.usgs.gov/national-digital-trails' },

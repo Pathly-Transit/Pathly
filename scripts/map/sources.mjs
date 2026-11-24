@@ -400,6 +400,63 @@ export function addWater(store, { pieces, named }, log) {
   return labels;
 }
 
+/**
+ * OpenStreetMap's lakes, ponds, and reservoirs that Census water leaves out (Staten Island's
+ * Silver Lake, say), read from <osmDir>/water1_*.json (osmpbf.mjs). One overlapping Census water
+ * is skipped: Census water is drawn there already. Their names join `labels` (addWater's), which is
+ * returned with how many were added (none without the files).
+ */
+export function addOsmWater(store, osmDir, { pieces }, labels, log) {
+  const files = existsSync(osmDir) ? readdirSync(osmDir).filter((name) => name.startsWith('water1_') && name.endsWith('.json')) : [];
+  if (files.length === 0) return { labels, added: 0 };
+  // Census water's outer rings, bucketed on a 0.05° grid for the overlap test.
+  const CELL = 0.05;
+  const grid = new Map();
+  const cellKey = (x, y) => `${Math.floor(x / CELL)},${Math.floor(y / CELL)}`;
+  const census = pieces.map((polygon) => ({ ring: polygon[0], box: ringBounds(polygon[0]) }));
+  census.forEach((piece, index) => {
+    const { west, south, east, north } = piece.box;
+    for (let x = Math.floor(west / CELL); x <= Math.floor(east / CELL); x += 1) {
+      for (let y = Math.floor(south / CELL); y <= Math.floor(north / CELL); y += 1) {
+        const key = `${x},${y}`;
+        if (!grid.has(key)) grid.set(key, []);
+        grid.get(key).push(index);
+      }
+    }
+  });
+  const inCensus = (x, y) => (grid.get(cellKey(x, y)) ?? []).some((index) => insideBox(census[index].box, x, y) && pointInRing(census[index].ring, x, y));
+  const seen = new Set();
+  const named = [];
+  let added = 0;
+  for (const file of files.sort()) {
+    for (const [id, name, rings] of JSON.parse(readFileSync(join(osmDir, file), 'utf8')).water) {
+      if (seen.has(id)) continue; // A lake on a state line is in both states' extracts.
+      seen.add(id);
+      const polygon = rings.map((ring, i) => orient(dropClosing(ring), i === 0)).filter((ring) => ring.length >= 6);
+      if (polygon.length === 0 || ringAreaMeters(polygon[0]) < 200) continue;
+      const outer = polygon[0];
+      const [x, y] = labelPoint(polygon);
+      if (inCensus(x, y) || inCensus(outer[0], outer[1])) continue;
+      const box = ringBounds(outer);
+      // Census water inside this one (a reservoir Census drew smaller): skipped too, as overlapping.
+      const cells = grid.get(cellKey(x, y)) ?? [];
+      if (cells.some((index) => boxContainsBox(box, census[index].box) && pointInRing(outer, census[index].ring[0], census[index].ring[1]))) continue;
+      for (const clipped of clipPolygons([polygon], DETAIL)) {
+        const minzoom = Math.max(DETAILED_SURFACES_ZOOM, zoomForArea(polygonsArea([clipped]), 2));
+        if (addPolygons(store, 'water', minzoom, {}, [clipped]) >= 0) added += 1;
+      }
+      if (name && insideBox(DETAIL, x, y)) named.push({ layer: 'water_name', name, spec: WATER_LABELS.H2030, polygons: [polygon], box, area: polygonsArea([polygon]) });
+    }
+  }
+  const fresh = named.filter((item) => {
+    const [x, y] = labelPoint(item.polygons[0]);
+    return !labels.some((label) => label.key === nameKey(item.name) && distanceKm(label.x, label.y, x, y) < 3);
+  });
+  const placed = addClusteredLabels(store, fresh, 3);
+  log(`  OpenStreetMap water: ${added} lakes and ponds Census water leaves out, ${placed.length} names`);
+  return { labels: [...labels, ...placed], added };
+}
+
 /** Rivers, streams, and canals as lines (big rivers are also water surfaces). */
 export function addWaterways(store, countyDir, log) {
   let count = 0;

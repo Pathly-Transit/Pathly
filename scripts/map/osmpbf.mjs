@@ -1,4 +1,4 @@
-// OpenStreetMap's footpaths, sports fields, transit roads, and platforms, read from Geofabrik's state
+// OpenStreetMap's footpaths, sports fields, transit roads, platforms, and lakes and ponds, read from Geofabrik's state
 // extracts (<data-dir>/osm-pbf/*.osm.pbf, which `npm run map:download` fetches) rather than asked of
 // the Overpass API square by square: the same ways, picked by the same rules as osm.mjs's and
 // transitways.mjs's queries, written in the same form those modules read (one file per state in
@@ -162,10 +162,146 @@ async function extractState(file, osmDir, log) {
   log(`  ${state}: ${paths.length} footpaths, ${fields.length} fields, ${roads.length} transit roads, ${platforms.length} platforms`);
 }
 
+/** The file prefix osm water is written under (water1_pbf_<state>.json), which sources.mjs's addOsmWater reads. */
+export const WATER_PREFIX = 'water1_pbf_';
+
+/** A lake, pond, reservoir, or basin drawn as water (not one under a roof or underground). */
+function isWaterArea(tags) {
+  if (tags.covered === 'yes' || (tags.tunnel && tags.tunnel !== 'no') || tags.location === 'underground') return false;
+  if (tags.natural === 'water') return true;
+  return tags.landuse === 'reservoir' || tags.landuse === 'basin';
+}
+
+const WATER_TAGS = ['natural', 'landuse', 'water', 'name', 'covered', 'tunnel', 'location', 'type'];
+
+/** Closed rings from ways' node lists, joined end to end (a ring left open is dropped). */
+function joinRings(nodeLists) {
+  const rings = [];
+  const open = nodeLists.filter((list) => list.length >= 2).map((list) => [...list]);
+  while (open.length > 0) {
+    let ring = open.pop();
+    let grew = true;
+    while (ring[0] !== ring[ring.length - 1] && grew) {
+      grew = false;
+      const end = ring[ring.length - 1];
+      for (let i = 0; i < open.length; i += 1) {
+        const other = open[i];
+        if (other[0] === end) ring = ring.concat(other.slice(1));
+        else if (other[other.length - 1] === end) ring = ring.concat([...other].reverse().slice(1));
+        else continue;
+        open.splice(i, 1);
+        grew = true;
+        break;
+      }
+    }
+    if (ring.length >= 4 && ring[0] === ring[ring.length - 1]) rings.push(ring);
+  }
+  return rings;
+}
+
+/**
+ * One extract's water areas (closed ways and multipolygon relations), written as
+ * <osmDir>/water1_pbf_<state>.json: { water: [[id, name, [outer, ...holes]]] }, each ring a flat
+ * [lon, lat, ...] list. One reaching outside the detailed area (a big river, mostly, which Census
+ * water already draws) is left out.
+ */
+async function extractStateWater(file, osmDir, log) {
+  const { OSMTransform } = await import('osm-pbf-parser-node');
+  const blocks = (options) => createReadStream(file).pipe(new OSMTransform(options));
+  const state = basename(file).replace(/-latest\.osm\.pbf$/, '');
+  // Pass 1: the water relations and the ways they're made of.
+  const relations = [];
+  const memberWays = new Set();
+  for await (const block of blocks({ withTags: { node: false, way: false, relation: WATER_TAGS }, withInfo: false })) {
+    for (const item of block) {
+      if (item.type !== 'relation' || !item.tags || item.tags.type !== 'multipolygon' || !isWaterArea(item.tags)) continue;
+      const outer = [];
+      const inner = [];
+      for (const member of item.members) {
+        if (member.type !== 'way') continue;
+        (member.role === 'inner' ? inner : outer).push(member.ref);
+        memberWays.add(member.ref);
+      }
+      if (outer.length > 0) relations.push({ id: `r${item.id}`, name: item.tags.name ?? '', outer, inner });
+    }
+  }
+  // Pass 2: the closed water ways, and the relations' member ways.
+  const ways = [];
+  const wayNodes = new Map();
+  const refs = new Float64List();
+  for await (const block of blocks({ withTags: { way: WATER_TAGS, node: false, relation: false }, withInfo: false })) {
+    for (const item of block) {
+      if (item.type !== 'way') continue;
+      const own = item.tags && isWaterArea(item.tags) && item.refs.length >= 4 && item.refs[0] === item.refs[item.refs.length - 1];
+      if (!own && !memberWays.has(item.id)) continue;
+      if (own) ways.push({ id: item.id, name: item.tags.name ?? '', refs: item.refs });
+      if (memberWays.has(item.id)) wayNodes.set(item.id, item.refs);
+      for (const ref of item.refs) refs.push(ref);
+    }
+  }
+  const needed = Float64Array.from(refs.view()).sort();
+  let distinct = 0;
+  for (let i = 0; i < needed.length; i += 1) if (i === 0 || needed[i] !== needed[i - 1]) needed[distinct++] = needed[i];
+  const ids = needed.subarray(0, distinct);
+  const lon = new Float64Array(ids.length).fill(Number.NaN);
+  const lat = new Float64Array(ids.length).fill(Number.NaN);
+  const indexOf = (id) => {
+    let low = 0;
+    let high = ids.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (ids[mid] === id) return mid;
+      if (ids[mid] < id) low = mid + 1;
+      else high = mid - 1;
+    }
+    return -1;
+  };
+  // Pass 3: those nodes' positions, in and just around the detailed area.
+  const [west, south, east, north] = [DETAIL.west - MARGIN, DETAIL.south - MARGIN, DETAIL.east + MARGIN, DETAIL.north + MARGIN];
+  reading: for await (const block of blocks({ withTags: false, withInfo: false })) {
+    for (const item of block) {
+      if (item.type === 'way') break reading;
+      if (item.type !== 'node' || item.lon < west || item.lon > east || item.lat < south || item.lat > north) continue;
+      const index = indexOf(item.id);
+      if (index >= 0) {
+        lon[index] = round(item.lon);
+        lat[index] = round(item.lat);
+      }
+    }
+  }
+  // A ring's coordinates, or null when one of its nodes is outside the area.
+  const coordsOf = (nodeList) => {
+    const ring = [];
+    for (const id of nodeList) {
+      const index = indexOf(id);
+      if (index < 0 || Number.isNaN(lon[index])) return null;
+      ring.push(lon[index], lat[index]);
+    }
+    return ring;
+  };
+  const water = [];
+  for (const way of ways) {
+    const ring = coordsOf(way.refs);
+    if (ring) water.push([way.id, way.name, [ring]]);
+  }
+  for (const relation of relations) {
+    const list = (members) => members.map((id) => wayNodes.get(id)).filter(Boolean);
+    const outers = joinRings(list(relation.outer)).map(coordsOf);
+    const inners = joinRings(list(relation.inner)).map(coordsOf);
+    if (outers.length === 0 || outers.some((ring) => !ring) || inners.some((ring) => !ring)) continue;
+    // Each outer ring a polygon; holes go with the first (rarely more than one outer in a lake).
+    outers.forEach((ring, i) => water.push([`${relation.id}#${i}`, relation.name, i === 0 ? [ring, ...inners] : [ring]]));
+  }
+  const path = join(osmDir, `${WATER_PREFIX}${state}.json`);
+  writeFileSync(`${path}.partial`, JSON.stringify({ water }));
+  renameSync(`${path}.partial`, path);
+  log(`  ${state}: ${water.length} water areas`);
+}
+
 /**
  * Reads OpenStreetMap's footpaths, fields, transit roads, and platforms out of every extract in
- * <dir>/osm-pbf into <dir>/osm. A state already read from the same extract (its files newer than
- * the extract) is kept.
+ * <dir>/osm-pbf into <dir>/osm, and its lakes and ponds. A state already read from the same extract
+ * (its files newer than the extract) is kept.
  */
 export async function extractOsmFromPbf(dir, log = console.log) {
   const pbfDir = join(dir, 'osm-pbf');
@@ -181,7 +317,8 @@ export async function extractOsmFromPbf(dir, log = console.log) {
     const file = join(pbfDir, name);
     const state = name.replace(/-latest\.osm\.pbf$/, '');
     const out = join(osmDir, `${PATHS_PREFIX}${state}.json`);
-    if (existsSync(out) && statSync(out).mtimeMs > statSync(file).mtimeMs) continue;
-    await extractState(file, osmDir, log);
+    const fresh = (path) => existsSync(path) && statSync(path).mtimeMs > statSync(file).mtimeMs;
+    if (!fresh(out)) await extractState(file, osmDir, log);
+    if (!fresh(join(osmDir, `${WATER_PREFIX}${state}.json`))) await extractStateWater(file, osmDir, log);
   }
 }

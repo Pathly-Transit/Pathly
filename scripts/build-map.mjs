@@ -29,7 +29,7 @@ import { NYC_PATH_FILES, addPublicPaths, downloadCitySidewalks, downloadUsgsTrai
 import { LAYERS } from './map/schema.mjs';
 import { readShapefileZip } from './map/shapefile.mjs';
 import { addStructures, downloadStructures } from './map/structures.mjs';
-import { TRANSIT_FEEDS, addBuildings, addGnisWaterNames, addLandAndStates, addLandmarks, addOverview, addPlaces, addRail, addRoads, addTransit, addWater, addWaterways, readWater } from './map/sources.mjs';
+import { TRANSIT_FEEDS, addBuildings, addGnisWaterNames, addLandAndStates, addLandmarks, addOsmWater, addOverview, addPlaces, addRail, addRoads, addTransit, addWater, addWaterways, readWater } from './map/sources.mjs';
 import { FeatureStore, POLYGON } from './map/store.mjs';
 import { writeTiles } from './map/tiler.mjs';
 import { addOsmTransitways, hasOsmTransitways } from './map/transitways.mjs';
@@ -147,7 +147,9 @@ async function build(dir, tilesOnly) {
     log('Reading sources...');
     const water = readWater(join(dir, 'county'));
     addLandAndStates(store, join(dir, 'tiger'), water, log);
-    const waterNames = addWater(store, water, log);
+    // OpenStreetMap's lakes and ponds where Census water has none (Staten Island's Silver Lake, say).
+    const osmWater = addOsmWater(store, join(dir, 'osm'), water, addWater(store, water, log), log);
+    const waterNames = osmWater.labels;
     addWaterways(store, join(dir, 'county'), log);
     const landmarkNames = addLandmarks(store, join(dir, 'tiger'), log);
     const gnis = addPlaces(store, join(dir, 'tiger'), join(dir, 'gnis'), log);
@@ -160,7 +162,7 @@ async function build(dir, tilesOnly) {
     addOsmPaths(store, join(dir, 'osm'), log);
     addOsmTransitways(store, join(dir, 'osm'), log);
     await addPublicPaths(store, dir, log, { osmPaths, osmPlatforms: osmTransitways });
-    credits = osmPaths || osmTransitways ? [OSM_CREDIT] : [];
+    credits = osmPaths || osmTransitways || osmWater.added > 0 ? [OSM_CREDIT] : [];
     addRail(store, join(dir, 'tiger'), log);
     addTransit(store, join(dir, 'gtfs'), log);
     // After the places, parks, and stations, so a landmark they already name isn't named twice.
