@@ -423,3 +423,15 @@ it('bounds a slow status read and shares its still-pending request on a later wa
   expect((await readTripAlertState())?.liveStatus).toBeUndefined();
   expect(majorPosts()).toHaveLength(0);
 });
+
+it('tracks an Android trip through its foreground service without asking for background location', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+  try {
+    (Location.getBackgroundPermissionsAsync as jest.Mock).mockResolvedValue({ granted: false, canAskAgain: true });
+    expect(await syncBackgroundTripAlerts(runtime(), true)).toBe('active');
+    expect(Location.requestBackgroundPermissionsAsync).not.toHaveBeenCalled();
+    expect(Location.startLocationUpdatesAsync).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ foregroundService: expect.any(Object) }));
+  } finally {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+  }
+});

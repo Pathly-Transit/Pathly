@@ -51,7 +51,8 @@ if (action === 'submit' && !args.includes('--help') && !args.includes('-h')) {
   }
 }
 const child = spawn('npx', ['--yes', 'eas-cli@27.9.0', action, '--platform', 'ios', '--profile', 'production', ...args], {
-  cwd: mobile, env, stdio: 'inherit',
+  // npx is a .cmd script on Windows, which only a shell can start.
+  cwd: mobile, env, stdio: 'inherit', shell: process.platform === 'win32',
 });
 child.on('error', () => {
   console.error('Unable to start EAS CLI. Check Node/npm and network access.');

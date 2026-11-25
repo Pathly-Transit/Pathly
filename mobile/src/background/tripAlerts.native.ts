@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
-import { Alert, AppState, Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { guidanceForNavigation, type ActiveTripRuntime, type NavigationFix } from '../data/enrouteNavigation';
 import { readNavigationDocument } from '../data/navigationStorage';
@@ -74,21 +74,22 @@ export function stopBackgroundTripAlerts(owner?: TripAlertOwner): Promise<void> 
     await dismissProgress(owner ?? saved ?? undefined);
   }).catch(() => undefined);
 }
+/** Whether the trip's tracking may go on: location while using the app on Android (a foreground service), always on iOS. */
+async function trackingAllowed(): Promise<boolean> {
+  return Platform.OS === 'android' ? (await Location.getForegroundPermissionsAsync()).granted : (await Location.getBackgroundPermissionsAsync()).granted;
+}
 async function access(owner: TripAlertOwner, request: boolean, version: number): Promise<BackgroundTripSyncStatus> {
   if (!await TaskManager.isAvailableAsync()) return 'unavailable';
   if (AppState.currentState !== 'active') return 'waiting-permission';
   if (!(await Notifications.getPermissionsAsync()).granted || !(await Location.getForegroundPermissionsAsync()).granted) return 'waiting-permission';
+  // Android: the trip's tracking runs as a foreground service (its "Pathly trip alerts" notification),
+  // started while Pathly is open, which keeps location while the phone is locked with the
+  // while-using permission alone. The app asks for no background location there (app.config.js).
+  if (Platform.OS === 'android') return 'active';
   const permission = await Location.getBackgroundPermissionsAsync();
   if (permission.granted) return 'active';
   if (!permission.canAskAgain) return 'background-denied';
   if (!request) return 'waiting-permission';
-  if (Platform.OS === 'android') {
-    const proceed = await new Promise<boolean>((resolve) => Alert.alert('Trip alerts while your phone is locked',
-      'Allow location all the time on the next screen so Pathly can update your trip alerts while you use another app. Location tracking stops when you end the trip or turn trip notifications off.',
-      [{ text: 'Not now', style: 'cancel', onPress: () => resolve(false) }, { text: 'Continue', onPress: () => resolve(true) }],
-      { cancelable: true, onDismiss: () => resolve(false) }));
-    if (!proceed) return 'background-denied';
-  }
   if (version !== configuration || AppState.currentState !== 'active' || !await runtimeCurrent(owner)) return 'unavailable';
   return (await Location.requestBackgroundPermissionsAsync()).granted ? 'active' : 'background-denied';
 }
@@ -179,7 +180,7 @@ if (!TaskManager.isTaskDefined(BACKGROUND_TRIP_TASK)) {
       try {
         const state = await readTripAlertState();
         if (version !== configuration || (scheduledOwner && state && !sameTripAlertOwner(scheduledOwner, state))) return;
-        if (error || !state || !await isCurrent(state) || !(await Location.getBackgroundPermissionsAsync()).granted
+        if (error || !state || !await isCurrent(state) || !await trackingAllowed()
           || !(await Notifications.getPermissionsAsync()).granted) {
           // Stop while still in the queue, before a replacement session can start its service.
           await AsyncStorage.removeItem(TRIP_ALERT_STATE_KEY);
