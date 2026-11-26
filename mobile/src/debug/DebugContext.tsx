@@ -17,10 +17,11 @@ export type RideAlong = { source: LiveSource; tripId: string; label: string };
 export type TimestampedMockLocation = MockLocation & { capturedAt: number };
 export type { MockTime };
 export { appNow } from './clock';
-export type DebugOverlays = { ids: boolean; tapCoords: boolean };
+/** `hideBanners` keeps the overrides on but hides the map's mock banners, for clean screenshots. */
+export type DebugOverlays = { ids: boolean; tapCoords: boolean; hideBanners: boolean };
 export type DebugState = { mockLocation?: TimestampedMockLocation; mockTime?: MockTime; overlays: DebugOverlays };
 
-const EMPTY_STATE: DebugState = { overlays: { ids: false, tapCoords: false } };
+const EMPTY_STATE: DebugState = { overlays: { ids: false, tapCoords: false, hideBanners: false } };
 
 type DebugValue = DebugState & {
   isAdmin: boolean;
@@ -51,7 +52,7 @@ function parseState(raw: string | null): DebugState {
         ? { mockLocation: { ...location, capturedAt: typeof location.capturedAt === 'number' ? location.capturedAt : Date.now() } }
         : {}),
       ...(time && typeof time.at === 'number' && typeof time.setAtRealMs === 'number' ? { mockTime: time } : {}),
-      overlays: { ids: value.overlays?.ids === true, tapCoords: value.overlays?.tapCoords === true },
+      overlays: { ids: value.overlays?.ids === true, tapCoords: value.overlays?.tapCoords === true, hideBanners: value.overlays?.hideBanners === true },
     };
   } catch {
     return EMPTY_STATE;

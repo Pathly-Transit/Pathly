@@ -390,6 +390,42 @@ function transitLayers(palette: MapPalette, isDark: boolean, halo: Record<string
   ];
 }
 
+/**
+ * Named places close up, the way Google's map names them once a street fills the screen:
+ * buildings, schools, hotels, and civic places from zoom 16, restaurants and shops (`lz` 17) a
+ * step closer. Drawn first among the labels, so streets, stations, and landmarks win a crowded spot.
+ */
+function venueLayers(palette: MapPalette, isDark: boolean, halo: Record<string, unknown>): LayerSpecification[] {
+  const color: ExpressionSpecification = ['match', ['get', 'kind'],
+    'food', isDark ? '#F6AE66' : '#B5520B',
+    'shop', isDark ? '#8AB4F8' : '#3C6BC4',
+    'lodging', isDark ? '#F49AC8' : '#A8327A',
+    'health', isDark ? '#F28B82' : '#C5221F',
+    'leisure', isDark ? '#78D9EC' : '#0F7C8C',
+    palette.label];
+  const layer = (id: string, minzoom: number, filter: ExpressionSpecification): LayerSpecification => ({
+    id,
+    type: 'symbol',
+    source: SOURCE,
+    'source-layer': 'venue',
+    minzoom,
+    filter,
+    layout: {
+      'text-field': NAME,
+      'text-font': SEMIBOLD,
+      'text-size': ['interpolate', ['linear'], ['zoom'], 16, 10.5, 19, 12.5],
+      'text-max-width': 8,
+      'text-padding': 4,
+      'symbol-sort-key': ['get', 'rank'],
+    },
+    paint: { 'text-color': color, ...halo },
+  });
+  return [
+    layer('venue-label', 16, ['!', ['has', 'lz']]),
+    layer('venue-label-17', 17, ['==', ['get', 'lz'], 17]),
+  ];
+}
+
 function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] {
   const halo = { 'text-halo-color': palette.labelHalo, 'text-halo-width': 1.5 };
   return [
@@ -518,6 +554,7 @@ function baseLayers(palette: MapPalette, isDark: boolean): LayerSpecification[] 
       'source-layer': 'boundary',
       paint: { 'line-color': palette.boundary, 'line-width': width(4, 0.6, 12, 1.6), 'line-dasharray': [3, 2] },
     },
+    ...venueLayers(palette, isDark, halo),
     {
       id: 'waterway-label',
       type: 'symbol',

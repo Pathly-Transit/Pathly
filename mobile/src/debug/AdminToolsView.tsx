@@ -54,6 +54,10 @@ function liveLine(live: AgencyStatus['live']): string {
   return live.ok ? `Live feed OK, ${live.ms} ms` : `Live feed failing${live.status ? ` (${live.status})` : ''}`;
 }
 
+const hasProblem = (agency: AgencyStatus) => agency.snapshot.state !== 'published' || (agency.live.configured && agency.live.ok === false);
+
+const slug = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-$/, '');
+
 function RequestRow({ entry }: { entry: RequestLogEntry }) {
   const styles = useThemedStyles(createStyles);
   const [open, setOpen] = useState(false);
@@ -78,17 +82,35 @@ function RequestRow({ entry }: { entry: RequestLogEntry }) {
   );
 }
 
+/** A tappable preset (a place, a time) or a small action like Turn off. */
+function Chip({ label, onPress, selected = false, testID, tone = 'normal' }: { label: string; onPress: () => void; selected?: boolean; testID: string; tone?: 'normal' | 'off' }) {
+  const styles = useThemedStyles(createStyles);
+  return (
+    <PressableScale accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress} style={[styles.chip, selected && styles.chipSelected, tone === 'off' && styles.chipOff]} testID={testID}>
+      <Text numberOfLines={1} style={[styles.chipText, selected && styles.chipTextSelected, tone === 'off' && styles.chipTextOff]}>{label}</Text>
+    </PressableScale>
+  );
+}
+
 /** The app's small popups, shown on demand to check how they look. */
 export type PopupPreview = 'support' | 'holiday' | 'arrival' | 'onboarding';
 
+type AdminTab = 'testing' | 'display' | 'backend';
+const TABS: readonly { id: AdminTab; label: string }[] = [
+  { id: 'testing', label: 'Location & time' },
+  { id: 'display', label: 'Display' },
+  { id: 'backend', label: 'Backend' },
+];
+
 type AdminToolsViewProps = { onBack: () => void; onPickMockLocation: () => void; onPreviewPopup: (popup: PopupPreview) => void };
 
-/** The admin's testing and diagnostics screen (Profile → Admin tools). */
+/** The admin's testing and diagnostics screen (Profile → Admin tools), in three tabs. */
 export function AdminToolsView({ onBack, onPickMockLocation, onPreviewPopup }: AdminToolsViewProps) {
   const profile = useThemedStyles(createProfileStyles);
   const styles = useThemedStyles(createStyles);
   const { colors } = useTheme();
   const debug = useDebug();
+  const [tab, setTab] = useState<AdminTab>('testing');
   const [feedback, setFeedback] = useState('');
   const [status, setStatus] = useState<{ state: 'loading' } | { state: 'loaded'; data: BackendStatus } | { state: 'error'; message: string }>({ state: 'loading' });
   // Preset times are computed from when the screen opened.
@@ -126,107 +148,166 @@ export function AdminToolsView({ onBack, onPickMockLocation, onPreviewPopup }: A
     setFeedback(`Mock time set to ${clock.format(at)}`);
   };
 
+  const problems = status.state === 'loaded' ? status.data.agencies.filter(hasProblem).length : 0;
+  const statusLabel = status.state === 'loading'
+    ? 'Checking the backend…'
+    : status.state === 'error'
+      ? "Couldn't load backend status"
+      : problems === 0 ? `All ${status.data.agencies.length} agencies OK` : `${problems} of ${status.data.agencies.length} agencies need a look`;
+  const statusDetail = status.state === 'loaded' ? `Checked ${clock.format(Date.parse(status.data.checkedAt))}. Tap to check again` : status.state === 'error' ? `${status.message}. Tap to try again` : undefined;
+
   return (
     <View style={profile.viewport}>
       <SafeAreaView edges={['top', 'bottom']} style={profile.screen} testID="admin-tools">
         <ThemedStatusBar />
         <Header onBack={onBack} testID="admin-tools-back" title="Admin tools" />
+        <View accessibilityRole="tablist" style={styles.tabs}>
+          {TABS.map((item) => (
+            <PressableScale
+              accessibilityRole="tab"
+              accessibilityState={{ selected: tab === item.id }}
+              key={item.id}
+              onPress={() => {
+                setTab(item.id);
+                setFeedback('');
+              }}
+              style={[styles.tab, tab === item.id && styles.tabSelected]}
+              testID={`admin-tab-${item.id}`}
+            >
+              <Text numberOfLines={1} style={[styles.tabText, tab === item.id && styles.tabTextSelected]}>{item.label}</Text>
+            </PressableScale>
+          ))}
+        </View>
+        {feedback ? (
+          <PressableScale accessibilityHint="Dismisses the message" accessibilityRole="button" onPress={() => setFeedback('')} style={styles.feedbackPill}>
+            <Text accessibilityLiveRegion="polite" numberOfLines={2} style={styles.feedback} testID="admin-feedback">{feedback}</Text>
+          </PressableScale>
+        ) : null}
         <ScrollView contentContainerStyle={profile.pageContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-          <Text style={profile.intro}>Testing tools for this admin account only. Overrides stay on this device until turned off.</Text>
-
-          <Text style={profile.sectionLabel}>Mock location</Text>
-          <Card>
-            <SettingRow detail={debug.mockLocation ? `${debug.mockLocation.latitude.toFixed(5)}, ${debug.mockLocation.longitude.toFixed(5)}` : 'Using the real location. Long-press the home map to pick a spot.'} label={debug.mockLocation ? debug.mockLocation.label : 'Off'} testID="admin-mock-location-current" />
-            {MOCK_LOCATION_PRESETS.map((preset) => (
-              <SettingRow
-                key={preset.label}
-                label={preset.label}
-                onPress={() => {
-                  debug.setMockLocation(preset);
-                  setFeedback(`Mock location set to ${preset.label}`);
-                }}
-                testID={`admin-mock-location-${preset.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
-              />
-            ))}
-            <SettingRow detail="Any place from search" label="Search a place" onPress={onPickMockLocation} testID="admin-mock-location-search" />
-            <SettingRow detail={debug.rideAlong ? 'Following a live vehicle, as a rider other riders can see. Keep its line open to share the ride.' : 'To test ride sharing: open a line, tap a live vehicle, then Ride along.'} label="Ride Along" testID="admin-ride-along" />
-            {debug.mockLocation ? <SettingRow label="Turn off mock location" onPress={() => debug.setMockLocation(undefined)} testID="admin-mock-location-off" /> : null}
-          </Card>
-
-          <Text style={profile.sectionLabel}>Mock time</Text>
-          <Card>
-            <SettingRow detail={debug.mockTime ? 'Trip planning and times follow this clock. Live predictions stay real-time.' : 'Using the real time.'} label={debug.mockTime ? clock.format(appNow()) : 'Off'} testID="admin-mock-time-current" />
-            {mockTimePresets(openedAt).map((preset) => (
-              <SettingRow
-                key={preset.label}
-                detail={clock.format(preset.at)}
-                label={preset.label}
-                onPress={() => {
-                  debug.setMockTime(preset.at);
-                  setFeedback(`Mock time set to ${clock.format(preset.at)}`);
-                }}
-                testID={`admin-mock-time-${preset.label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-$/, '')}`}
-              />
-            ))}
-            <View style={styles.customTime}>
-              <TextInput accessibilityLabel="Mock date, year-month-day" autoCapitalize="none" onChangeText={setCustomDate} placeholder="2026-10-15" placeholderTextColor={colors.mutedInk} style={styles.input} testID="admin-mock-date" value={customDate} />
-              <TextInput accessibilityLabel="Mock time, 24-hour" autoCapitalize="none" onChangeText={setCustomTime} placeholder="23:30" placeholderTextColor={colors.mutedInk} style={styles.input} testID="admin-mock-clock" value={customTime} />
-              <PressableScale accessibilityRole="button" onPress={setCustom} style={styles.smallButton} testID="admin-mock-time-set"><Text style={styles.smallButtonText}>Set</Text></PressableScale>
-            </View>
-            {debug.mockTime ? <SettingRow label="Turn off mock time" onPress={() => debug.setMockTime(undefined)} testID="admin-mock-time-off" /> : null}
-          </Card>
-
-          <Text style={profile.sectionLabel}>Backend status</Text>
-          <Card>
-            {status.state === 'loading' ? <SettingRow label="Checking the backend…" /> : null}
-            {status.state === 'error' ? <SettingRow detail={status.message} label="Couldn't load backend status" onPress={loadStatus} testID="admin-status-retry" /> : null}
-            {status.state === 'loaded' ? status.data.agencies.map((agency) => (
-              <View key={agency.agencyId} style={profile.settingRow} testID={`admin-status-${agency.agencyId}`}>
-                <View style={profile.rowCopy}>
-                  <Text style={profile.settingText}>{agency.displayName}</Text>
-                  <Text style={profile.settingDetail}>{snapshotLine(agency)}</Text>
-                  <Text style={profile.settingDetail}>{agency.lastRefresh ? `Last refresh ${agency.lastRefresh.ok ? agency.lastRefresh.result ?? 'OK' : `failed: ${agency.lastRefresh.message ?? ''}`}, ${clock.format(Date.parse(agency.lastRefresh.at))}` : 'No refresh recorded'}</Text>
-                  <Text style={[profile.settingDetail, agency.live.configured && agency.live.ok === false ? styles.bad : null]}>{liveLine(agency.live)}</Text>
+          {tab === 'testing' ? (
+            <>
+              <Text style={profile.sectionLabel}>Mock location</Text>
+              <Card>
+                <View style={styles.block}>
+                  <View style={styles.currentRow} testID="admin-mock-location-current">
+                    <View style={profile.rowCopy}>
+                      <Text numberOfLines={1} style={profile.settingText}>{debug.mockLocation ? debug.mockLocation.label : 'Off'}</Text>
+                      <Text style={profile.settingDetail}>{debug.mockLocation ? `${debug.mockLocation.latitude.toFixed(5)}, ${debug.mockLocation.longitude.toFixed(5)}` : 'Using the real location. Long-press the home map to pick a spot.'}</Text>
+                    </View>
+                    {debug.mockLocation ? <Chip label="Turn off" onPress={() => { debug.setMockLocation(undefined); setFeedback('Using the real location'); }} testID="admin-mock-location-off" tone="off" /> : null}
+                  </View>
+                  <View style={styles.chips}>
+                    {MOCK_LOCATION_PRESETS.map((preset) => (
+                      <Chip
+                        key={preset.label}
+                        label={preset.label}
+                        onPress={() => {
+                          debug.setMockLocation(preset);
+                          setFeedback(`Mock location set to ${preset.label}`);
+                        }}
+                        selected={debug.mockLocation?.label === preset.label}
+                        testID={`admin-mock-location-${slug(preset.label)}`}
+                      />
+                    ))}
+                  </View>
                 </View>
-              </View>
-            )) : null}
-            {status.state === 'loaded' ? <SettingRow detail={`Checked ${clock.format(Date.parse(status.data.checkedAt))}`} label="Check again" onPress={loadStatus} testID="admin-status-refresh" /> : null}
-          </Card>
+                <SettingRow detail="Any place from search" label="Search a place" onPress={onPickMockLocation} testID="admin-mock-location-search" />
+                <SettingRow detail={debug.rideAlong ? 'Following a live vehicle, as a rider other riders can see. Keep its line open to share the ride.' : 'To test ride sharing: open a line, tap a live vehicle, then Ride along.'} label="Ride Along" testID="admin-ride-along" />
+              </Card>
 
-          <Text style={profile.sectionLabel}>Recent requests</Text>
-          <Card>
-            {requests.length === 0 ? <SettingRow detail="Backend calls made by this app appear here." label="No requests yet" /> : requests.map((entry) => <RequestRow entry={entry} key={entry.id} />)}
-          </Card>
+              <Text style={profile.sectionLabel}>Mock time</Text>
+              <Card>
+                <View style={styles.block}>
+                  <View style={styles.currentRow} testID="admin-mock-time-current">
+                    <View style={profile.rowCopy}>
+                      <Text style={profile.settingText}>{debug.mockTime ? clock.format(appNow()) : 'Off'}</Text>
+                      <Text style={profile.settingDetail}>{debug.mockTime ? 'Trip planning and times follow this clock. Live predictions stay real-time.' : 'Using the real time.'}</Text>
+                    </View>
+                    {debug.mockTime ? <Chip label="Turn off" onPress={() => { debug.setMockTime(undefined); setFeedback('Using the real time'); }} testID="admin-mock-time-off" tone="off" /> : null}
+                  </View>
+                  <View style={styles.chips}>
+                    {mockTimePresets(openedAt).map((preset) => (
+                      <Chip
+                        key={preset.label}
+                        label={preset.label}
+                        onPress={() => {
+                          debug.setMockTime(preset.at);
+                          setFeedback(`Mock time set to ${clock.format(preset.at)}`);
+                        }}
+                        testID={`admin-mock-time-${slug(preset.label)}`}
+                      />
+                    ))}
+                  </View>
+                  <View style={styles.customTime}>
+                    <TextInput accessibilityLabel="Mock date, year-month-day" autoCapitalize="none" onChangeText={setCustomDate} placeholder="2026-10-15" placeholderTextColor={colors.mutedInk} style={styles.input} testID="admin-mock-date" value={customDate} />
+                    <TextInput accessibilityLabel="Mock time, 24-hour" autoCapitalize="none" onChangeText={setCustomTime} placeholder="23:30" placeholderTextColor={colors.mutedInk} style={styles.input} testID="admin-mock-clock" value={customTime} />
+                    <PressableScale accessibilityRole="button" onPress={setCustom} style={styles.smallButton} testID="admin-mock-time-set"><Text style={styles.smallButtonText}>Set</Text></PressableScale>
+                  </View>
+                </View>
+              </Card>
 
-          <Text style={profile.sectionLabel}>Caches</Text>
-          <Card>
-            <SettingRow detail="Saved nearby list and live times" label="Clear device cache" onPress={() => { void clearDeviceCache(); }} testID="admin-clear-device-cache" />
-            <SettingRow detail="Plans remembered for two minutes" label="Clear trip-plan cache" onPress={() => { clearTripPlanCache(); setFeedback('Trip-plan cache cleared'); }} testID="admin-clear-trip-cache" />
-            <SettingRow detail="Asks for every route on screen again" label="Refresh live data now" onPress={() => { refreshLiveDataNow(); setFeedback('Live data refresh requested'); }} testID="admin-refresh-live" />
-          </Card>
+              <Text style={profile.sectionLabel}>Screenshots</Text>
+              <Card>
+                <ToggleRow detail="Mock location and time stay on, without their banners on the map" label="Hide mock banners" onChange={(value) => debug.setOverlay('hideBanners', value)} testID="admin-hide-banners" value={debug.overlays.hideBanners} />
+              </Card>
+            </>
+          ) : null}
 
-          <Text style={profile.sectionLabel}>Popups</Text>
-          <Card>
-            <SettingRow detail="Tip and quick survey, as Home asks now and then" label="Feedback and tips" onPress={() => onPreviewPopup('support')} testID="admin-popup-support" />
-            <SettingRow detail="The reminder before a holiday schedule" label="Holiday service" onPress={() => onPreviewPopup('holiday')} testID="admin-popup-holiday" />
-            <SettingRow detail="The tip ask after a trip ends" label="Glad you made it" onPress={() => onPreviewPopup('arrival')} testID="admin-popup-arrival" />
-            <SettingRow detail="A new account's first page" label="Onboarding" onPress={() => onPreviewPopup('onboarding')} testID="admin-popup-onboarding" />
-          </Card>
+          {tab === 'display' ? (
+            <>
+              <Text style={profile.sectionLabel}>Overlays</Text>
+              <Card>
+                <ToggleRow detail="On route and trip details" label="Show route, stop, and trip IDs" onChange={(value) => debug.setOverlay('ids', value)} testID="admin-overlay-ids" value={debug.overlays.ids} />
+                <ToggleRow detail="Tap the home map to see coordinates" label="Show map tap coordinates" onChange={(value) => debug.setOverlay('tapCoords', value)} testID="admin-overlay-tap-coords" value={debug.overlays.tapCoords} />
+              </Card>
 
-          <Text style={profile.sectionLabel}>Overlays</Text>
-          <Card>
-            <ToggleRow detail="On route and trip details" label="Show route, stop, and trip IDs" onChange={(value) => debug.setOverlay('ids', value)} testID="admin-overlay-ids" value={debug.overlays.ids} />
-            <ToggleRow detail="Tap the home map to see coordinates" label="Show map tap coordinates" onChange={(value) => debug.setOverlay('tapCoords', value)} testID="admin-overlay-tap-coords" value={debug.overlays.tapCoords} />
-          </Card>
+              <Text style={profile.sectionLabel}>Popups</Text>
+              <Card>
+                <SettingRow detail="Tip and quick survey, as Home asks now and then" label="Feedback and tips" onPress={() => onPreviewPopup('support')} testID="admin-popup-support" />
+                <SettingRow detail="The reminder before a holiday schedule" label="Holiday service" onPress={() => onPreviewPopup('holiday')} testID="admin-popup-holiday" />
+                <SettingRow detail="The tip ask after a trip ends" label="Glad you made it" onPress={() => onPreviewPopup('arrival')} testID="admin-popup-arrival" />
+                <SettingRow detail="A new account's first page" label="Onboarding" onPress={() => onPreviewPopup('onboarding')} testID="admin-popup-onboarding" />
+              </Card>
+            </>
+          ) : null}
 
-          <Text style={profile.sectionLabel}>Rate limits</Text>
-          <Card>
-            {status.state === 'loaded'
-              ? Object.entries(status.data.myRateLimits).map(([name, limit]) => <SettingRow detail={`${limit.remaining} of ${limit.perMinute} per minute left`} key={name} label={name} testID={`admin-rate-${name}`} />)
-              : <SettingRow label="Shown with backend status" />}
-          </Card>
+          {tab === 'backend' ? (
+            <>
+              <Text style={profile.sectionLabel}>Backend status</Text>
+              <Card>
+                <SettingRow detail={statusDetail} label={statusLabel} onPress={status.state === 'loading' ? undefined : loadStatus} testID={status.state === 'error' ? 'admin-status-retry' : 'admin-status-refresh'} />
+                {status.state === 'loaded' ? status.data.agencies.map((agency) => (
+                  <View key={agency.agencyId} style={profile.settingRow} testID={`admin-status-${agency.agencyId}`}>
+                    <View style={profile.rowCopy}>
+                      <Text style={profile.settingText}>{agency.displayName}</Text>
+                      <Text style={profile.settingDetail}>{snapshotLine(agency)}</Text>
+                      <Text style={profile.settingDetail}>{agency.lastRefresh ? `Last refresh ${agency.lastRefresh.ok ? agency.lastRefresh.result ?? 'OK' : `failed: ${agency.lastRefresh.message ?? ''}`}, ${clock.format(Date.parse(agency.lastRefresh.at))}` : 'No refresh recorded'}</Text>
+                      <Text style={[profile.settingDetail, agency.live.configured && agency.live.ok === false ? styles.bad : null]}>{liveLine(agency.live)}</Text>
+                    </View>
+                  </View>
+                )) : null}
+              </Card>
 
-          {feedback ? <Text accessibilityLiveRegion="polite" style={styles.feedback} testID="admin-feedback">{feedback}</Text> : null}
+              <Text style={profile.sectionLabel}>Rate limits</Text>
+              <Card>
+                {status.state === 'loaded'
+                  ? Object.entries(status.data.myRateLimits).map(([name, limit]) => <SettingRow detail={`${limit.remaining} of ${limit.perMinute} per minute left`} key={name} label={name} testID={`admin-rate-${name}`} />)
+                  : <SettingRow label="Shown with backend status" />}
+              </Card>
+
+              <Text style={profile.sectionLabel}>Caches</Text>
+              <Card>
+                <SettingRow detail="Saved nearby list and live times" label="Clear device cache" onPress={() => { void clearDeviceCache(); }} testID="admin-clear-device-cache" />
+                <SettingRow detail="Plans remembered for two minutes" label="Clear trip-plan cache" onPress={() => { clearTripPlanCache(); setFeedback('Trip-plan cache cleared'); }} testID="admin-clear-trip-cache" />
+                <SettingRow detail="Asks for every route on screen again" label="Refresh live data now" onPress={() => { refreshLiveDataNow(); setFeedback('Live data refresh requested'); }} testID="admin-refresh-live" />
+              </Card>
+
+              <Text style={profile.sectionLabel}>Recent requests</Text>
+              <Card>
+                {requests.length === 0 ? <SettingRow detail="Backend calls made by this app appear here." label="No requests yet" /> : requests.map((entry) => <RequestRow entry={entry} key={entry.id} />)}
+              </Card>
+            </>
+          ) : null}
         </ScrollView>
       </SafeAreaView>
     </View>
@@ -234,7 +315,23 @@ export function AdminToolsView({ onBack, onPickMockLocation, onPreviewPopup }: A
 }
 
 const createStyles = (colors: Palette) => StyleSheet.create({
-  customTime: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 15, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
+  tabs: { flexDirection: 'row', gap: 4, padding: 4, marginBottom: 4, borderWidth: 1, borderColor: colors.border, borderRadius: radii.pill, backgroundColor: colors.surface },
+  tab: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8, borderRadius: radii.pill },
+  tabSelected: { backgroundColor: colors.primary },
+  tabText: { color: colors.mutedInk, fontFamily: fontFamilies.bold, fontSize: 13 },
+  tabTextSelected: { color: colors.onPrimary, fontFamily: fontFamilies.extraBold },
+  feedbackPill: { marginTop: 8, paddingVertical: 8, paddingHorizontal: 14, borderRadius: radii.pill, backgroundColor: colors.blueSoft },
+  feedback: { color: colors.primary, ...typography.bodyStrong, fontSize: 14, textAlign: 'center' },
+  block: { gap: 12, paddingHorizontal: 15, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border },
+  currentRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { maxWidth: '100%', minHeight: 34, justifyContent: 'center', paddingHorizontal: 12, borderWidth: 1, borderColor: colors.border, borderRadius: radii.pill, backgroundColor: colors.background },
+  chipSelected: { borderColor: colors.primary, backgroundColor: colors.blueSoft },
+  chipOff: { borderColor: colors.red },
+  chipText: { color: colors.ink, fontFamily: fontFamilies.bold, fontSize: 13 },
+  chipTextSelected: { color: colors.primary, fontFamily: fontFamilies.extraBold },
+  chipTextOff: { color: colors.red },
+  customTime: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   input: { flex: 1, minHeight: 40, paddingHorizontal: 10, borderWidth: 1, borderColor: colors.border, borderRadius: radii.control, color: colors.ink, backgroundColor: colors.background, ...typography.body },
   smallButton: { alignSelf: 'flex-start', minHeight: 36, justifyContent: 'center', paddingHorizontal: 14, marginVertical: 6, borderRadius: radii.pill, backgroundColor: colors.primary },
   smallButtonText: { color: colors.onPrimary, fontFamily: fontFamilies.extraBold, fontSize: 13 },
@@ -246,5 +343,4 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   requestMs: { color: colors.mutedInk, ...typography.metadata },
   json: { marginTop: 6, padding: 10, borderRadius: radii.control, backgroundColor: colors.background, color: colors.ink, fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }), fontSize: 11 },
   bad: { color: colors.red },
-  feedback: { marginTop: 16, color: colors.primary, ...typography.bodyStrong, textAlign: 'center' },
 });

@@ -3,7 +3,8 @@
 // from government data (scripts/map/sources.mjs), OpenStreetMap's footpaths and sports fields
 // (scripts/map/osm.mjs) and bus roads and platforms (scripts/map/transitways.mjs), public trails and
 // plazas (scripts/map/publicpaths.mjs), FEMA's building outlines outside NYC
-// (scripts/map/structures.mjs), and Wikidata's landmarks (scripts/map/landmarks.mjs), cut by Pathly's
+// (scripts/map/structures.mjs), OpenStreetMap's shops, restaurants, and named buildings
+// (scripts/map/osmvenues.mjs), and Wikidata's landmarks (scripts/map/landmarks.mjs), cut by Pathly's
 // own tiler. OpenStreetMap's license asks for a credit on the map: metadata.json lists it (credits),
 // and build-site.mjs won't publish tiles whose credits the app's map doesn't show. The tiles go to
 // maptiles/tiles/{z}/{x}/{y}.pbf (gitignored), and `npm run build:site` publishes them at
@@ -26,6 +27,7 @@ import { addWikidataLandmarks, downloadWikidataLandmarks } from './map/landmarks
 import { addOsmPaths, hasOsmPaths } from './map/osm.mjs';
 import { extractOsmFromPbf } from './map/osmpbf.mjs';
 import { addOsmRoads, hasOsmRoads } from './map/osmroads.mjs';
+import { addOsmVenues } from './map/osmvenues.mjs';
 import { NYC_PATH_FILES, addPublicPaths, downloadCitySidewalks, downloadUsgsTrails } from './map/publicpaths.mjs';
 import { LAYERS } from './map/schema.mjs';
 import { readShapefileZip } from './map/shapefile.mjs';
@@ -167,11 +169,13 @@ async function build(dir, tilesOnly) {
     addOsmPaths(store, join(dir, 'osm'), log);
     addOsmTransitways(store, join(dir, 'osm'), log);
     await addPublicPaths(store, dir, log, { osmPaths, osmPlatforms: osmTransitways });
-    credits = osmRoads || osmPaths || osmTransitways || osmWater.added > 0 ? [OSM_CREDIT] : [];
     addRail(store, join(dir, 'tiger'), log);
     addTransit(store, join(dir, 'gtfs'), log);
     // After the places, parks, and stations, so a landmark they already name isn't named twice.
     addWikidataLandmarks(store, join(dir, 'wikidata'), log);
+    // Shops, restaurants, and named buildings, after the landmarks for the same reason.
+    const osmVenues = await addOsmVenues(store, join(dir, 'osm'), log);
+    credits = osmRoads || osmPaths || osmTransitways || osmVenues || osmWater.added > 0 ? [OSM_CREDIT] : [];
     await addBuildings(store, join(dir, 'nyc/buildings.csv'), log);
     addStructures(store, dir, log);
     addOverview(store, join(dir, 'ne'), log);

@@ -390,6 +390,117 @@ async function extractStateRoads(file, osmDir, log) {
   log(`  ${state}: ${count} streets`);
 }
 
+/** The file prefix named places are written under (venues1_pbf_<state>.ndjson), which osmvenues.mjs reads. */
+export const VENUES_PREFIX = 'venues1_pbf_';
+
+const VENUE_TAGS = ['name', 'amenity', 'shop', 'tourism', 'leisure', 'healthcare', 'building', 'office', 'disused:amenity', 'disused:shop'];
+
+const FOOD = new Set(['restaurant', 'cafe', 'fast_food', 'bar', 'pub', 'ice_cream', 'food_court', 'biergarten']);
+const HEALTH = new Set(['pharmacy', 'clinic', 'doctors', 'dentist', 'veterinary']);
+const CIVIC = new Set(['townhall', 'police', 'fire_station', 'post_office', 'library', 'courthouse', 'community_centre', 'place_of_worship', 'school', 'college', 'university', 'kindergarten']);
+const LEISURE_AMENITY = new Set(['cinema', 'theatre', 'arts_centre', 'nightclub']);
+const LEISURE = new Set(['fitness_centre', 'sports_centre', 'bowling_alley', 'stadium']);
+const LODGING = new Set(['hotel', 'motel', 'hostel', 'guest_house']);
+const SIGHTS = new Set(['museum', 'gallery', 'attraction']);
+
+/**
+ * What kind of named place the map labels (food, shop, lodging, health, bank, leisure, civic, or
+ * building), or null for one it doesn't: parking, benches, and the rest of the street furniture.
+ */
+export function venueKind(tags) {
+  if (!tags.name) return null;
+  const { amenity, shop, tourism, leisure } = tags;
+  if (FOOD.has(amenity) || /^(bakery|coffee|deli|confectionery)$/.test(shop ?? '')) return 'food';
+  if (HEALTH.has(amenity) || tags.healthcare) return 'health';
+  if (amenity === 'bank') return 'bank';
+  if (LODGING.has(tourism)) return 'lodging';
+  if (LEISURE_AMENITY.has(amenity) || LEISURE.has(leisure) || SIGHTS.has(tourism)) return 'leisure';
+  if (CIVIC.has(amenity)) return 'civic';
+  if (shop && shop !== 'vacant' && shop !== 'no') return 'shop';
+  if (tags.office) return 'shop';
+  if (tags.building && tags.building !== 'no') return 'building';
+  return null;
+}
+
+/**
+ * One extract's named places: points, and the middles of named outlines (a campus hall, a mall's
+ * store), written as <osmDir>/venues1_pbf_<state>.ndjson, one per line: [id, kind, name, lon, lat].
+ */
+async function extractStateVenues(file, osmDir, log) {
+  const { OSMTransform } = await import('osm-pbf-parser-node');
+  const blocks = (options) => createReadStream(file).pipe(new OSMTransform(options));
+  const state = basename(file).replace(/-latest\.osm\.pbf$/, '');
+  const inside = (lon, lat) => lon >= DETAIL.west && lon <= DETAIL.east && lat >= DETAIL.south && lat <= DETAIL.north;
+  const venues = [];
+  const ways = [];
+  const refs = new Float64List();
+  for await (const block of blocks({ withTags: { node: VENUE_TAGS, way: VENUE_TAGS, relation: false }, withInfo: false })) {
+    for (const item of block) {
+      if (!item.tags || item.tags['disused:amenity'] || item.tags['disused:shop']) continue;
+      const kind = venueKind(item.tags);
+      if (!kind) continue;
+      if (item.type === 'node') {
+        if (inside(item.lon, item.lat)) venues.push([`n${item.id}`, kind, item.tags.name, round(item.lon), round(item.lat)]);
+      } else if (item.type === 'way') {
+        ways.push({ id: item.id, kind, name: item.tags.name, start: refs.length, end: refs.length + item.refs.length });
+        for (const ref of item.refs) refs.push(ref);
+      }
+    }
+  }
+  const all = refs.view();
+  const ids = Float64Array.from(all).sort();
+  let distinct = 0;
+  for (let i = 0; i < ids.length; i += 1) if (i === 0 || ids[i] !== ids[i - 1]) ids[distinct++] = ids[i];
+  const sorted = ids.subarray(0, distinct);
+  const lon = new Float64Array(sorted.length).fill(Number.NaN);
+  const lat = new Float64Array(sorted.length).fill(Number.NaN);
+  const indexOf = (id) => {
+    let low = 0;
+    let high = sorted.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (sorted[mid] === id) return mid;
+      if (sorted[mid] < id) low = mid + 1;
+      else high = mid - 1;
+    }
+    return -1;
+  };
+  if (ways.length > 0) {
+    reading: for await (const block of blocks({ withTags: false, withInfo: false })) {
+      for (const item of block) {
+        if (item.type === 'way') break reading;
+        if (item.type !== 'node' || !inside(item.lon, item.lat)) continue;
+        const index = indexOf(item.id);
+        if (index >= 0) {
+          lon[index] = item.lon;
+          lat[index] = item.lat;
+        }
+      }
+    }
+  }
+  for (const way of ways) {
+    // The outline's middle (the mean of its corners, the closing one counted once): close enough for a label.
+    let sumLon = 0;
+    let sumLat = 0;
+    let count = 0;
+    const last = all[way.end - 1] === all[way.start] ? way.end - 1 : way.end;
+    for (let i = way.start; i < last; i += 1) {
+      const index = indexOf(all[i]);
+      if (index < 0 || Number.isNaN(lon[index])) continue;
+      sumLon += lon[index];
+      sumLat += lat[index];
+      count += 1;
+    }
+    // One cut by the area's edge is left out rather than labeled off its middle.
+    if (count === 0 || count < last - way.start) continue;
+    venues.push([`w${way.id}`, way.kind, way.name, round(sumLon / count), round(sumLat / count)]);
+  }
+  const path = join(osmDir, `${VENUES_PREFIX}${state}.ndjson`);
+  writeFileSync(`${path}.partial`, venues.map((venue) => JSON.stringify(venue)).join('\n') + (venues.length ? '\n' : ''));
+  renameSync(`${path}.partial`, path);
+  log(`  ${state}: ${venues.length} named places`);
+}
+
 /**
  * Reads OpenStreetMap's footpaths, fields, transit roads, and platforms out of every extract in
  * <dir>/osm-pbf into <dir>/osm, and its lakes and ponds and its streets. A state already read from the same extract
@@ -413,5 +524,6 @@ export async function extractOsmFromPbf(dir, log = console.log) {
     if (!fresh(out)) await extractState(file, osmDir, log);
     if (!fresh(join(osmDir, `${WATER_PREFIX}${state}.json`))) await extractStateWater(file, osmDir, log);
     if (!fresh(join(osmDir, `${ROADS_PREFIX}${state}.ndjson`))) await extractStateRoads(file, osmDir, log);
+    if (!fresh(join(osmDir, `${VENUES_PREFIX}${state}.ndjson`))) await extractStateVenues(file, osmDir, log);
   }
 }

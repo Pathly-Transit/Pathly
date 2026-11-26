@@ -181,14 +181,29 @@ describe('mock time', () => {
 });
 
 describe('Admin tools screen', () => {
+  it('hides the mock banners for screenshots while the mock location stays on', async () => {
+    mockAuthUser.email = 'admin@gmail.com';
+    const screen = render(<App />);
+    await act(async () => undefined);
+    await openAdminTools(screen);
+    fireEvent.press(screen.getByTestId('admin-mock-location-penn-station'));
+    fireEvent(screen.getByTestId('admin-hide-banners'), 'valueChange', true);
+    fireEvent.press(screen.getByTestId('admin-tools-back'));
+    fireEvent.press(screen.getByTestId('profile-back'));
+    expect(screen.queryByTestId('debug-banner')).toBeNull();
+    expect(JSON.parse((await AsyncStorage.getItem(DEBUG_STORAGE_KEY)) ?? '{}').mockLocation.label).toBe('Penn Station');
+  });
+
   it('shows every section, with backend status and rate limits', async () => {
     mockAuthUser.email = 'admin@gmail.com';
     const screen = render(<App />);
     await act(async () => undefined);
     await openAdminTools(screen);
-    for (const label of ['Mock location', 'Mock time', 'Backend status', 'Recent requests', 'Caches', 'Overlays', 'Rate limits']) {
-      expect(screen.getByText(label)).toBeTruthy();
-    }
+    for (const label of ['Mock location', 'Mock time', 'Screenshots']) expect(screen.getByText(label)).toBeTruthy();
+    fireEvent.press(screen.getByTestId('admin-tab-display'));
+    for (const label of ['Overlays', 'Popups']) expect(screen.getByText(label)).toBeTruthy();
+    fireEvent.press(screen.getByTestId('admin-tab-backend'));
+    for (const label of ['Backend status', 'Recent requests', 'Caches', 'Rate limits']) expect(screen.getByText(label)).toBeTruthy();
     const lirr = await screen.findByTestId('admin-status-lirr');
     expect(within(lirr).getByText('Timetable abcdef12, 6 h old')).toBeTruthy();
     expect(within(lirr).getByText('Live feed OK, 120 ms')).toBeTruthy();
@@ -209,6 +224,7 @@ describe('Admin tools screen', () => {
     const activeSessionKey = navigationStorageKey('test-uid');
     await AsyncStorage.setItem(activeSessionKey, '{"active":"demo"}');
     await AsyncStorage.setItem('pathly.future-durable.v1', '{}');
+    fireEvent.press(screen.getByTestId('admin-tab-backend'));
     fireEvent.press(screen.getByTestId('admin-clear-device-cache'));
     await waitFor(() => expect(screen.getByTestId('admin-feedback').props.children).toBe('Cleared 2 saved items from this device'));
     const keys = await AsyncStorage.getAllKeys();
@@ -224,6 +240,7 @@ describe('Admin tools screen', () => {
     const screen = render(<App />);
     await act(async () => undefined);
     await openAdminTools(screen);
+    fireEvent.press(screen.getByTestId('admin-tab-display'));
     fireEvent(screen.getByTestId('admin-overlay-ids'), 'valueChange', true);
     fireEvent.press(screen.getByTestId('admin-tools-back'));
     fireEvent.press(screen.getByTestId('profile-back'));
@@ -237,6 +254,7 @@ describe('Admin tools screen', () => {
     const screen = render(<App />);
     await act(async () => undefined);
     await openAdminTools(screen);
+    fireEvent.press(screen.getByTestId('admin-tab-display'));
     fireEvent(screen.getByTestId('admin-overlay-tap-coords'), 'valueChange', true);
     fireEvent.press(screen.getByTestId('admin-tools-back'));
     fireEvent.press(screen.getByTestId('profile-back'));

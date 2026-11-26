@@ -9,11 +9,11 @@ import { radii } from '../theme/shape';
 
 const timeFormat = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
-/** Which admin overrides are on, each with a way to turn it off. Renders nothing otherwise. */
+/** Which admin overrides are on, each with a way to turn it off. Renders nothing otherwise, or while hidden for screenshots. */
 export function DebugBanner({ top }: { top: number }) {
   const styles = useThemedStyles(createStyles);
-  const { mockLocation, mockTime, setMockLocation, setMockTime } = useDebug();
-  if (!mockLocation && !mockTime) return null;
+  const { mockLocation, mockTime, overlays, setMockLocation, setMockTime } = useDebug();
+  if ((!mockLocation && !mockTime) || overlays.hideBanners) return null;
   return (
     <View pointerEvents="box-none" style={[styles.wrap, { top }]} testID="debug-banner">
       {mockLocation ? (
