@@ -140,6 +140,19 @@ export type MapMarkerProps = {
   children: ReactElement;
 };
 
+/** The rider's blue dot, with the beam showing which way they face when `heading` is known. */
+export type MapLocationDotProps = {
+  coordinate: MapPoint;
+  /** Degrees clockwise from north, or null without a compass. */
+  heading?: number | null;
+  /** A last known fix rather than a live one: drawn faded. */
+  stale?: boolean;
+  onPress?: () => void;
+  /** Within the map's markers, higher draws over lower (the web; the phone draws it on the map). */
+  zIndex?: number;
+  testID?: string;
+};
+
 /**
  * A color the map renderers all read: "#RRGGBBAA" (the app's colors with transparency, e.g.
  * routeDirection.ts's withAlpha) as rgba(), everything else as it is.

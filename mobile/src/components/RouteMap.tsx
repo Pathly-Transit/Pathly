@@ -16,9 +16,8 @@ import { mapLandColor } from '../map/mapStyle';
 import { fadedOver, type MapCameraChange, type MapCanvasRef, type MapCircle, type MapPoint } from '../map/mapTypes';
 import { useTheme } from '../theme/AppSettings';
 import { fontFamilies } from '../theme/typography';
-import { CurrentLocationMarker } from './CurrentLocationMarker';
 import { DIRECTION_ARROW_BOX, DirectionArrow } from './DirectionArrow';
-import { HeadingBeamMarker } from './HeadingBeamMarker';
+import { RiderLocationMarker } from './RiderLocationMarker';
 import { Icon } from './Icon';
 import { SavedPlaceMarkers } from './SavedPlaceMarkers';
 import type { TransitMode } from './RouteBadge';
@@ -418,7 +417,6 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, entrance
       />
       {/* The rider's saved places, under the trip's own markers. */}
       <SavedPlaceMarkers zIndex={0} zoom={zoom} />
-      {userLocation ? <HeadingBeamMarker coordinate={userLocation} /> : null}
       {arrow && zoom >= arrowZoom - ARROW_ZOOM_SLACK ? (
         // Which way the line runs, beside it just past the rider's stop; it turns with the map.
         <MapMarker coordinate={toPoint(arrow.point)} rotation={arrow.bearing} testID="route-direction-arrow" zIndex={1}>
@@ -470,11 +468,7 @@ export function RouteMap({ centerOnUserRequest = 0, color, directionId, entrance
           </Pressable>
         </MapMarker>
       ) : null}
-      {userLocation ? (
-        <MapMarker coordinate={userLocation} testID={`${testID}-user-location`} zIndex={5}>
-          <CurrentLocationMarker />
-        </MapMarker>
-      ) : null}
+      {userLocation ? <RiderLocationMarker coordinate={userLocation} testID={`${testID}-user-location`} zIndex={5} /> : null}
     </MapCanvas>
   );
 }

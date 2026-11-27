@@ -4,6 +4,8 @@ import { createContext, forwardRef, useContext, useEffect, useImperativeHandle, 
 import { createPortal } from 'react-dom';
 import { StyleSheet, View } from 'react-native';
 
+import { CurrentLocationMarker } from '../components/CurrentLocationMarker';
+import { HEADING_BEAM_SIZE, HeadingBeam } from '../components/HeadingBeam';
 import { useTheme } from '../theme/AppSettings';
 import { sheetPaddingExtra, useSheetInset } from './mapSheetInset';
 import { SheetMapCredit } from './MapCredit';
@@ -22,6 +24,7 @@ import {
   type MapCanvasProps,
   type MapCanvasRef,
   type MapCirclesProps,
+  type MapLocationDotProps,
   type MapMarkerProps,
   type MapPoint,
   type MapPolylineProps,
@@ -529,4 +532,27 @@ export function MapMarker({ accessibilityLabel, anchor = 'center', children, coo
   }, [element]);
 
   return createPortal(children, element);
+}
+
+/**
+ * The rider's dot and heading beam. The browser moves its markers in the same frame as the map, so
+ * they're views here (the phone draws them as layers).
+ */
+export function MapLocationDot({ coordinate, heading, stale = false, onPress, zIndex = 0, testID }: MapLocationDotProps) {
+  return (
+    <>
+      {heading != null ? (
+        <MapMarker coordinate={coordinate} rotation={heading} testID="heading-beam" zIndex={0}>
+          <View pointerEvents="none" style={{ width: HEADING_BEAM_SIZE, height: HEADING_BEAM_SIZE, opacity: stale ? 0.45 : 1 }}>
+            <HeadingBeam />
+          </View>
+        </MapMarker>
+      ) : null}
+      <MapMarker coordinate={coordinate} onPress={onPress} testID={testID} zIndex={zIndex}>
+        <View pointerEvents={onPress ? 'auto' : 'none'} style={stale ? { opacity: 0.45 } : undefined}>
+          <CurrentLocationMarker />
+        </View>
+      </MapMarker>
+    </>
+  );
 }

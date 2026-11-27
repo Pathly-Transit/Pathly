@@ -136,3 +136,36 @@ for (const [name, { glyph, points, arrow = false }] of Object.entries(ICONS)) {
   }
 }
 console.log(`Wrote ${count} icons to ${OUT}`);
+
+// The rider's heading beam (HeadingBeam.tsx's wedge), for the phone's map, which draws the rider's
+// dot and beam as map layers so they move with the map rather than a frame behind it.
+const BEAM_POINTS = 120;
+const BEAM_SPREAD = 70;
+const BEAM_RGB = [0x42, 0x85, 0xf4];
+function drawBeam(scale) {
+  const size = Math.round(BEAM_POINTS * scale);
+  const png = new PNG({ width: size, height: size });
+  const center = size / 2;
+  const reach = center - 2 * scale;
+  for (let py = 0; py < size; py += 1) {
+    for (let px = 0; px < size; px += 1) {
+      let alpha = 0;
+      for (let sy = 0; sy < SAMPLES; sy += 1) {
+        for (let sx = 0; sx < SAMPLES; sx += 1) {
+          const dx = px + (sx + 0.5) / SAMPLES - center;
+          const dy = py + (sy + 0.5) / SAMPLES - center;
+          const distance = Math.hypot(dx, dy);
+          // Degrees from straight up, clockwise.
+          const angle = Math.abs((Math.atan2(dx, -dy) * 180) / Math.PI);
+          if (distance <= reach && angle <= BEAM_SPREAD / 2) alpha += 0.55 * (1 - distance / reach);
+        }
+      }
+      const at = (py * size + px) * 4;
+      [png.data[at], png.data[at + 1], png.data[at + 2]] = BEAM_RGB;
+      png.data[at + 3] = Math.round((alpha / (SAMPLES * SAMPLES)) * 255);
+    }
+  }
+  return PNG.sync.write(png);
+}
+for (const [out, scale] of [['heading-beam.png', 1], ['heading-beam@2x.png', 2], ['heading-beam@3x.png', 3]]) writeFileSync(join(OUT, out), drawBeam(scale));
+console.log('Wrote the heading beam');

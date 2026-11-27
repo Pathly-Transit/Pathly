@@ -382,12 +382,20 @@ jest.mock('./src/map/MapCanvas', () => {
     </View>
   );
   const MockMapMarker = ({ children, ...props }) => <View {...props}>{children}</View>;
+  // The rider's dot, with its look (faded when stale) on a child view and its beam when there's a heading.
+  const MockMapLocationDot = ({ heading, stale, testID, ...props }) => (
+    <View {...props} heading={heading} testID={testID}>
+      {heading != null ? <View testID="heading-beam" /> : null}
+      <View accessibilityLabel="Current location" style={{ opacity: stale ? 0.45 : 1 }} testID={`${testID}-visual`} />
+    </View>
+  );
   return {
     __esModule: true,
     MapCanvas: MockMapCanvas,
     MapPolyline: MockMapPolyline,
     MapCircles: MockMapCircles,
     MapMarker: MockMapMarker,
+    MapLocationDot: MockMapLocationDot,
     mockCamera,
     mockEaseTo,
     mockFitPoints,

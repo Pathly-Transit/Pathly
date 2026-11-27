@@ -7,11 +7,11 @@ import { zoomForRegion } from '../data/stopDeclutter';
 import { metersPerPixelAtZoom, savedPinUnderDot, stackSavedPins } from '../data/savedPlacePin';
 import { locationPoint, type SavedLocation } from '../data/userData';
 import type { Coordinates } from '../hooks/useCurrentLocation';
-import { MapCanvas, MapMarker, MapPolyline } from '../map/MapCanvas';
+import { MapCanvas, MapPolyline } from '../map/MapCanvas';
 import type { MapCameraChange, MapCanvasRef, MapStop } from '../map/mapTypes';
 import { useTheme } from '../theme/AppSettings';
-import { CURRENT_LOCATION_SIZE, CurrentLocationMarker } from './CurrentLocationMarker';
-import { HeadingBeamMarker } from './HeadingBeamMarker';
+import { CURRENT_LOCATION_SIZE } from './CurrentLocationMarker';
+import { RiderLocationMarker } from './RiderLocationMarker';
 import { SavedPlaceMarkers } from './SavedPlaceMarkers';
 import { StopPill } from './StopPill';
 
@@ -160,14 +160,9 @@ export function HomeMap({
           zIndex={0}
         />
       ))}
-      {showRider ? <HeadingBeamMarker coordinate={location} /> : null}
       <SavedPlaceMarkers locations={savedLocations} onPress={onSavedLocationPress} zIndex={1} zoom={zoom} />
       {selectedStop ? <StopPill key={`${selectedStop.name}@${selectedStop.coordinate.latitude},${selectedStop.coordinate.longitude}`} onPress={() => onOpenStop?.(selectedStop)} stop={selectedStop} /> : null}
-      {showRider ? (
-        <MapMarker coordinate={location} onPress={onRiderPress} testID={simulatedLocation ? 'mock-location-marker' : `${testID}-user-location`} zIndex={5}>
-          <CurrentLocationMarker />
-        </MapMarker>
-      ) : null}
+      {showRider ? <RiderLocationMarker coordinate={location} onPress={onRiderPress} testID={simulatedLocation ? 'mock-location-marker' : `${testID}-user-location`} zIndex={5} /> : null}
     </MapCanvas>
   );
 }

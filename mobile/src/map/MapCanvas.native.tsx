@@ -16,7 +16,7 @@ import { useTheme } from '../theme/AppSettings';
 import { SheetMapCredit } from './MapCredit';
 import { sheetPaddingExtra, useSheetInset } from './mapSheetInset';
 import { MAP_ICONS } from './mapIcons';
-import { mapLandColor, overlaySlotId, pathlyMapStyle, STOP_LAYER_IDS } from './mapStyle';
+import { mapLandColor, OVERLAY_SLOTS, overlaySlotId, pathlyMapStyle, STOP_LAYER_IDS } from './mapStyle';
 import {
   boundsForMaxZoom,
   boundsOfPoints,
@@ -31,6 +31,7 @@ import {
   type MapCanvasProps,
   type MapCanvasRef,
   type MapCirclesProps,
+  type MapLocationDotProps,
   type MapMarkerProps,
   type MapPoint,
   type MapPolylineProps,
@@ -39,7 +40,7 @@ import {
 /**
  * The map kit on iOS and Android (mapTypes.ts), drawn by MapLibre Native (an open-source renderer
  * compiled into the app, showing nothing of its own): Pathly's base map (mapStyle.ts), lines and
- * dots as GeoJSON layers slotted above it, and markers as live views.
+ * dots (the rider's own too) as GeoJSON layers slotted above it, and markers as live views.
  */
 
 /** The map's bearing, for markers turned to the ground; only those markers re-render as it turns. */
@@ -353,6 +354,74 @@ export function MapCircles({ id, circles, zIndex = 0, onPress, testID }: MapCirc
           'circle-opacity': ['get', 'opacity'],
           'circle-stroke-opacity': ['get', 'opacity'],
           'circle-pitch-alignment': 'map',
+        }}
+        type="circle"
+      />
+    </GeoJSONSource>
+  );
+}
+
+/** CurrentLocationMarker's look in px: the halo, and the dot inside its white ring. */
+const LOCATION_HALO_RADIUS = 19;
+const LOCATION_DOT_RADIUS = 5.5;
+const LOCATION_RING = 3;
+
+/**
+ * The rider's dot and heading beam, drawn on the map itself rather than as a view over it: a view
+ * marker is moved after each frame the map draws, so it trails a pan; layers move with the streets.
+ */
+export function MapLocationDot({ coordinate, heading, stale = false, onPress, testID }: MapLocationDotProps) {
+  const { colors } = useTheme();
+  const data = useMemo<GeoJSON.Feature>(() => ({
+    type: 'Feature',
+    properties: heading == null ? {} : { heading },
+    geometry: { type: 'Point', coordinates: [coordinate.longitude, coordinate.latitude] },
+  }), [coordinate.latitude, coordinate.longitude, heading]);
+  const opacity = stale ? 0.45 : 1;
+  // Above every line and dot of Pathly's own (the top slot).
+  const beforeId = overlaySlotId(OVERLAY_SLOTS);
+  return (
+    <GeoJSONSource
+      data={data}
+      hitbox={{ top: 6, right: 6, bottom: 6, left: 6 }}
+      id="rider-location-source"
+      onPress={onPress ? (event) => {
+        event.stopPropagation();
+        onPress();
+      } : undefined}
+      testID={testID}
+    >
+      <Layer
+        beforeId={beforeId}
+        filter={['has', 'heading']}
+        id="rider-location-beam"
+        layout={{
+          'icon-image': 'heading-beam',
+          'icon-rotate': ['get', 'heading'],
+          'icon-rotation-alignment': 'map',
+          'icon-pitch-alignment': 'map',
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+        }}
+        paint={{ 'icon-opacity': opacity }}
+        type="symbol"
+      />
+      <Layer
+        beforeId={beforeId}
+        id="rider-location-halo"
+        paint={{ 'circle-radius': LOCATION_HALO_RADIUS, 'circle-color': mapColor(colors.locationHalo), 'circle-opacity': opacity }}
+        type="circle"
+      />
+      <Layer
+        beforeId={beforeId}
+        id="rider-location-dot"
+        paint={{
+          'circle-radius': LOCATION_DOT_RADIUS,
+          'circle-color': colors.location,
+          'circle-stroke-color': '#FFFFFF',
+          'circle-stroke-width': LOCATION_RING,
+          'circle-opacity': opacity,
+          'circle-stroke-opacity': opacity,
         }}
         type="circle"
       />

@@ -11,9 +11,8 @@ import { fadedOver, type MapCameraChange, type MapCanvasRef, type MapCircle, typ
 import { useAppSettings, useTheme, useThemedStyles } from '../theme/AppSettings';
 import type { Palette } from '../theme/colors';
 import { fontFamilies } from '../theme/typography';
-import { CurrentLocationMarker } from './CurrentLocationMarker';
 import { DestinationPinMarker } from './DestinationPinMarker';
-import { HeadingBeamMarker } from './HeadingBeamMarker';
+import { RiderLocationMarker } from './RiderLocationMarker';
 import { Icon } from './Icon';
 import { SavedPlaceMarkers } from './SavedPlaceMarkers';
 import { LiveVehicleMarker } from './RouteMap';
@@ -306,14 +305,7 @@ export function TripMap({ centerOnUserRequest = 0, destination, focusStop, follo
             <View pointerEvents="none"><DestinationPinMarker /></View>
           </MapMarker>
         ) : null}
-        {userLocation ? <HeadingBeamMarker coordinate={toPoint(userLocation)} /> : null}
-        {userLocation ? (
-          <MapMarker coordinate={toPoint(userLocation)} testID={`${testID}-user-location`} zIndex={6}>
-            <View pointerEvents="none" style={userLocationStale ? styles.staleLocation : undefined} testID={`${testID}-user-location-visual`}>
-              <CurrentLocationMarker />
-            </View>
-          </MapMarker>
-        ) : null}
+        {userLocation ? <RiderLocationMarker coordinate={toPoint(userLocation)} stale={userLocationStale} testID={`${testID}-user-location`} zIndex={6} /> : null}
       </MapCanvas>
     </View>
   );
@@ -323,5 +315,4 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   entranceDot: { width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#FFFFFF', borderRadius: 6 },
   label: { maxWidth: 240, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 12, backgroundColor: colors.surface, shadowColor: colors.shadow, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6, elevation: 4 },
   labelText: { color: colors.ink, fontFamily: fontFamilies.bold, fontSize: 13 },
-  staleLocation: { opacity: 0.45 },
 });

@@ -16,6 +16,8 @@ export const MAP_ICONS: Record<string, ImageRequireSource> = {
   'transit-bus-dark': require('../../assets/map-icons/transit-bus-dark.png'),
   'oneway-arrow': require('../../assets/map-icons/oneway-arrow.png'),
   'oneway-arrow-dark': require('../../assets/map-icons/oneway-arrow-dark.png'),
+  // The rider's heading beam (MapLocationDot on the phone).
+  'heading-beam': require('../../assets/map-icons/heading-beam.png'),
 };
 
 export const WEB_MAP_ICONS: Record<string, ImageRequireSource> = {
